@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "app",
+  "productName": "Orbit",
   "version": "0.1.0",
   "identifier": "com.saadaan.orbit",
   "build": {
@@ -12,11 +12,28 @@
   "app": {
     "windows": [
       {
-        "title": "app",
-        "width": 800,
-        "height": 600
+        "label": "main",
+        "title": "Orbit",
+        "decorations": false,
+        "transparent": true,
+        "skipTaskbar": true,
+        "alwaysOnTop": false,
+        "width": 380,
+        "height": 600,
+        "visible": false
+      },
+      {
+        "label": "overlay",
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "fullscreen": true,
+        "visible": false
       }
     ],
+    "macOSPrivateApi": true,
     "security": {
       "csp": null
     }
