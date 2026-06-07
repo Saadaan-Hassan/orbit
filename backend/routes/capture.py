@@ -1,11 +1,11 @@
 """
 Capture endpoints — receive activity events and write them to SQLite.
 
-NOTE ON SCOPE OF PAUSE / EXCLUDE FILTERING:
-These checks gate events arriving via HTTP (i.e. the Chrome extension).
-The Rust capture modules (clipboard.rs, window.rs) write directly to
-SQLite and bypass this endpoint entirely. Pause and exclude enforcement
-for Rust-sourced events requires a separate mechanism (Phase 2+).
+Pause and exclude filtering is enforced at two layers:
+- HERE (FastAPI): gates events arriving from the Chrome extension.
+- Rust (clipboard.rs, window.rs): each capture task reads capture_state and
+  excluded_apps from SQLite directly, with a 30-second local cache, before
+  every write. Both layers must agree for the controls to be effective.
 """
 
 import asyncio

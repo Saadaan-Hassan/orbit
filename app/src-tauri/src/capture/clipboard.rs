@@ -2,6 +2,7 @@ use chrono::Utc;
 use regex::Regex;
 use sqlx::SqlitePool;
 use std::sync::OnceLock;
+use std::time::Instant;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
@@ -151,11 +152,86 @@ pub fn detect_sensitive_content_type(clipboard_text: &str) -> Option<&'static st
 // Clipboard polling loop
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Pause state cache
+//
+// The capture_state table lives in SQLite and is written by FastAPI.
+// Rather than query it on every 500ms poll, we cache the result locally and
+// refresh it every 30 seconds — matching the TTL on the FastAPI side.
+//
+// If the table doesn't exist yet (FastAPI not started) or returns an error,
+// we default to "not paused" so no events are silently lost on startup.
+// ---------------------------------------------------------------------------
+
+const PAUSE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+struct PauseStateCache {
+    is_paused: bool,
+    paused_until_ms: Option<i64>,
+    // Far in the past on construction so the first poll always refreshes.
+    last_refreshed_at: Instant,
+}
+
+impl PauseStateCache {
+    fn new() -> Self {
+        Self {
+            is_paused: false,
+            paused_until_ms: None,
+            last_refreshed_at: Instant::now()
+                .checked_sub(PAUSE_CACHE_TTL * 2)
+                .unwrap_or_else(Instant::now),
+        }
+    }
+
+    fn capture_is_paused_right_now(&self) -> bool {
+        if !self.is_paused {
+            return false;
+        }
+        match self.paused_until_ms {
+            None => true, // Paused indefinitely.
+            Some(until_ms) => Utc::now().timestamp_millis() < until_ms,
+        }
+    }
+}
+
+async fn refresh_pause_cache_if_stale(
+    pool: &SqlitePool,
+    cache: &mut PauseStateCache,
+) {
+    if cache.last_refreshed_at.elapsed() < PAUSE_CACHE_TTL {
+        return; // Still fresh.
+    }
+
+    // capture_state is created by FastAPI's lifespan. If it doesn't exist yet
+    // (e.g. the app just started and FastAPI is still initialising), the query
+    // will error — we treat that as "not paused" and retry next interval.
+    let query_result = sqlx::query_as::<_, (i64, Option<i64>)>(
+        "SELECT is_paused, paused_until FROM capture_state WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await;
+
+    match query_result {
+        Ok(Some((is_paused_value, paused_until_value))) => {
+            cache.is_paused = is_paused_value != 0;
+            cache.paused_until_ms = paused_until_value;
+        }
+        Ok(None) | Err(_) => {
+            // Table absent or empty — default to capturing.
+            cache.is_paused = false;
+            cache.paused_until_ms = None;
+        }
+    }
+
+    cache.last_refreshed_at = Instant::now();
+}
+
 pub async fn start_clipboard_monitor(
     sqlite_database_path: String,
     sqlx_connection_pool: SqlitePool,
 ) {
     let mut last_seen_clipboard_text = String::new();
+    let mut pause_cache = PauseStateCache::new();
 
     loop {
         // arboard::Clipboard is !Send and cannot be held across .await points,
@@ -175,12 +251,23 @@ pub async fn start_clipboard_monitor(
             }
         };
 
+        // Refresh the pause cache if it has gone stale, then skip this event
+        // if the user has paused capture. We still update last_seen so that
+        // when capture resumes we don't immediately re-insert the same text.
+        refresh_pause_cache_if_stale(&sqlx_connection_pool, &mut pause_cache).await;
+
         if let Some(current_clipboard_text) = maybe_clipboard_text {
             let is_non_empty = !current_clipboard_text.is_empty();
             let is_new_content = current_clipboard_text != last_seen_clipboard_text;
 
             if is_non_empty && is_new_content {
                 last_seen_clipboard_text = current_clipboard_text.clone();
+
+                if pause_cache.capture_is_paused_right_now() {
+                    // Capture is paused — skip persist, move on.
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
 
                 // Check for sensitive content before any DB write.
                 // If the text matches a known secret pattern, store only the

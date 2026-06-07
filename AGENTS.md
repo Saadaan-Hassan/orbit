@@ -230,7 +230,7 @@ orbit/
 | `backend/main.py` | FastAPI app. Uses `@asynccontextmanager` lifespan (not deprecated startup/shutdown). Starts the session generation asyncio loop via `asyncio.create_task()`. |
 | `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + sync triggers on startup. |
 | `backend/scheduler.py` | `start_session_generation_loop()` — `while True: await asyncio.sleep(1800)` loop. `generate_sessions_from_recent_events()` — fetches unprocessed events, classifies with Gemini, summarises with Claude, stores session, embeds with Voyage AI → Qdrant. |
-| `backend/routes/capture.py` | `POST /capture` — receives events from extension + Rust. `GET /events` — returns latest N events for timeline UI. |
+| `backend/routes/capture.py` | `POST /capture` — receives events from Chrome extension (not Rust — Rust writes SQLite directly). Checks pause state + excluded apps before writing. `GET /events` — returns latest N events for timeline UI. |
 | `backend/routes/recall.py` | `POST /recall` — parallel FTS5 + Qdrant search, merged results sent to Claude, streamed back as SSE. **FTS5 query never includes clipboard raw_content that was redacted.** |
 | `backend/services/claude_service.py` | Claude API via Cloudflare Worker. Singleton `httpx.AsyncClient`. Handles SSE streaming. |
 | `backend/services/gemini_service.py` | Gemini classification. Uses `google-genai` (`from google import genai`). Singleton `genai.Client`. Wraps sync `generate_content` in `asyncio.to_thread`. **Only sends app_name + event type to Gemini — never clipboard raw_content.** |
