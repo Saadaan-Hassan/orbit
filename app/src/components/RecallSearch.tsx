@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useAnalytics } from "../hooks/useAnalytics";
 
 const BACKEND_RECALL_URL = "http://localhost:8000/recall";
 
@@ -13,6 +14,7 @@ export function RecallSearch({ children }: RecallSearchProps) {
   const [recallResponse, setRecallResponse] = useState("");
   const [recallStatus, setRecallStatus] = useState<RecallStatus>("idle");
   const inputRef = useRef<HTMLInputElement>(null);
+  const { captureEvent } = useAnalytics();
 
   // Auto-focus input on mount
   useEffect(() => {
@@ -23,6 +25,7 @@ export function RecallSearch({ children }: RecallSearchProps) {
     const trimmedQuery = queryInputValue.trim();
     if (!trimmedQuery) return;
 
+    captureEvent("recall_query_submitted"); // no query text — privacy
     setRecallResponse("");
     setRecallStatus("thinking");
 

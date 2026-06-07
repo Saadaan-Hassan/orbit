@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useAnalytics } from "../hooks/useAnalytics";
 import {
   useMemoryData,
   type EventTypeFilter,
@@ -175,6 +176,7 @@ function EventsTab({
   onDelete,
 }: EventsTabProps) {
   const [loadingMore, setLoadingMore] = useState(false);
+  const { captureEvent } = useAnalytics();
 
   async function handleLoadMore(): Promise<void> {
     setLoadingMore(true);
@@ -254,7 +256,10 @@ function EventsTab({
                     </p>
                   </div>
                   <TrashButton
-                    onClick={() => onDelete(event.id)}
+                    onClick={() => {
+                      captureEvent("memory_item_deleted", { item_type: "event" });
+                      onDelete(event.id);
+                    }}
                     label={`Delete event`}
                   />
                 </div>
@@ -295,11 +300,13 @@ interface SessionRowProps {
 function SessionRow({ session, onDelete }: SessionRowProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const { captureEvent } = useAnalytics();
 
   const parsedSummary = parseSummaryJson(session.ai_summary);
 
   async function handleConfirmDelete(): Promise<void> {
     setShowDeleteConfirm(false);
+    captureEvent("memory_item_deleted", { item_type: "session" });
     await onDelete(session.id);
   }
 
