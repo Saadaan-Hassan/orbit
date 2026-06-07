@@ -92,16 +92,18 @@ jobs:
       # Tauri's externalBin looks for `orbit-backend-{target-triple}` next to
       # the binary defined in tauri.conf.json. On the macos-latest runner the
       # target is aarch64-apple-darwin.
-      - name: Rename sidecar binary with target triple
+      - name: Rename and sign sidecar binary
         run: |
           TARGET_TRIPLE=$(rustc -vV | grep '^host:' | awk '{print $2}')
           echo "Target triple: ${TARGET_TRIPLE}"
-          echo "PyInstaller dist contents:"
           ls -lh backend/dist/
           cp backend/dist/orbit-backend "backend/dist/orbit-backend-${TARGET_TRIPLE}"
-          echo "Renamed binary:"
-          ls -lh "backend/dist/orbit-backend-${TARGET_TRIPLE}"
-          file "backend/dist/orbit-backend-${TARGET_TRIPLE}"
+          # PyInstaller --onefile ships with its own embedded signature which
+          # conflicts with Tauri's codesign step during bundling. Strip it and
+          # apply an ad-hoc signature so Tauri can re-sign cleanly.
+          codesign --force --deep --sign - "backend/dist/orbit-backend-${TARGET_TRIPLE}"
+          echo "Signed sidecar:"
+          codesign -dv "backend/dist/orbit-backend-${TARGET_TRIPLE}"
 
       # ── Build and release ─────────────────────────────────────────────────
       # tauri-apps/tauri-action@v0 is the stable major-version-pinned tag.
