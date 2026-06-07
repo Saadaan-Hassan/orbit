@@ -4,9 +4,83 @@
 mod capture;
 
 use sqlx::sqlite::SqliteConnectOptions;
+use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+
+/// Resolves the absolute path to the `uv` executable.
+///
+/// When Tauri spawns a child process the inherited PATH is the minimal
+/// system PATH, not the user's full shell PATH. `uv` is typically installed
+/// in one of the locations below, none of which are in the system PATH.
+/// We check them in order and fall back to the bare name so the system PATH
+/// is tried last (covers custom installs via Homebrew or nix).
+fn resolve_uv_executable_path() -> String {
+    let home_directory = std::env::var("HOME").unwrap_or_default();
+
+    let candidate_paths = [
+        format!("{}/.local/bin/uv", home_directory),   // official install script default
+        format!("{}/.cargo/bin/uv", home_directory),   // cargo install uv
+        "/opt/homebrew/bin/uv".to_string(),             // Homebrew on Apple Silicon
+        "/usr/local/bin/uv".to_string(),                // Homebrew on Intel / manual
+        "/usr/bin/uv".to_string(),                      // system package manager
+    ];
+
+    for candidate_path in &candidate_paths {
+        if std::path::Path::new(candidate_path).exists() {
+            return candidate_path.clone();
+        }
+    }
+
+    // Last resort — rely on whatever PATH the child process inherits.
+    "uv".to_string()
+}
+
+fn spawn_fastapi_backend(backend_directory_path: &str) -> Child {
+    let uv_executable_path = resolve_uv_executable_path();
+
+    Command::new(&uv_executable_path)
+        .args(["run", "uvicorn", "main:app", "--port", "8000"])
+        .current_dir(backend_directory_path)
+        // Inherit stdout and stderr so FastAPI logs appear in the same terminal.
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap_or_else(|spawn_error| {
+            panic!(
+                "Failed to spawn FastAPI backend using `{}`: {}. \
+                 Ensure `uv` is installed (https://docs.astral.sh/uv/getting-started/installation/).",
+                uv_executable_path, spawn_error
+            )
+        })
+}
 
 fn main() {
+    // CARGO_MANIFEST_DIR is set at compile time to the absolute path of
+    // app/src-tauri/. The backend/ folder sits two levels up from there:
+    //   app/src-tauri/../../backend  →  orbit/backend/
+    // Using a compile-time constant avoids any dependency on the working
+    // directory of the compiled binary, which changes between dev and release.
+    let backend_directory_path = std::env::var("ORBIT_BACKEND_PATH")
+        .unwrap_or_else(|_| {
+            let src_tauri_directory = env!("CARGO_MANIFEST_DIR");
+            format!("{}/../../backend", src_tauri_directory)
+        });
+
+    // Spawn the FastAPI backend before the Tauri event loop starts so that
+    // the backend is ready to accept capture events as soon as the first
+    // window appears.
+    let fastapi_child_process = spawn_fastapi_backend(&backend_directory_path);
+
+    // Wrap the child handle in Arc<Mutex<Option<Child>>> so it can be moved
+    // into the Tauri on_exit hook, which runs on the main thread.
+    let fastapi_child_process_handle: Arc<Mutex<Option<Child>>> =
+        Arc::new(Mutex::new(Some(fastapi_child_process)));
+
+    // Give the FastAPI server time to bind its port before Tauri initialises
+    // and the UI attempts its first backend call.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
     // Build an explicit multi-threaded tokio runtime instead of using
     // #[tokio::main] — Tauri's event loop must block the main thread, and
     // an explicit runtime lets spawned tasks keep running while it does.
@@ -69,5 +143,19 @@ fn main() {
     // tokio::spawn without needing their own runtime.
     let _tokio_runtime_guard = tokio_runtime.enter();
 
-    app_lib::run();
+    // Clone the handle before moving it into the Tauri setup closure.
+    let fastapi_child_process_handle_for_exit = Arc::clone(&fastapi_child_process_handle);
+
+    app_lib::run_with_exit_hook(move || {
+        // Kill the FastAPI subprocess cleanly when the Tauri app exits so that
+        // port 8000 is not left occupied on subsequent launches.
+        if let Ok(mut guard) = fastapi_child_process_handle_for_exit.lock() {
+            if let Some(mut child_process) = guard.take() {
+                let kill_result = child_process.kill();
+                if let Err(kill_error) = kill_result {
+                    eprintln!("Failed to kill FastAPI backend process: {kill_error}");
+                }
+            }
+        }
+    });
 }
