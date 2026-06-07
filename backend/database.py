@@ -1,5 +1,7 @@
 import os
 import re
+import uuid
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import text
@@ -93,6 +95,78 @@ async def create_all_tables() -> None:
                 embedding_id TEXT
             )
         """))
+
+        # Apps whose window events are silently dropped at capture time.
+        # Seeded with a default list of password managers and system
+        # credential stores on first run (when the table is empty).
+        await connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS excluded_apps (
+                id        TEXT PRIMARY KEY,
+                app_name  TEXT NOT NULL UNIQUE,
+                added_at  INTEGER NOT NULL
+            )
+        """))
+
+        # Single-row table (id=1 always) that tracks whether the user has
+        # temporarily paused all activity capture.
+        await connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS capture_state (
+                id            INTEGER PRIMARY KEY DEFAULT 1,
+                is_paused     INTEGER NOT NULL DEFAULT 0,
+                paused_until  INTEGER
+            )
+        """))
+
+        # Ensure the single capture_state row exists so UPDATE queries
+        # in the privacy routes never silently affect zero rows.
+        await connection.execute(text("""
+            INSERT OR IGNORE INTO capture_state (id, is_paused, paused_until)
+            VALUES (1, 0, NULL)
+        """))
+
+    # Seed the default excluded apps outside the schema transaction so the
+    # INSERT OR IGNORE check works against a fully committed table state.
+    await _seed_default_excluded_apps()
+
+
+_DEFAULT_EXCLUDED_APPS: list[str] = [
+    "1Password",
+    "Bitwarden",
+    "Keychain Access",
+    "LastPass",
+    "Dashlane",
+    "Safari",
+    "System Preferences",
+    "System Settings",
+]
+
+
+async def _seed_default_excluded_apps() -> None:
+    # Only seeds when the table is completely empty — i.e. first run.
+    # On subsequent starts the user's own exclusion list is left untouched.
+    async with _async_engine.begin() as connection:
+        result = await connection.execute(
+            text("SELECT COUNT(*) AS total FROM excluded_apps")
+        )
+        row = result.fetchone()
+        if row is not None and row.total > 0:
+            return  # Already seeded — nothing to do.
+
+        added_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        for app_name in _DEFAULT_EXCLUDED_APPS:
+            await connection.execute(
+                text(
+                    """
+                    INSERT OR IGNORE INTO excluded_apps (id, app_name, added_at)
+                    VALUES (:id, :app_name, :added_at)
+                    """
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "app_name": app_name,
+                    "added_at": added_at_ms,
+                },
+            )
 
 
 def _sanitize_fts5_query(raw_query: str) -> str:

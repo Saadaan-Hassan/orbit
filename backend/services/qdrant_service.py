@@ -59,6 +59,34 @@ def _get_client() -> QdrantClient:
 # Public async API
 # ---------------------------------------------------------------------------
 
+async def wipe_all_session_embeddings() -> None:
+    """
+    Deletes every point in the orbit_sessions collection without dropping
+    the collection itself. Called by the privacy wipe endpoint so the
+    collection is immediately ready to accept new embeddings after a wipe.
+    """
+    client = _get_client()
+
+    existing_collection_names = await asyncio.to_thread(
+        lambda: [c.name for c in client.get_collections().collections]
+    )
+
+    if COLLECTION_NAME not in existing_collection_names:
+        return  # Nothing to wipe — collection does not exist yet.
+
+    # delete_collection + recreate is the most reliable way to clear all
+    # points when you don't want to enumerate them.
+    await asyncio.to_thread(client.delete_collection, collection_name=COLLECTION_NAME)
+    await asyncio.to_thread(
+        client.create_collection,
+        collection_name=COLLECTION_NAME,
+        vectors_config=VectorParams(
+            size=EMBEDDING_DIMENSION,
+            distance=Distance.COSINE,
+        ),
+    )
+
+
 async def initialize_qdrant_collection() -> None:
     """
     Creates the orbit_sessions collection if it does not already exist.

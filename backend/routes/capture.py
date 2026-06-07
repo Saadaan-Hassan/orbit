@@ -1,3 +1,18 @@
+"""
+Capture endpoints — receive activity events and write them to SQLite.
+
+NOTE ON SCOPE OF PAUSE / EXCLUDE FILTERING:
+These checks gate events arriving via HTTP (i.e. the Chrome extension).
+The Rust capture modules (clipboard.rs, window.rs) write directly to
+SQLite and bypass this endpoint entirely. Pause and exclude enforcement
+for Rust-sourced events requires a separate mechanism (Phase 2+).
+"""
+
+import asyncio
+import time
+import logging
+from dataclasses import dataclass, field
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -6,6 +21,80 @@ from models.event import CaptureEvent
 from database import get_db, _async_engine
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# In-memory filter cache
+#
+# Refreshed from SQLite at most once every 30 seconds. This keeps the hot
+# path (every captured event) free of synchronous DB round-trips while still
+# picking up pause/resume and exclude-list changes within half a minute.
+# ---------------------------------------------------------------------------
+
+_CACHE_TTL_SECONDS = 30.0
+
+
+@dataclass
+class _CaptureFilterCache:
+    is_paused: bool = False
+    paused_until_ms: int | None = None        # None means indefinite
+    excluded_app_names: set[str] = field(default_factory=set)
+    last_refreshed_at: float = 0.0            # monotonic seconds
+
+
+_filter_cache = _CaptureFilterCache()
+_cache_refresh_lock = asyncio.Lock()
+
+
+async def _refresh_cache_if_stale() -> None:
+    """
+    Reloads pause state and excluded apps from SQLite if the cached copy is
+    older than _CACHE_TTL_SECONDS. Uses a lock so concurrent requests don't
+    all hit the DB at the same time when the cache first goes stale.
+    """
+    now = time.monotonic()
+    if now - _filter_cache.last_refreshed_at < _CACHE_TTL_SECONDS:
+        return  # Cache is still fresh — skip the DB round-trip.
+
+    async with _cache_refresh_lock:
+        # Re-check after acquiring the lock — another coroutine may have
+        # already refreshed while we were waiting.
+        if time.monotonic() - _filter_cache.last_refreshed_at < _CACHE_TTL_SECONDS:
+            return
+
+        async with _async_engine.connect() as connection:
+            pause_result = await connection.execute(
+                text("SELECT is_paused, paused_until FROM capture_state WHERE id = 1")
+            )
+            pause_row = pause_result.fetchone()
+
+            exclude_result = await connection.execute(
+                text("SELECT app_name FROM excluded_apps")
+            )
+            excluded_rows = exclude_result.fetchall()
+
+        _filter_cache.is_paused = bool(pause_row.is_paused) if pause_row else False
+        _filter_cache.paused_until_ms = pause_row.paused_until if pause_row else None
+        _filter_cache.excluded_app_names = {row.app_name for row in excluded_rows}
+        _filter_cache.last_refreshed_at = time.monotonic()
+
+
+def _capture_is_currently_paused() -> bool:
+    """
+    Returns True if capture is paused right now, taking paused_until into account.
+    paused_until=None means paused indefinitely.
+    """
+    if not _filter_cache.is_paused:
+        return False
+    if _filter_cache.paused_until_ms is None:
+        return True  # Paused indefinitely.
+    now_ms = int(time.time() * 1000)
+    return _filter_cache.paused_until_ms > now_ms
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 
 
 @router.post("/capture")
@@ -13,6 +102,14 @@ async def capture_event(
     event: CaptureEvent,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
+    await _refresh_cache_if_stale()
+
+    if _capture_is_currently_paused():
+        return {"status": "paused"}
+
+    if event.app_name and event.app_name in _filter_cache.excluded_app_names:
+        return {"status": "excluded"}
+
     await db.execute(
         text("""
             INSERT INTO events (id, timestamp, type, raw_content, app_name, url, source)

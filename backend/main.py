@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import create_all_tables
 from routes.capture import router as capture_router
+from routes.privacy import router as privacy_router
 from routes.recall import router as recall_router
 from scheduler import create_session_scheduler
 from services.qdrant_service import initialize_qdrant_collection
@@ -40,3 +41,4 @@ app.add_middleware(
 
 app.include_router(capture_router)
 app.include_router(recall_router)
+app.include_router(privacy_router)
