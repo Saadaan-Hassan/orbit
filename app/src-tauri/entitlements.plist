@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Required for the Tauri WebView (WKWebView uses JIT compilation) -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+
+  <!-- Required for the WebView to execute JavaScript -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+
+  <!-- Required to load Tauri's own unsigned dylibs at runtime -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+
+  <!-- Required to reach the FastAPI backend on localhost and
+       to make outbound calls to the Cloudflare Worker proxy -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+
+  <!-- Required to bind the FastAPI subprocess on a local port -->
+  <key>com.apple.security.network.server</key>
+  <true/>
+
+  <!-- Required for the user to open/save files via native dialogs -->
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+</dict>
+</plist>
