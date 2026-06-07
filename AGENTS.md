@@ -176,7 +176,7 @@ orbit/
 | Task | Model | Package |
 |---|---|---|
 | Recall, conversation, session summaries | Claude Sonnet 4 via Cloudflare Worker | `httpx` |
-| Event classification (work/research/personal/system) | `gemini-3.1-flash-lite` | `google-genai` |
+| Event classification (work/research/personal/system) | `gemini-3.1-flash-lite` | `httpx` via Cloudflare Worker `/classify` |
 | Embeddings | Voyage AI `voyage-3-lite` (512 dims) via httpx | `httpx` |
 | Voice STT (Phase 4) | Whisper.cpp local → Apple Speech fallback | — |
 | Voice TTS (Phase 4) | Kokoro TTS local (free) → ElevenLabs Pro | — |

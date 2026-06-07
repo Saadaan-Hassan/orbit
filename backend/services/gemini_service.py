@@ -1,13 +1,11 @@
 """
 Gemini event classification service.
 
-All calls to the Gemini API go through this module. One genai.Client is
-created at module level and reused for every request — never instantiate
-a new client per call.
+Calls the Gemini generateContent API through the Cloudflare Worker proxy
+(/classify route) so the GEMINI_API_KEY never lives on the user's machine.
 
-The classifier sends an entire batch of events in one API call and returns
-them annotated with "category" and "project" fields. This keeps costs low
-compared to one-call-per-event approaches.
+One httpx.AsyncClient is created at module level and reused for every
+request — never instantiate a new client per call.
 """
 
 import asyncio
@@ -15,9 +13,8 @@ import json
 import logging
 import os
 
+import httpx
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types as genai_types
 
 load_dotenv()
 
@@ -29,12 +26,13 @@ logger = logging.getLogger(__name__)
 
 GEMINI_MODEL_NAME = "gemini-3.1-flash-lite"
 
-# Retry settings for rate-limit (429) errors.
 MAXIMUM_RETRY_ATTEMPTS = 3
 INITIAL_RETRY_BACKOFF_SECONDS = 2.0
 
 VALID_EVENT_CATEGORIES = {"work", "research", "personal", "system", "communication"}
 DEFAULT_CATEGORY_ON_PARSE_FAILURE = "work"
+
+HTTP_REQUEST_TIMEOUT_SECONDS = 60.0
 
 CLASSIFICATION_SYSTEM_PROMPT = """You are classifying user activity events from a desktop app.
 Classify each event into exactly one category:
@@ -44,29 +42,24 @@ Return ONLY a JSON array. No explanation. No markdown. No preamble.
 Each item: {"id": "<event_id>", "category": "<category>", "project": "<project_name_or_null>"}"""
 
 # ---------------------------------------------------------------------------
-# Singleton client
+# Singleton HTTP client — points at the Cloudflare Worker, not Gemini directly.
+# The Worker injects the GEMINI_API_KEY before forwarding to Google.
 # ---------------------------------------------------------------------------
 
-_gemini_api_key = os.getenv("GEMINI_API_KEY")
-if not _gemini_api_key:
-    raise EnvironmentError(
-        "GEMINI_API_KEY is not set. "
-        "Add it to backend/.env before starting the server."
-    )
+_worker_url = os.getenv("WORKER_URL", "http://localhost:8787")
 
-_genai_client = genai.Client(api_key=_gemini_api_key)
+_http_client = httpx.AsyncClient(timeout=HTTP_REQUEST_TIMEOUT_SECONDS)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _build_classification_prompt(events: list[dict]) -> str:
-    # Send only the fields Gemini needs to classify — omitting large or
-    # irrelevant fields keeps token counts low and responses focused.
-    # raw_content is safe to include here: the Rust capture layer redacts
-    # all secrets (API keys, private keys, JWTs, etc.) before writing to
-    # SQLite, so by the time events reach this function raw_content is
-    # either innocuous plaintext or a [REDACTED:<type>] placeholder.
+    """Strips events down to the fields Gemini needs — keeps token counts low."""
+    # raw_content is safe to include here: Rust's capture layer redacts all
+    # secrets (API keys, JWTs, private keys, etc.) before writing to SQLite,
+    # so by the time events reach this function raw_content is either
+    # innocuous plaintext or a [REDACTED:<type>] placeholder.
     stripped_events = [
         {
             "id":          event.get("id", ""),
@@ -80,17 +73,54 @@ def _build_classification_prompt(events: list[dict]) -> str:
     return json.dumps(stripped_events, ensure_ascii=False)
 
 
+def _build_gemini_request_body(user_prompt: str) -> dict:
+    """
+    Builds the Gemini generateContent REST request body.
+
+    This matches the shape the Gemini REST API (v1beta) expects:
+      system_instruction, contents, generationConfig
+    The Worker adds the ?key= query param before forwarding to Google.
+    """
+    return {
+        "system_instruction": {
+            "parts": [{"text": CLASSIFICATION_SYSTEM_PROMPT}],
+        },
+        "contents": [
+            {"role": "user", "parts": [{"text": user_prompt}]},
+        ],
+        "generationConfig": {
+            # Force JSON output — no markdown fences, no preamble.
+            "responseMimeType": "application/json",
+            # Low temperature: classification is deterministic, not creative.
+            "temperature": 0.1,
+        },
+    }
+
+
+def _extract_text_from_gemini_response(response_body: dict) -> str:
+    """
+    Extracts the generated text from a Gemini generateContent REST response.
+
+    Gemini REST shape:
+      { "candidates": [{ "content": { "parts": [{ "text": "..." }] } }] }
+    """
+    try:
+        return response_body["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError) as extraction_error:
+        raise ValueError(
+            f"Unexpected Gemini response shape: {extraction_error}"
+        ) from extraction_error
+
+
 def _parse_classification_response(
     response_text: str,
     original_events: list[dict],
 ) -> list[dict]:
     """
-    Attempts to parse Gemini's JSON array response and merge the
-    classification results back into the original event dicts.
+    Parses Gemini's JSON array response and merges results back into events.
 
-    Falls back to DEFAULT_CATEGORY_ON_PARSE_FAILURE for all events if
-    the response cannot be parsed or is structurally wrong — this makes
-    the pipeline resilient to occasional bad Gemini outputs.
+    Falls back to DEFAULT_CATEGORY_ON_PARSE_FAILURE for all events if the
+    response cannot be parsed — keeps the pipeline resilient to bad outputs.
     """
     try:
         parsed_classifications = json.loads(response_text.strip())
@@ -98,8 +128,6 @@ def _parse_classification_response(
         if not isinstance(parsed_classifications, list):
             raise ValueError("Expected a JSON array at the top level")
 
-        # Build a lookup from event ID → classification result so we can
-        # annotate events regardless of the order Gemini returns them in.
         classification_by_event_id: dict[str, dict] = {
             item["id"]: item
             for item in parsed_classifications
@@ -109,12 +137,16 @@ def _parse_classification_response(
         annotated_events = []
         for original_event in original_events:
             event_copy = dict(original_event)
-            classification = classification_by_event_id.get(event_copy.get("id", ""), {})
+            classification = classification_by_event_id.get(
+                event_copy.get("id", ""), {}
+            )
 
-            raw_category = classification.get("category", DEFAULT_CATEGORY_ON_PARSE_FAILURE)
-            # Guard against Gemini returning an out-of-spec category.
+            raw_category = classification.get(
+                "category", DEFAULT_CATEGORY_ON_PARSE_FAILURE
+            )
             event_copy["category"] = (
-                raw_category if raw_category in VALID_EVENT_CATEGORIES
+                raw_category
+                if raw_category in VALID_EVENT_CATEGORIES
                 else DEFAULT_CATEGORY_ON_PARSE_FAILURE
             )
             event_copy["project"] = classification.get("project") or None
@@ -143,15 +175,15 @@ def _parse_classification_response(
 
 async def classify_events_batch(events: list[dict]) -> list[dict]:
     """
-    Classifies a batch of raw activity events using a single Gemini API call.
+    Classifies a batch of raw activity events via the Worker /classify route.
 
-    Each event in the returned list has two new fields added:
+    Each event in the returned list gains two new fields:
       - "category": one of work / research / personal / system / communication
       - "project":  detected project name string, or None
 
     On rate-limit errors (HTTP 429) the call is retried with exponential
     backoff up to MAXIMUM_RETRY_ATTEMPTS times before giving up and
-    returning the default category for all events.
+    defaulting all events to DEFAULT_CATEGORY_ON_PARSE_FAILURE.
 
     Args:
         events: List of raw event dicts as fetched from SQLite.
@@ -162,43 +194,37 @@ async def classify_events_batch(events: list[dict]) -> list[dict]:
     if not events:
         return []
 
-    user_prompt_text = _build_classification_prompt(events)
-    generation_config = genai_types.GenerateContentConfig(
-        system_instruction=CLASSIFICATION_SYSTEM_PROMPT,
-        # Instruct Gemini to return strict JSON so no markdown fences wrap it.
-        response_mime_type="application/json",
-        # Low temperature — classification is deterministic, not creative.
-        temperature=0.1,
-    )
+    user_prompt = _build_classification_prompt(events)
+    request_body = _build_gemini_request_body(user_prompt)
 
     last_raised_exception: Exception | None = None
 
     for attempt_number in range(MAXIMUM_RETRY_ATTEMPTS):
         try:
-            api_response = await _genai_client.aio.models.generate_content(
-                model=GEMINI_MODEL_NAME,
-                contents=user_prompt_text,
-                config=generation_config,
+            response = await _http_client.post(
+                f"{_worker_url}/classify",
+                params={"model": GEMINI_MODEL_NAME},
+                json=request_body,
             )
-            return _parse_classification_response(
-                api_response.text,
-                events,
-            )
+            response.raise_for_status()
+
+            response_body = response.json()
+            generated_text = _extract_text_from_gemini_response(response_body)
+            return _parse_classification_response(generated_text, events)
 
         except Exception as api_error:
             error_message = str(api_error).lower()
-            is_rate_limit_error = "429" in error_message or "quota" in error_message
+            is_rate_limit = "429" in error_message or "quota" in error_message
 
-            if is_rate_limit_error and attempt_number < MAXIMUM_RETRY_ATTEMPTS - 1:
-                backoff_duration_seconds = INITIAL_RETRY_BACKOFF_SECONDS * (2 ** attempt_number)
+            if is_rate_limit and attempt_number < MAXIMUM_RETRY_ATTEMPTS - 1:
+                backoff = INITIAL_RETRY_BACKOFF_SECONDS * (2 ** attempt_number)
                 logger.warning(
-                    "Gemini rate limit hit (attempt %d/%d). "
-                    "Retrying in %.1fs.",
+                    "Gemini rate limit (attempt %d/%d). Retrying in %.1fs.",
                     attempt_number + 1,
                     MAXIMUM_RETRY_ATTEMPTS,
-                    backoff_duration_seconds,
+                    backoff,
                 )
-                await asyncio.sleep(backoff_duration_seconds)
+                await asyncio.sleep(backoff)
                 last_raised_exception = api_error
             else:
                 logger.error(
@@ -211,7 +237,7 @@ async def classify_events_batch(events: list[dict]) -> list[dict]:
 
     logger.error(
         "All %d Gemini retry attempts exhausted (%s). "
-        "Defaulting all events to category '%s'.",
+        "Defaulting all events to '%s'.",
         MAXIMUM_RETRY_ATTEMPTS,
         last_raised_exception,
         DEFAULT_CATEGORY_ON_PARSE_FAILURE,
