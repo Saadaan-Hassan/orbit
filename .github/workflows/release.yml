@@ -87,9 +87,6 @@ jobs:
 
       - name: Build orbit-backend sidecar with PyInstaller
         working-directory: backend
-        env:
-          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: ~/.local/bin/uv run pyinstaller orbit-backend.spec --noconfirm
 
       # Tauri's externalBin looks for `orbit-backend-{target-triple}` next to
@@ -120,12 +117,11 @@ jobs:
           VITE_APP_ENVIRONMENT: production
           VITE_APP_VERSION: ${{ github.ref_name }}
           # Baked into the sidecar binary at Rust compile time via option_env!()
-          # so the bundled backend never needs a .env file on the user's machine.
-          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Gemini and Voyage keys are NOT here — they live in Cloudflare Worker
+          # secrets and are never exposed to the user's machine.
+          WORKER_URL: ${{ secrets.WORKER_URL }}
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN_BACKEND: ${{ secrets.SENTRY_DSN_BACKEND }}
-          WORKER_URL: ${{ secrets.WORKER_URL }}
         with:
           # The Tauri project lives in app/, not the repo root.
           projectPath: ./app

@@ -12,15 +12,12 @@ use tauri::{
 // app state so the quit handler can cleanly terminate it.
 // ---------------------------------------------------------------------------
 
-/// Compile-time API keys — injected from CI secrets during `pnpm tauri build`.
-/// In dev mode these are empty; the uv-based backend reads them from backend/.env.
+/// Compile-time values baked into the sidecar at `pnpm tauri build` time.
+/// Gemini and Voyage keys are NOT here — they live in Cloudflare Worker
+/// secrets and never touch the user's machine.
+/// In dev mode these are empty strings; the uv backend reads them from backend/.env.
 #[cfg(not(debug_assertions))]
-const SIDECAR_VOYAGE_API_KEY: &str = match option_env!("VOYAGE_API_KEY") {
-    Some(v) => v,
-    None => "",
-};
-#[cfg(not(debug_assertions))]
-const SIDECAR_GEMINI_API_KEY: &str = match option_env!("GEMINI_API_KEY") {
+const SIDECAR_WORKER_URL: &str = match option_env!("WORKER_URL") {
     Some(v) => v,
     None => "",
 };
@@ -33,11 +30,6 @@ const SIDECAR_POSTHOG_API_KEY: &str = match option_env!("POSTHOG_API_KEY") {
 const SIDECAR_SENTRY_DSN: &str = match option_env!("SENTRY_DSN_BACKEND") {
     Some(v) => v,
     None => "",
-};
-#[cfg(not(debug_assertions))]
-const SIDECAR_WORKER_URL: &str = match option_env!("WORKER_URL") {
-    Some(v) => v,
-    None => "https://orbit-api-proxy.heyorbit.workers.dev",
 };
 
 /// Wraps the sidecar child handle so it can be stored in Tauri app state and
@@ -306,8 +298,6 @@ where
                     .env("ORBIT_DB_PATH", &orbit_db_path)
                     .env("QDRANT_STORAGE_PATH", &qdrant_path)
                     .env("WORKER_URL", SIDECAR_WORKER_URL)
-                    .env("VOYAGE_API_KEY", SIDECAR_VOYAGE_API_KEY)
-                    .env("GEMINI_API_KEY", SIDECAR_GEMINI_API_KEY)
                     .env("POSTHOG_API_KEY", SIDECAR_POSTHOG_API_KEY)
                     .env("SENTRY_DSN", SIDECAR_SENTRY_DSN)
                     .env("APP_ENVIRONMENT", "production")
