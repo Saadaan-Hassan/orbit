@@ -4,6 +4,49 @@ use tauri::{
     Emitter, Manager,
 };
 
+// ---------------------------------------------------------------------------
+// Tauri commands
+// ---------------------------------------------------------------------------
+
+/// Returns true if the app has been granted Accessibility permission.
+///
+/// Runs a quick osascript probe — if it succeeds, the OS has granted access.
+/// If it fails with an error 1743 / "not allowed assistive access" the
+/// permission has not been granted yet.
+#[tauri::command]
+fn check_accessibility_permission_granted() -> bool {
+    std::process::Command::new("osascript")
+        .args(["-e", "tell application \"System Events\" to get name of processes"])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// Opens System Settings directly to the Accessibility privacy pane.
+#[tauri::command]
+fn open_accessibility_system_settings() {
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        .spawn()
+        .ok();
+}
+
+/// Reads the onboarding-completed flag from ~/.orbit/onboarding_done.
+#[tauri::command]
+fn get_onboarding_completed() -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::Path::new(&format!("{}/.orbit/onboarding_done", home)).exists()
+}
+
+/// Writes ~/.orbit/onboarding_done to mark onboarding as complete.
+#[tauri::command]
+fn mark_onboarding_completed() {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let orbit_dir = format!("{}/.orbit", home);
+    let _ = std::fs::create_dir_all(&orbit_dir);
+    let _ = std::fs::write(format!("{}/onboarding_done", orbit_dir), "1");
+}
+
 /// Entry point used by main.rs when no exit hook is needed (mobile / tests).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -45,7 +88,7 @@ where
                                 if is_visible {
                                     let _ = main_window.hide();
                                 } else {
-                                    position_window_on_active_monitor(&main_window, false);
+                                    position_window_on_active_monitor(&main_window, PositionMode::Expanded);
                                     let _ = main_window.show();
                                     let _ = main_window.set_focus();
                                     let _ = app_handle.emit("navigate", "chat");
@@ -118,7 +161,7 @@ where
                             if is_visible {
                                 let _ = main_window.hide();
                             } else {
-                                position_window_on_active_monitor(&main_window, false);
+                                position_window_on_active_monitor(&main_window, PositionMode::Expanded);
                                 let _ = main_window.show();
                                 let _ = main_window.set_focus();
                                 let _ = app_handle.emit("navigate", "chat");
@@ -141,7 +184,7 @@ where
                             if let Some(main_window) =
                                 app_handle.get_webview_window("main")
                             {
-                                position_window_on_active_monitor(&main_window, false);
+                                position_window_on_active_monitor(&main_window, PositionMode::Expanded);
                                 let _ = main_window.show();
                                 let _ = main_window.set_focus();
                             }
@@ -165,25 +208,57 @@ where
                 })
                 .build(app)?;
 
-            // Position at top center of screen by default on startup
+            // Position at top center of screen by default on startup (or center if onboarding not done)
             if let Some(main_window) = app.get_webview_window("main") {
-                position_window_on_active_monitor(&main_window, true);
+                let onboarding_completed = {
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    std::path::Path::new(&format!("{}/.orbit/onboarding_done", home)).exists()
+                };
+                let startup_mode = if onboarding_completed {
+                    PositionMode::Collapsed
+                } else {
+                    PositionMode::Center
+                };
+                position_window_on_active_monitor(&main_window, startup_mode);
                 let _ = main_window.show();
             }
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![])
+        .invoke_handler(tauri::generate_handler![
+            check_accessibility_permission_granted,
+            open_accessibility_system_settings,
+            get_onboarding_completed,
+            mark_onboarding_completed,
+            position_window,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
-fn position_window_on_active_monitor(window: &tauri::WebviewWindow, collapsed: bool) {
+#[derive(Debug, Clone, Copy)]
+enum PositionMode {
+    Collapsed,
+    Expanded,
+    Center,
+}
+
+#[tauri::command]
+fn position_window(window: tauri::WebviewWindow, mode: String) {
+    let mode = match mode.as_str() {
+        "collapsed" => PositionMode::Collapsed,
+        "expanded" => PositionMode::Expanded,
+        "center" => PositionMode::Center,
+        _ => PositionMode::Collapsed,
+    };
+    position_window_on_active_monitor(&window, mode);
+}
+
+fn position_window_on_active_monitor(window: &tauri::WebviewWindow, mode: PositionMode) {
     let scale_factor = window.scale_factor().unwrap_or(1.0);
-    let (logical_w, logical_h) = if collapsed {
-        (230.0, 60.0)
-    } else {
-        (500.0, 650.0)
+    let (logical_w, logical_h) = match mode {
+        PositionMode::Collapsed => (230.0, 60.0),
+        PositionMode::Expanded | PositionMode::Center => (500.0, 650.0),
     };
     let size = tauri::PhysicalSize::new((logical_w * scale_factor) as u32, (logical_h * scale_factor) as u32);
     
@@ -193,8 +268,11 @@ fn position_window_on_active_monitor(window: &tauri::WebviewWindow, collapsed: b
             // Fallback: just use current monitor
             if let Ok(Some(monitor)) = window.current_monitor() {
                 let x = monitor.position().x + (monitor.size().width as i32 - size.width as i32) / 2;
-                let y_offset = if collapsed { 30.0 } else { 80.0 };
-                let y = monitor.position().y + (y_offset * scale_factor) as i32;
+                let y = match mode {
+                    PositionMode::Collapsed => monitor.position().y + (30.0 * scale_factor) as i32,
+                    PositionMode::Expanded => monitor.position().y + (80.0 * scale_factor) as i32,
+                    PositionMode::Center => monitor.position().y + (monitor.size().height as i32 - size.height as i32) / 2,
+                };
                 let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
             }
             return;
@@ -210,8 +288,11 @@ fn position_window_on_active_monitor(window: &tauri::WebviewWindow, collapsed: b
 
             if x >= pos.x && x < pos.x + monitor_size.width as i32 && y >= pos.y && y < pos.y + monitor_size.height as i32 {
                 let target_x = pos.x + (monitor_size.width as i32 - size.width as i32) / 2;
-                let y_offset = if collapsed { 30.0 } else { 80.0 };
-                let target_y = pos.y + (y_offset * scale_factor) as i32;
+                let target_y = match mode {
+                    PositionMode::Collapsed => pos.y + (30.0 * scale_factor) as i32,
+                    PositionMode::Expanded => pos.y + (80.0 * scale_factor) as i32,
+                    PositionMode::Center => pos.y + (monitor_size.height as i32 - size.height as i32) / 2,
+                };
                 let _ = window.set_position(tauri::PhysicalPosition::new(target_x, target_y));
                 return;
             }
@@ -221,8 +302,11 @@ fn position_window_on_active_monitor(window: &tauri::WebviewWindow, collapsed: b
     // Default fallback if no monitor matched:
     if let Ok(Some(monitor)) = window.primary_monitor() {
         let x = monitor.position().x + (monitor.size().width as i32 - size.width as i32) / 2;
-        let y_offset = if collapsed { 30.0 } else { 80.0 };
-        let y = monitor.position().y + (y_offset * scale_factor) as i32;
+        let y = match mode {
+            PositionMode::Collapsed => monitor.position().y + (30.0 * scale_factor) as i32,
+            PositionMode::Expanded => monitor.position().y + (80.0 * scale_factor) as i32,
+            PositionMode::Center => monitor.position().y + (monitor.size().height as i32 - size.height as i32) / 2,
+        };
         let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
     }
 }

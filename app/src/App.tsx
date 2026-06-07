@@ -1,10 +1,13 @@
 import { useEffect, useState, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { ActivityTimeline } from "./components/ActivityTimeline";
 import { MemoryViewer } from "./components/MemoryViewer";
+import { OnboardingFlow } from "./components/OnboardingFlow";
 import { PrivacyPanel } from "./components/PrivacyPanel";
 import { RecallSearch } from "./components/RecallSearch";
+import { useOnboarding } from "./hooks/useOnboarding";
 import { useUpdater } from "./hooks/useUpdater";
 
 type ActivePanel = "chat" | "memory" | "privacy";
@@ -13,6 +16,7 @@ export default function App() {
   const [activePanel, setActivePanel] = useState<ActivePanel>("chat");
   const [isCollapsed, setIsCollapsed] = useState(true);
   const isCollapsedRef = useRef(true);
+  const { isCompleted: onboardingCompleted, isLoading: onboardingLoading, completeOnboarding } = useOnboarding();
 
   // Sync ref to avoid closure issues in listeners
   useEffect(() => {
@@ -30,12 +34,14 @@ export default function App() {
       if (collapsed) {
         // Pill mode size: compact capsule
         await appWindow.setSize(new LogicalSize(230, 60));
+        await invoke("position_window", { mode: "collapsed" });
       } else {
         // Expanded panel size
         await appWindow.setSize(new LogicalSize(500, 650));
+        await invoke("position_window", { mode: "expanded" });
       }
     } catch (err) {
-      console.error("Failed to resize Tauri window:", err);
+      console.error("Failed to resize/position Tauri window:", err);
     }
   };
 
@@ -93,6 +99,21 @@ export default function App() {
       if (unlistenFocus) unlistenFocus();
     };
   }, []);
+
+  // Resize and center the window for onboarding
+  useEffect(() => {
+    if (!onboardingLoading && !onboardingCompleted) {
+      const appWindow = getCurrentWindow();
+      appWindow.setSize(new LogicalSize(500, 650))
+        .then(() => invoke("position_window", { mode: "center" }))
+        .catch((err) => console.error("Failed to center onboarding window:", err));
+    }
+  }, [onboardingLoading, onboardingCompleted]);
+
+  // Show onboarding on first launch
+  if (!onboardingLoading && !onboardingCompleted) {
+    return <OnboardingFlow onComplete={completeOnboarding} />;
+  }
 
   // Toggle expanded view
   const handlePillClick = (panel: ActivePanel) => {
