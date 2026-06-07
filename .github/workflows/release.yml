@@ -1,67 +1,87 @@
 name: Release
 
-# Trigger by pushing a version tag: git tag v0.2.0 && git push origin v0.2.0
+# Triggered by pushing a version tag:
+#   git tag v0.2.0 && git push origin v0.2.0
 on:
   push:
     tags:
       - "v*"
 
+# Allow the manifest-update job to commit back to main.
+permissions:
+  contents: write
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # Build a signed .dmg for each macOS architecture.
+  # The matrix produces two independent jobs that run in parallel.
+  # ---------------------------------------------------------------------------
   build-macos:
     strategy:
+      fail-fast: false   # let both arches finish even if one fails
       matrix:
         include:
           - target: x86_64-apple-darwin
-            runner: macos-13          # Intel — last runner with x86_64
+            runner: macos-13        # last GitHub-hosted Intel runner
           - target: aarch64-apple-darwin
-            runner: macos-latest      # Apple Silicon
+            runner: macos-15        # Apple Silicon (M-series)
 
     runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust target
-        run: rustup target add ${{ matrix.target }}
-
-      - name: Install Node + pnpm
-        uses: actions/setup-node@v4
+      # ---- Rust -----------------------------------------------------------
+      # Use the dedicated toolchain action so the version is explicit and
+      # cached properly — don't rely on whatever ships on the runner image.
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
         with:
-          node-version: 20
+          targets: ${{ matrix.target }}
 
-      - run: npm i -g pnpm
-
-      - name: Install Python + uv
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
-      # Cache Cargo registry and build artefacts across runs.
-      - uses: actions/cache@v4
+      - name: Cache Cargo registry + build artefacts
+        uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
             app/src-tauri/target
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('app/src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
 
+      # ---- Node + pnpm ----------------------------------------------------
+      # Pin pnpm to the same major version used locally (11.x) so the
+      # lockfile v9 format is accepted without errors.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "11"
+
+      - name: Set up Node 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      # ---- Frontend deps --------------------------------------------------
       - name: Install frontend dependencies
         working-directory: app
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
+      # ---- Tauri build ----------------------------------------------------
+      # TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD must
+      # be set as repository secrets in GitHub → Settings → Secrets → Actions.
       - name: Build and sign Tauri app
         working-directory: app
         env:
-          # These are the two secrets you added in GitHub → Settings → Secrets.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --target ${{ matrix.target }}
 
-      # Upload the signed .dmg and its .tar.gz + .sig companion as release assets.
-      - name: Upload release assets
+      # ---- Upload release assets to the GitHub Release --------------------
+      - name: Upload .dmg and updater files to release
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -69,8 +89,21 @@ jobs:
             app/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.tar.gz
             app/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.tar.gz.sig
 
-  # After both platform builds succeed, update releases/latest.json and
-  # commit it back to main so the updater endpoint serves the new version.
+      # ---- Also save the .sig as a GitHub Actions artifact ----------------
+      # The manifest-update job downloads these to embed the signatures in
+      # releases/latest.json. Using a per-target artifact name avoids
+      # collisions between the two matrix jobs.
+      - name: Upload .sig as Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sig-${{ matrix.target }}
+          path: app/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.tar.gz.sig
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # After both builds succeed, update releases/latest.json with real signatures
+  # and commit it back to main so the updater endpoint serves the new version.
+  # ---------------------------------------------------------------------------
   update-release-manifest:
     needs: build-macos
     runs-on: ubuntu-latest
@@ -81,45 +114,68 @@ jobs:
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Download the .sig files produced by the build jobs so we can embed
-      # their content as the "signature" field in latest.json.
-      - uses: actions/download-artifact@v4
+      # Download the two .sig files uploaded by the build jobs above.
+      - name: Download x86_64 signature
+        uses: actions/download-artifact@v4
         with:
-          merge-multiple: true
-          path: sigs
+          name: sig-x86_64-apple-darwin
+          path: sigs/x64
 
+      - name: Download aarch64 signature
+        uses: actions/download-artifact@v4
+        with:
+          name: sig-aarch64-apple-darwin
+          path: sigs/arm
+
+      # Write releases/latest.json.
+      # Using a Python heredoc avoids shell quoting issues with the base64
+      # signature strings, which can contain +, /, and = characters.
       - name: Write releases/latest.json
         env:
-          TAG: ${{ github.ref_name }}   # e.g. "v0.2.0"
+          TAG: ${{ github.ref_name }}
         run: |
-          VERSION="${TAG#v}"            # strip the leading "v"
+          VERSION="${TAG#v}"
+          SIG_X64=$(cat sigs/x64/*.sig)
+          SIG_ARM=$(cat sigs/arm/*.sig)
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          SIG_X64=$(cat sigs/*x64*.dmg.tar.gz.sig 2>/dev/null || echo "")
-          SIG_ARM=$(cat sigs/*aarch64*.dmg.tar.gz.sig 2>/dev/null || echo "")
+          python3 - <<PYEOF
+          import json, os
 
-          cat > releases/latest.json <<EOF
-          {
-            "version": "$VERSION",
-            "notes": "See https://github.com/saadaanhassan/orbit/releases/tag/$TAG",
-            "pub_date": "$PUB_DATE",
-            "platforms": {
-              "darwin-x86_64": {
-                "signature": "$SIG_X64",
-                "url": "https://github.com/saadaanhassan/orbit/releases/download/$TAG/orbit_${VERSION}_x64.dmg.tar.gz"
-              },
-              "darwin-aarch64": {
-                "signature": "$SIG_ARM",
-                "url": "https://github.com/saadaanhassan/orbit/releases/download/$TAG/orbit_${VERSION}_aarch64.dmg.tar.gz"
+          version   = os.environ["VERSION"]   if "VERSION"   in os.environ else "${VERSION}"
+          tag       = os.environ["TAG"]        if "TAG"       in os.environ else "${TAG}"
+          pub_date  = "${PUB_DATE}"
+          sig_x64   = """${SIG_X64}"""
+          sig_arm   = """${SIG_ARM}"""
+
+          manifest = {
+              "version": version,
+              "notes": f"See https://github.com/saadaanhassan/orbit/releases/tag/{tag}",
+              "pub_date": pub_date,
+              "platforms": {
+                  "darwin-x86_64": {
+                      "signature": sig_x64.strip(),
+                      "url": f"https://github.com/saadaanhassan/orbit/releases/download/{tag}/orbit_{version}_x64.dmg.tar.gz"
+                  },
+                  "darwin-aarch64": {
+                      "signature": sig_arm.strip(),
+                      "url": f"https://github.com/saadaanhassan/orbit/releases/download/{tag}/orbit_{version}_aarch64.dmg.tar.gz"
+                  }
               }
-            }
           }
-          EOF
+
+          with open("releases/latest.json", "w") as f:
+              json.dump(manifest, f, indent=2)
+              f.write("\n")
+
+          print("releases/latest.json written successfully")
+          PYEOF
 
       - name: Commit updated manifest
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add releases/latest.json
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
           git commit -m "chore: update release manifest to ${{ github.ref_name }}"
           git push
