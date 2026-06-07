@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from models.event import CaptureEvent
-from database import get_db
+from database import get_db, _async_engine
 
 router = APIRouter()
 
@@ -30,3 +30,22 @@ async def capture_event(
     )
     await db.commit()
     return {"status": "ok", "event_id": event.id}
+
+
+@router.get("/events")
+async def get_recent_events(
+    limit: int = Query(default=50, ge=1, le=500),
+) -> list[dict]:
+    async with _async_engine.connect() as connection:
+        result = await connection.execute(
+            text(
+                """
+                SELECT id, timestamp, type, raw_content, app_name, url, source
+                FROM   events
+                ORDER  BY timestamp DESC
+                LIMIT  :limit
+                """
+            ),
+            {"limit": limit},
+        )
+        return [dict(row._mapping) for row in result.fetchall()]
