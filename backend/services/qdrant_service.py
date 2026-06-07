@@ -2,17 +2,21 @@
 Qdrant local-mode service.
 
 All vector storage and semantic search operations go through this module.
-One QdrantClient is created at module level (local file mode) and reused
-for every operation — never instantiate a new client per request.
+The QdrantClient is initialised lazily on first use rather than at module
+import time. This prevents a crash-on-import when the Qdrant lock file is
+still held by a stale FastAPI process from a previous Tauri hot-reload cycle.
 """
 
 import asyncio
+import logging
 from pathlib import Path
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from services.voyage_service import generate_text_embedding
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -26,11 +30,29 @@ EMBEDDING_DIMENSION = 512
 MINIMUM_SIMILARITY_SCORE = 0.3
 
 # ---------------------------------------------------------------------------
-# Singleton client — local file mode, no Docker required
+# Lazy singleton client
 # ---------------------------------------------------------------------------
 
 _qdrant_storage_path = str(Path.home() / ".orbit" / "qdrant_storage")
-_qdrant_client = QdrantClient(path=_qdrant_storage_path)
+
+# None until first use. Initialised by _get_client() on the first call to any
+# public function. This means a module import never acquires the Qdrant file
+# lock — only the first actual operation does, by which point the stale
+# process from the previous run has already been killed by Rust.
+_qdrant_client: QdrantClient | None = None
+
+
+def _get_client() -> QdrantClient:
+    """
+    Returns the singleton QdrantClient, creating it on the first call.
+
+    Separated from module-level code so that importing this module never
+    acquires the Qdrant storage lock — only the first real operation does.
+    """
+    global _qdrant_client
+    if _qdrant_client is None:
+        _qdrant_client = QdrantClient(path=_qdrant_storage_path)
+    return _qdrant_client
 
 
 # ---------------------------------------------------------------------------
@@ -42,13 +64,15 @@ async def initialize_qdrant_collection() -> None:
     Creates the orbit_sessions collection if it does not already exist.
     Safe to call on every startup — no-op when the collection is present.
     """
+    client = _get_client()
+
     existing_collection_names = await asyncio.to_thread(
-        lambda: [c.name for c in _qdrant_client.get_collections().collections]
+        lambda: [c.name for c in client.get_collections().collections]
     )
 
     if COLLECTION_NAME not in existing_collection_names:
         await asyncio.to_thread(
-            _qdrant_client.create_collection,
+            client.create_collection,
             collection_name=COLLECTION_NAME,
             vectors_config=VectorParams(
                 size=EMBEDDING_DIMENSION,
@@ -71,6 +95,7 @@ async def add_session_embedding(
         summary_text: Full text to embed (project + goal + summary + resources).
         metadata:     Key/value pairs stored as the point payload for retrieval.
     """
+    client = _get_client()
     embedding_vector = await generate_text_embedding(summary_text)
 
     # Qdrant integer point IDs must be non-negative. We derive a stable ID
@@ -84,7 +109,7 @@ async def add_session_embedding(
     )
 
     await asyncio.to_thread(
-        _qdrant_client.upsert,
+        client.upsert,
         collection_name=COLLECTION_NAME,
         points=[point],
     )
@@ -106,10 +131,11 @@ async def search_sessions_semantic(
         List of payload dicts for points scoring >= MINIMUM_SIMILARITY_SCORE,
         ordered best-first.
     """
+    client = _get_client()
     query_embedding_vector = await generate_text_embedding(query_text)
 
     query_response = await asyncio.to_thread(
-        _qdrant_client.query_points,
+        client.query_points,
         collection_name=COLLECTION_NAME,
         query=query_embedding_vector,
         limit=result_limit,

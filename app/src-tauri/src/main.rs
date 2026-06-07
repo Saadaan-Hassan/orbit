@@ -36,6 +36,25 @@ fn resolve_uv_executable_path() -> String {
     "uv".to_string()
 }
 
+/// Kills any process already bound to port 8000.
+///
+/// During Tauri hot-reload the old binary is killed abruptly, which means the
+/// exit hook that calls child.kill() never runs. The old FastAPI process stays
+/// alive, holds the Qdrant file lock, and causes the new FastAPI spawn to crash
+/// on import. Running this before every spawn ensures we always start clean.
+fn kill_stale_process_on_port_8000() {
+    // `lsof -ti:8000` prints the PID of whatever owns the port, or exits
+    // non-zero / prints nothing if the port is free. We pipe straight to
+    // `kill` and ignore all errors — if the port is free this is a no-op.
+    let _ = Command::new("sh")
+        .args(["-c", "lsof -ti:8000 | xargs kill -9 2>/dev/null"])
+        .output();
+
+    // Give the OS a moment to release the port and the Qdrant lock file
+    // before we start the new FastAPI process.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+}
+
 fn spawn_fastapi_backend(backend_directory_path: &str) -> Child {
     let uv_executable_path = resolve_uv_executable_path();
 
@@ -66,6 +85,11 @@ fn main() {
             let src_tauri_directory = env!("CARGO_MANIFEST_DIR");
             format!("{}/../../backend", src_tauri_directory)
         });
+
+    // Evict any stale FastAPI process left over from a previous hot-reload
+    // cycle before spawning the new one. This releases the Qdrant file lock
+    // that would otherwise cause the new process to crash on startup.
+    kill_stale_process_on_port_8000();
 
     // Spawn the FastAPI backend before the Tauri event loop starts so that
     // the backend is ready to accept capture events as soon as the first

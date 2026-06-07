@@ -14,11 +14,11 @@ Orbit is a macOS-first AI memory companion. It runs silently in the background, 
 
 **App behaviour:** No dock icon. No Cmd+Tab entry. Lives in the macOS menu bar only (`LSUIElement = true`).
 
+**Completed phases:** Phase 0 (foundation) and Phase 1 (recall MVP) are done.
+
 ---
 
 ## Architecture
-
-Five layers. Each has a clear owner.
 
 ```
 ┌──────────────────────────────────────┐
@@ -30,48 +30,37 @@ Five layers. Each has a clear owner.
 ├──────────────────────────────────────┤
 │       Activity Collection Layer       │  Rust (OS-level) + Chrome Extension
 ├──────────────────────────────────────┤
-│       Local Storage Layer             │  SQLite + Tantivy + Qdrant
+│       Local Storage Layer             │  SQLite + FTS5 + Qdrant (local file)
 └──────────────────────────────────────┘
 ```
 
-**Components and their roles:**
-
-| Component | Location | Role |
-|---|---|---|
-| Desktop app | `app/` | Tauri v2: React UI + Rust native capture |
-| AI backend | `backend/` | FastAPI: embeddings, session gen, recall queries |
-| Browser capture | `extension/` | Chrome Extension MV3: URL, title, selected text |
-| API proxy | `worker/` | Cloudflare Worker: holds all API keys, proxies Claude + ElevenLabs |
-| Marketing site | `landing/` | Next.js: waitlist + demo |
-
 **Data flow:**
-
 ```
-[Rust capture layer]  ──►  [SQLite: raw events]
-[Chrome Extension]    ──►  [FastAPI /capture endpoint]
-                                    │
-                              [every 30 min]
-                                    │
-                                    ▼
-                     [Gemini Flash: classify + tag events]
-                                    │
-                                    ▼
-                     [Claude: generate Session summary]
-                                    │
-                                    ▼
-                     [Qdrant: store embedding of session]
-                                    │
-                           [on user query]
-                                    │
-                                    ▼
-              [Tantivy keyword search + Qdrant semantic search]
-                                    │
-                                    ▼
-                     [Claude: synthesise answer from results]
-                                    │
-                                    ▼
-                          [React: render in chat panel]
-                    [Optional: Kokoro TTS speaks the response]
+[Rust: clipboard, window]  ──► [SQLite events table]
+[Chrome Extension]         ──► [FastAPI POST /capture] ──► [SQLite events table]
+                                        │
+                               [asyncio loop, every 30 min]
+                                        │
+                                        ▼
+                     [Gemini Flash: classify events (work/research/personal/system)]
+                                        │
+                                        ▼
+                     [Claude: generate Session summary (Tier 2)]
+                                        │
+                                        ▼
+                     [Voyage AI: embed summary → Qdrant local storage]
+                                        │
+                              [on user recall query]
+                                        │
+                       ┌────────────────┴────────────────┐
+                       ▼                                 ▼
+             FTS5 keyword search              Qdrant semantic search
+                       │                                 │
+                       └────────────────┬────────────────┘
+                                        ▼
+                          [Claude: synthesise answer]
+                                        │
+                            [React: stream to chat panel]
 ```
 
 ---
@@ -80,63 +69,134 @@ Five layers. Each has a clear owner.
 
 ```
 orbit/
-├── AGENTS.md                    ← you are here
-├── CLAUDE.md                    ← symlink to AGENTS.md
-├── app/                         ← Tauri v2 desktop app
-│   ├── src/                     ← React + TypeScript frontend
+├── AGENTS.md                          ← you are here (source of truth)
+├── CLAUDE.md                          ← symlink to AGENTS.md
+├── docs/
+│   ├── Orbit_Complete_Build_Plan.md
+│   ├── PHASE_0.md                     ← ✅ complete
+│   └── PHASE_1.md                     ← ✅ complete
+├── app/                               ← Tauri v2 desktop app
+│   ├── src/                           ← React + TypeScript frontend
 │   │   ├── components/
-│   │   │   ├── OrbWidget.tsx    ← floating companion orb
-│   │   │   ├── ChatPanel.tsx    ← text query + response UI
-│   │   │   ├── Timeline.tsx     ← scrollable activity timeline
-│   │   │   └── MemoryViewer.tsx ← view + delete stored memories
-│   │   ├── store/               ← Zustand global state
-│   │   │   └── orbitStore.ts
-│   │   ├── hooks/               ← custom React hooks
-│   │   ├── types/               ← shared TypeScript types
+│   │   │   ├── OrbWidget.tsx          ← floating companion orb (Phase 4)
+│   │   │   ├── ChatPanel.tsx          ← recall search + streaming response
+│   │   │   ├── Timeline.tsx           ← scrollable activity log
+│   │   │   └── MemoryViewer.tsx       ← view + delete stored memories (Phase 2)
+│   │   ├── store/
+│   │   │   └── orbitStore.ts          ← Zustand global state
+│   │   ├── hooks/                     ← all Tauri invoke() calls wrapped here
+│   │   ├── types/                     ← shared TypeScript types
 │   │   └── main.tsx
-│   └── src-tauri/               ← Rust backend
+│   └── src-tauri/
 │       ├── src/
-│       │   ├── main.rs          ← Tauri app entry point
+│       │   ├── main.rs                ← Tauri entry, system tray, spawns FastAPI, starts capture tasks
 │       │   ├── capture/
 │       │   │   ├── mod.rs
-│       │   │   ├── clipboard.rs ← clipboard monitoring (arboard)
-│       │   │   ├── window.rs    ← active window tracking
-│       │   │   └── screenshot.rs← periodic screenshots (xcap)
-│       │   ├── hotkey.rs        ← global hotkey listener (global-hotkey)
-│       │   ├── db.rs            ← SQLite connection + queries (sqlx)
-│       │   └── commands.rs      ← Tauri IPC commands exposed to React
+│       │   │   ├── clipboard.rs       ← polls clipboard every 500ms, redacts sensitive content
+│       │   │   └── window.rs          ← polls active window every 30s via osascript
+│       │   ├── hotkey.rs              ← global hotkey listener (global-hotkey crate)
+│       │   ├── db.rs                  ← SQLite pool (sqlx), never create new connections per call
+│       │   └── commands.rs            ← all #[tauri::command] functions, thin wrappers only
 │       ├── Cargo.toml
-│       ├── tauri.conf.json
-│       └── Info.plist           ← LSUIElement = true lives here
-├── backend/                     ← FastAPI AI processing server
-│   ├── main.py                  ← app entry, scheduler setup
+│       ├── tauri.conf.json            ← two windows: main panel + overlay
+│       └── Info.plist                 ← LSUIElement = true (no dock icon, ever)
+├── backend/                           ← FastAPI AI processing server
+│   ├── main.py                        ← app entry, lifespan, mounts routers, starts asyncio loop
+│   ├── database.py                    ← SQLAlchemy async SQLite engine + FTS5 setup
+│   ├── scheduler.py                   ← asyncio loop: session generation every 30 min
 │   ├── routes/
-│   │   ├── capture.py           ← POST /capture (from extension + Rust)
-│   │   ├── recall.py            ← POST /recall (user queries)
-│   │   └── session.py           ← GET /sessions, session management
+│   │   ├── capture.py                 ← POST /capture, GET /events
+│   │   └── recall.py                  ← POST /recall (SSE streaming)
 │   ├── services/
-│   │   ├── claude_service.py    ← Claude API via Cloudflare Worker
-│   │   ├── gemini_service.py    ← Gemini Flash classification
-│   │   ├── embedding_service.py ← sentence-transformers local embeddings
-│   │   └── qdrant_service.py    ← Qdrant vector store operations
+│   │   ├── claude_service.py          ← Claude via Cloudflare Worker, singleton httpx client
+│   │   ├── gemini_service.py          ← Gemini Flash classification, singleton genai.Client
+│   │   ├── voyage_service.py          ← Voyage AI embeddings via httpx, no ML deps
+│   │   └── qdrant_service.py          ← Qdrant local file mode, singleton client
 │   ├── models/
-│   │   ├── event.py             ← Pydantic: raw event schema
-│   │   ├── session.py           ← Pydantic: session schema
-│   │   └── memory_object.py     ← Pydantic: long-term memory schema
-│   ├── database.py              ← SQLite connection (SQLAlchemy async)
-│   ├── scheduler.py             ← APScheduler: session gen every 30 min
-│   └── requirements.txt
-├── extension/                   ← Chrome Extension
-│   ├── manifest.json            ← Manifest V3
-│   ├── background.ts            ← service worker: tab events → POST /capture
-│   └── content.ts               ← page content: selected text, reading time
-├── worker/                      ← Cloudflare Worker API proxy
+│   │   ├── event.py                   ← Pydantic: CaptureEvent
+│   │   └── session.py                 ← Pydantic: Session
+│   ├── pyproject.toml                 ← uv-managed dependencies
+│   ├── uv.lock                        ← committed to git, never manually edited
+│   └── .env                           ← secrets (gitignored)
+├── extension/                         ← Chrome Extension (Manifest V3)
+│   ├── manifest.json
 │   ├── src/
-│   │   └── index.ts             ← 3 proxy routes: /chat, /tts, /stt-token
+│   │   ├── background.ts              ← service worker: tab events → POST /capture
+│   │   └── content.ts                 ← stub (selected text capture in Phase 2)
+│   └── vite.config.ts
+├── worker/                            ← Cloudflare Worker API proxy
+│   ├── src/index.ts                   ← /chat (Claude), /tts (stub), /stt-token (stub)
 │   └── wrangler.toml
-└── landing/                     ← Next.js marketing site
-    └── ...
+└── landing/                           ← Next.js marketing site (Phase 2)
 ```
+
+---
+
+## Tech Stack
+
+### Desktop App
+| Layer | Tool |
+|---|---|
+| Framework | Tauri v2 |
+| Frontend | React + TypeScript |
+| Styling | Tailwind + ShadCN |
+| Animation | Framer Motion (Phase 4) |
+| State | Zustand |
+| Auto-updates | tauri-plugin-updater → GitHub Releases |
+
+### Rust Crates (src-tauri/Cargo.toml)
+| Crate | Purpose |
+|---|---|
+| `arboard` | Clipboard monitoring |
+| `sqlx` (sqlite + runtime-tokio) | SQLite connection pool |
+| `global-hotkey` | System-wide push-to-talk hotkey |
+| `xcap` | Screenshots (Phase 3) |
+| `reqwest` | HTTP client singleton — **never create per request** |
+| `uuid` | Event ID generation |
+| `chrono` | Timestamps |
+| `regex` | Sensitive pattern detection in clipboard redaction |
+| `serde` + `serde_json` | Serialisation |
+| `tokio` (full) | Async runtime |
+
+### Python Dependencies (managed with uv — never pip)
+| Package | Purpose |
+|---|---|
+| `fastapi` | API framework |
+| `uvicorn[standard]` | ASGI server |
+| `sqlalchemy` + `aiosqlite` | Async SQLite ORM |
+| `pydantic` | Request/response schemas |
+| `python-dotenv` | Env var loading |
+| `httpx` | HTTP client singleton for Claude + Voyage AI |
+| `google-genai` | Gemini Flash (NOT google-generativeai — that is deprecated) |
+| `qdrant-client` | Vector store (local file mode, no Docker) |
+
+**Never install:** `sentence-transformers`, `torch`, `onnxruntime`, `apscheduler`, `google-generativeai` — all either deprecated or Intel Mac incompatible.
+
+### AI Models
+| Task | Model | Package |
+|---|---|---|
+| Recall, conversation, session summaries | Claude Sonnet 4 via Cloudflare Worker | `httpx` |
+| Event classification (work/research/personal/system) | `gemini-3.1-flash-lite` | `google-genai` |
+| Embeddings | Voyage AI `voyage-3-lite` (512 dims) via httpx | `httpx` |
+| Voice STT (Phase 4) | Whisper.cpp local → Apple Speech fallback | — |
+| Voice TTS (Phase 4) | Kokoro TTS local (free) → ElevenLabs Pro | — |
+
+### Storage
+| Layer | Tool | Notes |
+|---|---|---|
+| Structured events | SQLite (`~/.orbit/orbit.db`) | All raw events, sessions, memory objects |
+| Keyword search | SQLite FTS5 (built-in) | BM25 ranking, porter tokenizer, zero extra deps |
+| Semantic search | Qdrant local file mode (`~/.orbit/qdrant_storage/`) | No Docker, no server, `QdrantClient(path=...)` |
+
+### Infrastructure
+| Tool | Purpose |
+|---|---|
+| Cloudflare Worker | API key proxy — Claude, ElevenLabs, STT. Keys **never** in app binary |
+| Supabase | Cloud sync (opt-in, Phase 5+) |
+| PostHog | Privacy-safe analytics |
+| Sentry | Crash reporting |
+| Lemon Squeezy | Payments |
+| GitHub Releases | Distribution + update server |
 
 ---
 
@@ -144,197 +204,146 @@ orbit/
 
 | File | Purpose |
 |---|---|
-| `app/src-tauri/src/main.rs` | Tauri app entry. Sets up system tray, window config, starts FastAPI backend subprocess, registers Tauri commands. No dock icon — sets `activation_policy` to `Accessory`. |
-| `app/src-tauri/src/capture/clipboard.rs` | Monitors clipboard using `arboard`. Fires on every clipboard change. Posts event to SQLite and notifies FastAPI. |
-| `app/src-tauri/src/capture/window.rs` | Polls active window title + app name every 30 seconds using macOS Accessibility API. Posts to SQLite. |
-| `app/src-tauri/src/capture/screenshot.rs` | Takes a compressed screenshot every 3 minutes using `xcap`. Saves to `~/.orbit/screenshots/`. Posts metadata event to SQLite. |
-| `app/src-tauri/src/hotkey.rs` | Registers global push-to-talk hotkey using `global-hotkey` crate. Modifier-key shortcuts require this over AppKit monitors. On press, signals React to begin voice input. |
-| `app/src-tauri/src/db.rs` | SQLite connection pool via `sqlx`. All DB reads/writes go through here. Never create new connections per request — reuse the pool. |
-| `app/src-tauri/src/commands.rs` | All `#[tauri::command]` functions exposed to React via `invoke()`. Keep commands thin — they delegate to the relevant Rust module. |
-| `app/src-tauri/Info.plist` | `LSUIElement = true` lives here. Also app permissions declarations (Microphone, Accessibility). Do not remove `LSUIElement`. |
-| `app/src-tauri/tauri.conf.json` | Window configurations. Overlay window must be: `transparent: true`, `decorations: false`, `alwaysOnTop: true`, `skipTaskbar: true`, `focus: false`. |
-| `app/src/components/OrbWidget.tsx` | The floating companion orb. Renders in the always-on-top overlay window. Has idle / listening / thinking / speaking animation states via Framer Motion. Parses `[POINT:x,y:label]` tags from Claude responses and moves the orb to that screen position via a bezier arc animation. |
-| `app/src/components/ChatPanel.tsx` | Chat interface. Sends queries to `POST /recall` on FastAPI. Renders streamed Claude response. Handles both text input and transcribed voice input. |
-| `app/src/components/Timeline.tsx` | Scrollable chronological activity log. Reads from SQLite via Tauri command. Groups events by session. |
-| `app/src/components/MemoryViewer.tsx` | Shows all stored data. Lets user delete individual events, sessions, or all memory. Privacy-critical component. |
-| `app/src/store/orbitStore.ts` | Zustand global state: capture status, active session, orb state, voice state, chat history. |
-| `backend/main.py` | FastAPI app entry. Mounts all routers. Starts APScheduler for session generation. Initialises SQLite and Qdrant connections on startup. |
-| `backend/routes/capture.py` | `POST /capture` — receives events from Chrome Extension and Rust layer. Validates with Pydantic, writes to SQLite, queues for embedding. |
-| `backend/routes/recall.py` | `POST /recall` — handles user queries. Runs parallel Tantivy keyword search + Qdrant semantic search, merges results, sends to Claude via Cloudflare Worker, streams response back. |
-| `backend/services/claude_service.py` | All Claude API calls go through here. Uses `httpx.AsyncClient` as a singleton — never instantiate per request. Calls Cloudflare Worker `/chat` route. Handles SSE streaming. |
-| `backend/services/gemini_service.py` | Gemini Flash calls for cheap classification tasks: event type tagging, project detection, goal inference. Never use Claude for tasks Gemini Flash can do — cost matters. |
-| `backend/services/embedding_service.py` | Generates embeddings using `sentence-transformers` locally. Model: `all-MiniLM-L6-v2` for MVP. No external API calls. |
-| `backend/services/qdrant_service.py` | Qdrant client singleton. Stores and queries session/memory embeddings. Never instantiate per request. |
-| `backend/scheduler.py` | APScheduler job runs every 30 minutes. Fetches unprocessed raw events from SQLite, sends to Gemini Flash for tagging, then Claude for session summary generation, stores result as Tier 2 session. |
-| `backend/database.py` | SQLAlchemy async engine + session factory for SQLite. Single connection pool shared across the app. |
-| `extension/background.ts` | Service worker. Listens for tab URL changes, page title updates. POSTs to `http://localhost:PORT/capture`. Handles cases where Orbit backend is not running. |
-| `worker/src/index.ts` | Cloudflare Worker. Three proxy routes. API keys exist only as Cloudflare Worker secrets — never in app code, never in git. |
+| `app/src-tauri/src/main.rs` | Entry point. Sets `LSUIElement`, system tray, spawns FastAPI subprocess, creates SQLite pool, starts clipboard + window capture tasks as tokio background tasks. |
+| `app/src-tauri/src/capture/clipboard.rs` | Polls clipboard every 500ms with `arboard`. Runs content through sensitive pattern detection before writing. Stores `[REDACTED:<type>]` for matched patterns. Never stores passwords, API keys, JWTs, private keys, credit cards raw. |
+| `app/src-tauri/src/capture/window.rs` | Polls active window title + app name via osascript every 30s. Only writes to DB when title changes. Fails silently on permission errors. |
+| `app/src-tauri/src/db.rs` | SQLite pool via sqlx. Single pool shared across all Rust code. **Never open new connections per request.** |
+| `app/src-tauri/src/commands.rs` | All `#[tauri::command]` functions. These are thin wrappers — logic lives in other modules. |
+| `app/src-tauri/Info.plist` | `LSUIElement = true`. Do not remove. Orbit must never appear in the dock. |
+| `app/src-tauri/tauri.conf.json` | Two windows: `main` (panel) and `overlay` (Phase 4 orb). Overlay: transparent, alwaysOnTop, focus:false, set_ignore_cursor_events(true). |
+| `backend/main.py` | FastAPI app. Uses `@asynccontextmanager` lifespan (not deprecated startup/shutdown). Starts the session generation asyncio loop via `asyncio.create_task()`. |
+| `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + sync triggers on startup. |
+| `backend/scheduler.py` | `start_session_generation_loop()` — `while True: await asyncio.sleep(1800)` loop. `generate_sessions_from_recent_events()` — fetches unprocessed events, classifies with Gemini, summarises with Claude, stores session, embeds with Voyage AI → Qdrant. |
+| `backend/routes/capture.py` | `POST /capture` — receives events from extension + Rust. `GET /events` — returns latest N events for timeline UI. |
+| `backend/routes/recall.py` | `POST /recall` — parallel FTS5 + Qdrant search, merged results sent to Claude, streamed back as SSE. raw_content is safe to forward — secrets were redacted by Rust before DB write. |
+| `backend/services/claude_service.py` | Claude API via Cloudflare Worker. Singleton `httpx.AsyncClient`. Handles SSE streaming. |
+| `backend/services/gemini_service.py` | Gemini classification. Uses `google-genai` (`from google import genai`). Singleton `genai.Client`. Sends id, type, app_name, timestamp, raw_content (already sanitised by Rust), and url per event. |
+| `backend/services/voyage_service.py` | Voyage AI embeddings. POST to `api.voyageai.com/v1/embeddings`, model `voyage-3-lite`. Uses singleton httpx client. Returns 512-dim float list. |
+| `backend/services/qdrant_service.py` | Qdrant local file mode. Singleton `QdrantClient(path=~/.orbit/qdrant_storage)`. Collection `orbit_sessions`, 512 dims, cosine distance. `add_session_embedding()` + `search_sessions_semantic()`. |
+| `extension/src/background.ts` | MV3 service worker. Uses `chrome.storage.session` for state (never global vars — service workers terminate when idle). Fails silently if Orbit backend not running. |
+| `worker/src/index.ts` | Cloudflare Worker proxy. `/chat` → Claude, `/tts` → ElevenLabs (stub), `/stt-token` (stub). All API keys in Cloudflare secrets only. |
 
 ---
 
-## How Core Systems Work
-
-### Activity Capture Pipeline
-
-Three capture sources run in parallel:
-
-**1. Rust layer (OS-level):**
-- Clipboard: `arboard` crate fires on every clipboard change
-- Active window: polling loop every 30s via macOS Accessibility API
-- Screenshots: `xcap` crate every 3 minutes, JPEG compressed, saved locally
-- All events posted to SQLite directly from Rust, then a notification sent to FastAPI via HTTP
-
-**2. Chrome Extension:**
-- Fires on tab URL change, captures: URL, page title, selected text, reading time
-- POSTs to FastAPI `POST /capture` on localhost
-- Fails silently if Orbit is not running (no user-facing errors)
-
-**3. FastAPI `/capture` endpoint:**
-- Receives events from extension and Rust
-- Validates schema, writes to SQLite `events` table
-- Adds to an in-memory queue for embedding generation
-
-### Memory Generation Pipeline (runs every 30 min via APScheduler)
-
-```
-1. Fetch all raw events from last 30 min (SQLite)
-2. Send to Gemini Flash → classify each event (work/research/personal/system)
-                        → detect project name
-                        → infer likely goal
-3. Send classified batch to Claude → generate Session summary (Tier 2)
-4. Store session in SQLite `sessions` table
-5. Generate embedding of session summary (sentence-transformers)
-6. Store embedding in Qdrant with metadata
-7. Periodically (every 24h): extract Memory Objects (Tier 3) from sessions
-```
-
-### Recall Pipeline (on user query)
-
-```
-User types/speaks: "what was I working on before lunch yesterday?"
-                              │
-                    [FastAPI POST /recall]
-                              │
-              ┌───────────────┴────────────────┐
-              ▼                                ▼
-    Tantivy keyword search          Qdrant semantic search
-    (exact terms, fast)             (meaning-based, slower)
-              │                                │
-              └───────────────┬────────────────┘
-                              ▼
-                   Merge + deduplicate results
-                              │
-                              ▼
-              Claude (via Cloudflare Worker /chat):
-              "Here are relevant memory chunks.
-               Answer the user's question naturally."
-                              │
-                              ▼
-                 Stream response back to React ChatPanel
-                              │
-                    [Optional: Kokoro TTS speaks it]
-                    [Optional: Orb moves to [POINT:x,y]]
-```
-
-### The `[POINT:x,y:label]` System (Companion Layer — Phase 4)
-
-When Orbit's companion references something visible on screen, Claude is instructed to embed a coordinate tag. `OrbWidget.tsx` parses these and animates the orb to that position.
-
-**System prompt addition (Phase 4 only):**
-```
-When referencing something currently visible on the user's screen,
-embed a pointer tag in your response:
-  [POINT:x,y:label]
-Where x,y are screen coordinates with (0,0) at top-left.
-Example: [POINT:245,380:Save button]
-Only embed POINT tags when you are certain of the element's location.
-```
-
-**OrbWidget parsing:**
-```typescript
-// After receiving Claude response text:
-const pointTagRegex = /\[POINT:(\d+),(\d+):([^\]]+)\]/g;
-// Extract x, y, label — animate orb along bezier arc to (x, y)
-// Strip tags from displayed response text
-```
-
----
-
-## Three-Tier Memory Architecture
-
-**Do not store raw events forever.** Process them into three tiers. Each tier is more compressed and more valuable.
+## Memory Architecture (Three Tiers)
 
 ### Tier 1 — Raw Events (SQLite `events` table)
-Everything as captured. Retained for 90 days then archived.
+Everything captured, as-is. Retained 90 days then archived.
 ```sql
 events(
-  id          TEXT PRIMARY KEY,
-  timestamp   INTEGER NOT NULL,
-  type        TEXT NOT NULL,    -- 'clipboard' | 'window' | 'url' | 'file' | 'screenshot'
-  raw_content TEXT,
-  app_name    TEXT,
-  url         TEXT,
-  source      TEXT NOT NULL     -- 'rust' | 'extension'
+  id TEXT PRIMARY KEY,
+  timestamp INTEGER NOT NULL,        -- unix milliseconds
+  type TEXT NOT NULL,                -- 'clipboard' | 'window' | 'url' | 'screenshot'
+  raw_content TEXT,                  -- [REDACTED:<type>] for sensitive clipboard content
+  app_name TEXT,
+  url TEXT,
+  source TEXT NOT NULL,              -- 'rust' | 'extension'
+  session_id TEXT,                   -- populated after session generation
+  category TEXT                      -- populated by Gemini: work/research/personal/system
 )
 ```
 
 ### Tier 2 — Sessions (SQLite `sessions` table + Qdrant)
-Generated every 30 min from raw events by the scheduler.
+Auto-generated every 30 min. Claude-authored summaries.
 ```sql
 sessions(
-  id           TEXT PRIMARY KEY,
-  start_time   INTEGER NOT NULL,
-  end_time     INTEGER NOT NULL,
-  project_name TEXT,            -- detected by Gemini Flash
-  goal         TEXT,            -- inferred by Gemini Flash
-  ai_summary   TEXT NOT NULL,   -- generated by Claude
-  embedding_id TEXT             -- Qdrant point ID
+  id TEXT PRIMARY KEY,
+  start_time INTEGER NOT NULL,
+  end_time INTEGER NOT NULL,
+  project_name TEXT,
+  goal TEXT,
+  ai_summary TEXT NOT NULL,          -- JSON: {project_name, goal, summary, key_resources, last_action}
+  embedding_id TEXT                  -- Qdrant point ID
 )
 ```
 
-### Tier 3 — Memory Objects (SQLite `memory_objects` table)
-Long-term condensed knowledge. Generated daily from sessions by Claude.
-```sql
-memory_objects(
-  id          TEXT PRIMARY KEY,
-  session_id  TEXT REFERENCES sessions(id),
-  project     TEXT,
-  topic       TEXT,
-  summary     TEXT NOT NULL,    -- what was learned / what happened
-  status      TEXT,             -- 'resolved' | 'unresolved' | 'ongoing'
-  key_files   TEXT,             -- JSON array of file paths
-  embedding_id TEXT
-)
+### Tier 3 — Memory Objects (Phase 3)
+Long-term condensed knowledge extracted from sessions.
+
+---
+
+## Security & Privacy Rules
+
+These rules are non-negotiable. Every feature must pass through them.
+
+### Clipboard Redaction (Rust — before any DB write)
+`capture/clipboard.rs` must detect and redact these patterns before writing:
+
+| Pattern | Stored as |
+|---|---|
+| PEM private keys (`BEGIN PRIVATE KEY`, `BEGIN RSA PRIVATE KEY`, etc.) | `[REDACTED:private_key]` |
+| API keys: `sk-`, `AIza`, `AKIA`, `xoxb-`, `ghp_`, `pk_live_`, `sk_live_`, `pa-` | `[REDACTED:api_key]` |
+| JWTs: three base64 segments separated by dots, each >10 chars | `[REDACTED:jwt_token]` |
+| Credit cards: 13–19 digit sequences (with optional spaces/dashes) | `[REDACTED:credit_card]` |
+| SSNs: `\d{3}-\d{2}-\d{4}` pattern | `[REDACTED:ssn]` |
+| Crypto addresses: Bitcoin (`1[a-zA-Z0-9]{25,34}` or `bc1...`), Ethereum (`0x[a-fA-F0-9]{40}`) | `[REDACTED:crypto_address]` |
+
+The event is still written — Orbit knows *you copied something from which app* — just not the sensitive value.
+
+### AI Context Sanitisation (Python — in scheduler.py and recall.py)
+**The Rust capture layer is the security boundary.** Secrets are redacted before any DB write, so by the time `raw_content` reaches Python it is either safe plaintext or a `[REDACTED:<type>]` placeholder. AI services receive this already-sanitised content.
+
+- Gemini receives: `id`, `type`, `app_name`, `timestamp`, `raw_content` (already sanitised), and `url` for url events — enough to classify accurately.
+- Claude receives: FTS5 event matches (including clipboard `raw_content`, already sanitised) + session summaries (Tier 2). This is what makes recall meaningful — Claude can tell the user what they copied or worked with.
+- **Never pass unsanitised clipboard text to any external API.** The guarantee is upheld by the Rust redaction layer at capture time, not by filtering at the Python layer.
+
+### App Exclude List
+Password managers (1Password, Bitwarden, etc.) and banking apps must be in the default exclude list. Window events from excluded apps are dropped at capture time in `window.rs`.
+
+### Other Rules
+- All data local by default. Cloud sync (Supabase) is opt-in and encrypted — Phase 5 only.
+- API keys exist only in Cloudflare Worker secrets and `backend/.env` (gitignored). Never in source code.
+- One-click full memory wipe in UI (Phase 2).
+
+---
+
+## Recall System Prompt
+
+The system prompt used in `backend/routes/recall.py`:
+
+```python
+RECALL_SYSTEM_PROMPT = """\
+You are Orbit, an AI memory companion.
+You have access to summaries of the user's recent computer activity.
+Answer their question directly and specifically, like a colleague who \
+was watching their screen.
+
+Format your response as:
+📌 [Time period] — [App or context]
+
+[What they were doing, specifically]
+
+You had open:
+→ [resource 1]
+→ [resource 2]
+
+Last action: [most recent relevant thing]
+
+Be specific. Use exact file names, URLs, and project names from the context.
+If the context doesn't answer the question, say so honestly.\
+"""
 ```
+
+**No profession-specific language** ("for a developer", "for a designer", etc.). Orbit is universal. Personalisation by profession is an onboarding feature in a later phase.
 
 ---
 
 ## Cloudflare Worker
 
-API keys never exist in the app binary or codebase. All external AI API calls go through the Cloudflare Worker.
+All external AI API calls go through the Cloudflare Worker. Keys never in app binary or git.
 
-**Routes:**
-
-| Route | Upstream | Purpose |
+| Route | Upstream | Status |
 |---|---|---|
-| `POST /chat` | `api.anthropic.com/v1/messages` | Claude Sonnet 4 — streaming (SSE) + non-streaming |
-| `POST /tts` | `api.elevenlabs.io/v1/text-to-speech/{voiceId}` | ElevenLabs TTS (Phase 4 only) |
-| `POST /stt-token` | Deepgram / AssemblyAI | Short-lived STT token (Phase 4 only) |
+| `POST /chat` | `api.anthropic.com/v1/messages` | ✅ Live |
+| `POST /tts` | ElevenLabs | 🔲 Stub (Phase 4) |
+| `POST /stt-token` | Deepgram/AssemblyAI | 🔲 Stub (Phase 4) |
 
-**Secrets (set via Wrangler, never in code):**
-- `ANTHROPIC_API_KEY`
-- `ELEVENLABS_API_KEY` (Phase 4)
-- `STT_API_KEY` (Phase 4)
+**Secrets (Wrangler only):** `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY` (Phase 4)
 
-**Setup:**
 ```bash
 cd worker
-npm install
 npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler deploy
-
-# Local dev — create worker/.dev.vars with keys
-npx wrangler dev
 ```
 
 ---
@@ -346,323 +355,184 @@ npx wrangler dev
 - Xcode Command Line Tools: `xcode-select --install`
 - Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 - Node.js 20+ and pnpm: `npm i -g pnpm`
-- Python 3.11+: via pyenv recommended
-- Docker (for Qdrant): `brew install --cask docker`
+- Python 3.11+ (via pyenv)
+- uv: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- Wrangler: `pnpm add -g wrangler`
 
 ### Tauri Desktop App
 ```bash
 cd app
 pnpm install
-pnpm tauri dev        # development (hot reload React + Rust)
-pnpm tauri build      # production build → .dmg in src-tauri/target/release/bundle/
+pnpm tauri dev        # development
+pnpm tauri build      # production .dmg
 ```
 
 ### FastAPI Backend
 ```bash
-# Install uv (once, globally)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
 cd backend
-uv sync                          # installs all deps from uv.lock
-
-# Start Qdrant (required before backend)
-docker run -p 6333:6333 qdrant/qdrant
-
-# Run server (no venv activation needed)
+uv sync               # install from uv.lock — never pip install
 uv run uvicorn main:app --reload --port 8000
+
+# Adding packages:
+uv add <package>      # never pip install
+uv remove <package>
 ```
-
-**Adding new packages:**
-```bash
-uv add fastapi          # adds to pyproject.toml + updates uv.lock
-uv remove some-package  # removes cleanly
-```
-
-**Never use `pip install` directly.** Always use `uv add`. The `uv.lock` file must stay in git — it ensures every developer and the production build use identical package versions.
-
-The Tauri app auto-starts the FastAPI backend as a sidecar subprocess in production. In development, start it manually.
 
 ### Chrome Extension
 ```bash
 cd extension
-pnpm install
-pnpm build            # outputs to extension/dist/
-# Load extension/dist/ as unpacked extension in chrome://extensions
+pnpm install && pnpm build
+# Load extension/dist/ as unpacked in chrome://extensions
 ```
 
 ### Cloudflare Worker
 ```bash
 cd worker
-npm install
-npx wrangler dev      # local dev
+npx wrangler dev      # local (needs worker/.dev.vars with keys)
 npx wrangler deploy   # production
-```
-
-### Landing Page
-```bash
-cd landing
-pnpm install
-pnpm dev
 ```
 
 ---
 
-## Tauri-Specific Patterns
+## Tauri Patterns
 
 ### IPC: React → Rust
 ```typescript
-// React side (TypeScript)
+// React (TypeScript) — always via a wrapper hook, never invoke() directly in components
 import { invoke } from '@tauri-apps/api/core';
-const result = await invoke('get_recent_events', { limitCount: 50 });
+const events = await invoke<CaptureEvent[]>('get_recent_events', { limitCount: 50 });
 ```
 ```rust
-// Rust side
+// Rust — thin wrapper, logic in modules
 #[tauri::command]
-async fn get_recent_events(limit_count: u32, db: State<'_, DbPool>) -> Result<Vec<Event>, String> {
-    // ...
+async fn get_recent_events(limit_count: u32, db_pool: State<'_, DatabasePool>) -> Result<Vec<CaptureEvent>, String> {
+    db_pool.fetch_recent_events(limit_count).await.map_err(|e| e.to_string())
 }
 ```
 
-### IPC: Rust → React (events)
+### IPC: Rust → React
 ```rust
-// Rust side — emit to all windows
-app_handle.emit("capture-event", &event_payload).unwrap();
+app_handle.emit("capture-event", &payload).unwrap();
 ```
 ```typescript
-// React side
-import { listen } from '@tauri-apps/api/event';
 await listen('capture-event', (event) => { /* update Zustand store */ });
 ```
 
-### Window Configuration (tauri.conf.json)
-```json
-{
-  "windows": [
-    {
-      "label": "main",
-      "title": "Orbit",
-      "decorations": false,
-      "transparent": true,
-      "skipTaskbar": true,
-      "alwaysOnTop": false,
-      "width": 380,
-      "height": 600,
-      "visible": false
-    },
-    {
-      "label": "overlay",
-      "decorations": false,
-      "transparent": true,
-      "alwaysOnTop": true,
-      "skipTaskbar": true,
-      "focus": false,
-      "fullscreen": true,
-      "visible": false
-    }
-  ]
-}
-```
-
-### Overlay Window (Rust setup after creation)
+### Overlay Window (Phase 4)
 ```rust
-// In main.rs — after app build, configure overlay window
-let overlay = app.get_webview_window("overlay").unwrap();
-overlay.set_ignore_cursor_events(true).unwrap(); // fully click-through — never blocks user
-overlay.set_always_on_top(true).unwrap();
-// overlay window must never steal focus or interfere with the user's active app
-```
-
-### Menu Bar (no dock icon)
-```xml
-<!-- src-tauri/Info.plist -->
-<key>LSUIElement</key>
-<true/>
-<!-- This removes dock icon, Cmd+Tab entry, and main menu bar. Do not remove this. -->
+let overlay_window = app.get_webview_window("overlay").unwrap();
+overlay_window.set_ignore_cursor_events(true).unwrap(); // never blocks user interaction
+overlay_window.set_always_on_top(true).unwrap();
+// Never steal focus — focus: false in tauri.conf.json
 ```
 
 ---
 
 ## macOS Permissions
 
-Orbit requires these permissions. Request them in order during onboarding:
-
-| Permission | Why | How to check in Rust |
+| Permission | Why | When |
 |---|---|---|
-| Accessibility | Active window title tracking | `AXIsProcessTrusted()` via `accessibility` crate |
-| Screen Recording | Periodic screenshots | `CGPreflightScreenCaptureAccess()` via `core-graphics` |
-| Microphone | Voice input (Phase 4 only) | `AVCaptureDevice.requestAccess` via `objc` crate |
+| Accessibility | Active window tracking via Accessibility API | Phase 0 — required at launch |
+| Screen Recording | Periodic screenshots | Phase 3 |
+| Microphone | Voice input | Phase 4 |
 
-Always request Accessibility first — it is the hardest for users to grant and the most important for MVP. Open System Settings → Privacy & Security → Accessibility directly when prompting the user.
+Grant Accessibility first (System Settings → Privacy & Security → Accessibility). Open the dialog directly — don't make users find it themselves.
 
 ---
 
 ## Code Style & Conventions
 
-### Universal Rules (all languages)
+### Universal (all languages)
+- **Clarity over concision.** Names must be self-explanatory to someone with zero codebase context.
+- Long descriptive names always. No single-character variables. No unexplained abbreviations.
+- Comments explain **why**, not what. If the name explains what, the comment explains why.
+- **Never add features, refactors, or improvements beyond the exact scope asked.**
+- Never add docstrings or comments to code you didn't change.
 
-- **Clarity over concision.** A developer with zero context on this codebase should immediately understand what a variable or method does from its name alone.
-- Use long, descriptive names. Never single-character variables. Never abbreviations that aren't universally known.
-- Write more lines if it improves readability. Do not compress logic to seem clever.
-- Comments explain **why**, not what. If the variable name explains what, the comment explains why it's needed or why it works that way.
-- Never add features, refactors, or "improvements" beyond the exact scope of what was asked.
-- Never add docstrings, comments, or type annotations to code you did not change.
+### Rust
+- `async/await` throughout — no blocking calls on the async executor.
+- **Never create a new `reqwest::Client` per request** — reuse the singleton in `State<>`.
+- **Never open new SQLite connections** — use the pool from `db.rs`.
+- All Tauri commands in `commands.rs` are thin wrappers — logic in relevant modules.
+- Return `Result<T, String>` from commands. `.map_err(|e| e.to_string())`.
 
-### Rust (src-tauri/)
+### TypeScript / React
+- Functional components + hooks only.
+- No `any` types — define everything in `types/`.
+- All Tauri `invoke()` calls in `hooks/` — never directly in components.
+- Global state in Zustand (`store/orbitStore.ts`) only. No prop drilling beyond 2 levels.
+- Tailwind utility classes only — no inline styles.
 
-- Use `async/await` throughout. No blocking calls on the async executor.
-- **Never create a new `reqwest::Client` per request.** Instantiate once, store in Tauri `State`, reuse everywhere. Creating clients per request corrupts the OS TCP connection pool and causes silent failures after several calls.
-- Use `sqlx` for all SQLite operations. Use the connection pool from `db.rs`, never open raw connections.
-- All Tauri commands in `commands.rs` must be thin wrappers — actual logic lives in the relevant module (`capture/`, `db.rs`, etc.).
-- Return `Result<T, String>` from Tauri commands. Convert errors to strings with `.map_err(|e| e.to_string())`.
-- Name Tauri commands in `snake_case`. Name React `invoke()` calls with the same string — no renaming.
+### Python / FastAPI
+- Type hints on every function signature.
+- All Pydantic models in `models/`.
+- All routes `async def` — no sync handlers.
+- **Never instantiate `httpx.AsyncClient` per request** — singleton in services.
+- **Never instantiate `QdrantClient` per request** — singleton in `qdrant_service.py`.
+- **Never instantiate `genai.Client` per request** — singleton in `gemini_service.py`.
+- Routes call services. Routes contain zero business logic.
+- `uv add` for packages — never `pip install`.
 
-```rust
-// Good
-#[tauri::command]
-async fn get_clipboard_events_since_timestamp(
-    since_timestamp: i64,
-    database_pool: State<'_, DatabasePool>,
-) -> Result<Vec<ClipboardEvent>, String> {
-    database_pool.fetch_clipboard_events_since(since_timestamp)
-        .await
-        .map_err(|error| error.to_string())
-}
-
-// Bad
-#[tauri::command]
-async fn get_cb(ts: i64, db: State<'_, DB>) -> Result<Vec<Event>, String> { ... }
-```
-
-### TypeScript / React (app/src/)
-
-- Functional components with hooks only. No class components.
-- TypeScript strict mode is enabled. No `any` types. Define all types in `types/`.
-- All global state lives in Zustand (`store/orbitStore.ts`). No prop drilling beyond 2 levels.
-- Use Tailwind utility classes. No inline styles. No CSS modules.
-- Use ShadCN components for UI primitives (buttons, inputs, dialogs). Do not rebuild what ShadCN provides.
-- All Tauri `invoke()` calls go through a wrapper in `hooks/` — never call `invoke()` directly from a component.
-- Component files named `PascalCase.tsx`. Hooks named `useCamelCase.ts`.
-- Keep components focused. If a component exceeds ~150 lines, split it.
-
-```typescript
-// Good — wrapper hook
-// hooks/useRecentEvents.ts
-export function useRecentEvents(limitCount: number) {
-  const [recentEvents, setRecentEvents] = useState<CaptureEvent[]>([]);
-  useEffect(() => {
-    invoke<CaptureEvent[]>('get_recent_events', { limitCount })
-      .then(setRecentEvents);
-  }, [limitCount]);
-  return recentEvents;
-}
-
-// Bad — invoke directly in component
-const events = await invoke('get_recent_events', { limit: 50 });
-```
-
-### Python / FastAPI (backend/)
-
-- Type hints on every function signature. No untyped parameters.
-- All request/response schemas defined as Pydantic models in `models/`.
-- All routes are `async def`. No synchronous route handlers.
-- **Never instantiate `httpx.AsyncClient` per request.** Create once in `services/` as a module-level singleton, reuse across all calls.
-- **Never instantiate `QdrantClient` per request.** Singleton in `qdrant_service.py`.
-- Service functions are pure async functions that return typed results. Routes call services. Routes do not contain business logic.
-- Use `python-dotenv` for environment variables. No hardcoded values anywhere.
-
-```python
-# Good — singleton client
-# services/claude_service.py
-_http_client: httpx.AsyncClient | None = None
-
-def get_http_client() -> httpx.AsyncClient:
-    global _http_client
-    if _http_client is None:
-        _http_client = httpx.AsyncClient(timeout=30.0)
-    return _http_client
-
-async def send_recall_query_to_claude(
-    user_query: str,
-    relevant_memory_chunks: list[str],
-) -> str:
-    client = get_http_client()
-    # ...
-
-# Bad
-async def send_query(q, chunks):
-    async with httpx.AsyncClient() as client:  # new client every request!
-        ...
-```
-
-### Chrome Extension (extension/)
-
-- TypeScript only. No plain JavaScript.
-- The extension is a passive pipe — it captures and forwards. No processing, no AI calls, no local storage beyond what Chrome requires for the service worker.
-- Fail silently if Orbit's local backend is not running. Never show errors to the user about Orbit being unavailable.
-- Use `chrome.tabs.onUpdated` and `chrome.tabs.onActivated` for tab tracking.
-
----
-
-## Environment Variables
-
-### backend/.env
-```
-WORKER_URL=https://your-worker.workers.dev
-GEMINI_API_KEY=your_gemini_key
-ORBIT_DB_PATH=~/.orbit/orbit.db
-QDRANT_URL=http://localhost:6333
-PORT=8000
-```
-
-### worker/.dev.vars (local dev only — never commit)
-```
-ANTHROPIC_API_KEY=your_key
-ELEVENLABS_API_KEY=your_key
-```
-
-### app/src-tauri/.env (if needed)
-```
-BACKEND_PORT=8000
-```
+### Chrome Extension
+- TypeScript only.
+- **Never use global variables for state** — service workers terminate when idle. Use `chrome.storage.session`.
+- Fail silently when Orbit backend is not running — no user-visible errors.
 
 ---
 
 ## DO NOT
 
-- Do not add features, refactors, or "nice to have" improvements beyond the exact scope asked.
-- Do not create new `httpx.AsyncClient`, `QdrantClient`, or `reqwest::Client` instances per request — always reuse singletons.
-- Do not add `console.log`, `print()`, or `println!()` debug statements — use the logging setup already in place.
-- Do not put API keys in source code, `.env` files committed to git, or app binaries. All external API keys live in Cloudflare Worker secrets only.
-- Do not remove `LSUIElement = true` from Info.plist. Orbit must never appear in the dock.
-- Do not set `focus: true` on the overlay window. It must never steal the user's keyboard focus.
-- Do not call FastAPI from Rust (except to notify of new captures). Rust writes to SQLite directly. FastAPI reads from SQLite. They share the DB file, not HTTP calls between them.
-- Do not add voice features (Whisper, TTS) before Phase 4. The recall experience must work perfectly via text first.
-- Do not use `any` in TypeScript.
-- Do not write synchronous FastAPI route handlers.
+- Add features, refactors, or improvements beyond exact scope.
+- Create new `httpx.AsyncClient`, `QdrantClient`, `genai.Client`, or `reqwest::Client` per request — singletons always.
+- Use `pip install` — always `uv add`.
+- Install `sentence-transformers`, `torch`, `onnxruntime`, `apscheduler`, or `google-generativeai`.
+- Use `APScheduler` v4 — it is explicitly pre-release and unstable.
+- Import `google.generativeai` — the correct import is `from google import genai`.
+- Put API keys in source code, committed `.env` files, or app binaries.
+- Remove `LSUIElement = true` from Info.plist.
+- Set `focus: true` on the overlay window.
+- Send clipboard content to any external API **before** it has passed through the Rust redaction layer. Post-redaction `raw_content` (safe plaintext or `[REDACTED:<type>]`) is intentionally forwarded to Gemini and Claude for classification and recall.
+- Use global variables in the Chrome Extension service worker.
+- Write synchronous FastAPI route handlers.
+- Use `any` in TypeScript.
+- Run `xcodebuild` from the terminal (invalidates TCC permissions).
+
+---
+
+## Environment Variables
+
+### backend/.env (gitignored)
+```
+WORKER_URL=https://your-worker.workers.dev
+GEMINI_API_KEY=your_gemini_key
+VOYAGE_API_KEY=your_voyage_key
+ORBIT_DB_PATH=~/.orbit/orbit.db
+QDRANT_STORAGE_PATH=~/.orbit/qdrant_storage
+PORT=8000
+```
+
+### worker/.dev.vars (gitignored — local dev only)
+```
+ANTHROPIC_API_KEY=your_key
+```
 
 ---
 
 ## Git Workflow
-
-- Branch naming: `feature/short-description` or `fix/short-description`
-- Commit messages: imperative mood, present tense, explain the *why* not the *what*
-  - Good: `"Add clipboard deduplication to avoid storing repeated copies"`
-  - Bad: `"fixed bug"` or `"updated clipboard.rs"`
+- Branches: `feature/short-description` or `fix/short-description`
+- Commits: imperative mood, explain the *why*. `"Add clipboard redaction to prevent API key leaks"` not `"fix bug"`
 - Never force-push to `main`
-- PRs are not required for solo work — commit directly to feature branches, merge to `main` when stable
 
 ---
 
 ## Self-Update Instructions
 
-When you make changes that affect the accuracy of this file, update it. Specifically:
+Update this file when changes affect architecture, conventions, or build setup:
+1. **New files** → add to monorepo structure and key files table
+2. **Deleted files** → remove from both
+3. **New packages** → add to tech stack table
+4. **New conventions** → add to code style section
+5. **Architecture changes** → update the data flow diagram
+6. **New env vars** → add to environment variables section
 
-1. **New files:** Add to the "Key Files" table with purpose description
-2. **Deleted files:** Remove from the table
-3. **New routes:** Add to the relevant API section
-4. **Architecture changes:** Update the architecture section and data flow diagram
-5. **New conventions:** Add to the appropriate code style section
-6. **New environment variables:** Add to the environment variables section
-7. **New permissions required:** Add to the macOS permissions table
-
-Do NOT update this file for bug fixes, minor edits, or changes that don't affect architecture, conventions, or build setup.
+Do NOT update for bug fixes or minor changes that don't affect documented architecture.

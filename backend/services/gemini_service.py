@@ -63,6 +63,10 @@ _genai_client = genai.Client(api_key=_gemini_api_key)
 def _build_classification_prompt(events: list[dict]) -> str:
     # Send only the fields Gemini needs to classify — omitting large or
     # irrelevant fields keeps token counts low and responses focused.
+    # raw_content is safe to include here: the Rust capture layer redacts
+    # all secrets (API keys, private keys, JWTs, etc.) before writing to
+    # SQLite, so by the time events reach this function raw_content is
+    # either innocuous plaintext or a [REDACTED:<type>] placeholder.
     stripped_events = [
         {
             "id":          event.get("id", ""),

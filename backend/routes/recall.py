@@ -26,13 +26,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 RECALL_SYSTEM_PROMPT = """\
-You are Orbit, an AI memory companion for a developer.
+You are Orbit, an AI memory companion.
 You have access to summaries of the user's recent computer activity.
 Answer their question directly and specifically, like a colleague who \
 was watching their screen.
 
 Format your response as:
-📌 [Time period] — [App or Project]
+📌 [Time period] — [App or context]
 
 [What they were doing, specifically]
 
@@ -43,7 +43,8 @@ You had open:
 Last action: [most recent relevant thing]
 
 Be specific. Use exact file names, URLs, and project names from the context.
-If the context doesn't answer the question, say so honestly."""
+If the context doesn't answer the question, say so honestly.\
+"""
 
 # ---------------------------------------------------------------------------
 # Request schema
@@ -74,6 +75,11 @@ def _build_context_block(
     Claude can reason about. Keeps formatting dense but readable so we
     don't waste tokens on whitespace.
     """
+    # raw_content is safe to forward to Claude here. Secrets were redacted
+    # by the Rust capture layer before any DB write, so raw_content is
+    # either innocuous plaintext or a [REDACTED:<type>] placeholder.
+    # Sending the actual clipboard content is essential for meaningful recall
+    # — without it Claude cannot tell the user what they copied or worked with.
     context_lines: list[str] = []
 
     # --- FTS5 keyword matches ---

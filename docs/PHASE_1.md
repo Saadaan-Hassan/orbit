@@ -266,7 +266,7 @@ print(result)
 ```
 We are on Phase 1, Step 5: Automatic session generation every 30 minutes.
 
-Create backend/scheduler.py using APScheduler v3 .
+Create backend/scheduler.py using APScheduler v3.
 
 The scheduler runs one job every 30 minutes: generate_sessions_from_recent_events()
 
@@ -365,13 +365,13 @@ After both complete:
 
   Send to Claude via Cloudflare Worker with this system prompt:
   
-  "You are Orbit, an AI memory companion for a developer.
+  "You are Orbit, an AI memory companion.
    You have access to summaries of the user's recent computer activity.
    Answer their question directly and specifically, like a colleague who
    was watching their screen.
    
    Format your response as:
-   📌 [Time period] — [App or Project]
+   📌 [Time period] — [App or context]
    
    [What they were doing, specifically]
    
@@ -566,8 +566,16 @@ git commit -m "Phase 1 complete: browser capture, session gen, FTS5 + Qdrant rec
 ## What's Next — Phase 2 Preview
 
 Phase 2 adds the things that make Orbit ready for real beta users:
-- Privacy controls (app exclude list, pause, memory wipe)
-- Memory viewer (see and delete what's stored)
+
+**🔒 Security (must ship before any beta user touches the app):**
+- Clipboard redaction in Rust — sensitive patterns replaced with `[REDACTED:<type>]` before DB write
+- AI context sanitisation — clipboard `raw_content` stripped from Gemini/Claude payloads
+- App exclude list UI (password managers, banking apps)
+- Pause capture button
+- Full memory wipe
+
+**🌐 Beta readiness:**
+- Memory viewer (see and delete exactly what's stored)
 - Landing page with waitlist
 - macOS `.dmg` installer
 - 5 beta testers from your LinkedIn network
