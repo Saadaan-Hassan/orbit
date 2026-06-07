@@ -95,8 +95,13 @@ jobs:
       - name: Rename sidecar binary with target triple
         run: |
           TARGET_TRIPLE=$(rustc -vV | grep '^host:' | awk '{print $2}')
+          echo "Target triple: ${TARGET_TRIPLE}"
+          echo "PyInstaller dist contents:"
+          ls -lh backend/dist/
           cp backend/dist/orbit-backend "backend/dist/orbit-backend-${TARGET_TRIPLE}"
-          echo "Sidecar binary: backend/dist/orbit-backend-${TARGET_TRIPLE}"
+          echo "Renamed binary:"
+          ls -lh "backend/dist/orbit-backend-${TARGET_TRIPLE}"
+          file "backend/dist/orbit-backend-${TARGET_TRIPLE}"
 
       # ── Build and release ─────────────────────────────────────────────────
       # tauri-apps/tauri-action@v0 is the stable major-version-pinned tag.
