@@ -45,7 +45,7 @@ where
                                 if is_visible {
                                     let _ = main_window.hide();
                                 } else {
-                                    position_window_on_active_monitor(&main_window);
+                                    position_window_on_active_monitor(&main_window, false);
                                     let _ = main_window.show();
                                     let _ = main_window.set_focus();
                                     let _ = app_handle.emit("navigate", "chat");
@@ -118,7 +118,7 @@ where
                             if is_visible {
                                 let _ = main_window.hide();
                             } else {
-                                position_window_on_active_monitor(&main_window);
+                                position_window_on_active_monitor(&main_window, false);
                                 let _ = main_window.show();
                                 let _ = main_window.set_focus();
                                 let _ = app_handle.emit("navigate", "chat");
@@ -141,7 +141,7 @@ where
                             if let Some(main_window) =
                                 app_handle.get_webview_window("main")
                             {
-                                position_window_on_active_monitor(&main_window);
+                                position_window_on_active_monitor(&main_window, false);
                                 let _ = main_window.show();
                                 let _ = main_window.set_focus();
                             }
@@ -165,6 +165,12 @@ where
                 })
                 .build(app)?;
 
+            // Position at top center of screen by default on startup
+            if let Some(main_window) = app.get_webview_window("main") {
+                position_window_on_active_monitor(&main_window, true);
+                let _ = main_window.show();
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![])
@@ -172,8 +178,14 @@ where
         .expect("error while running tauri application");
 }
 
-fn position_window_on_active_monitor(window: &tauri::WebviewWindow) {
-    let size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(440, 650));
+fn position_window_on_active_monitor(window: &tauri::WebviewWindow, collapsed: bool) {
+    let scale_factor = window.scale_factor().unwrap_or(1.0);
+    let (logical_w, logical_h) = if collapsed {
+        (230.0, 60.0)
+    } else {
+        (500.0, 650.0)
+    };
+    let size = tauri::PhysicalSize::new((logical_w * scale_factor) as u32, (logical_h * scale_factor) as u32);
     
     let cursor_pos = match window.cursor_position() {
         Ok(pos) => pos,
@@ -181,7 +193,8 @@ fn position_window_on_active_monitor(window: &tauri::WebviewWindow) {
             // Fallback: just use current monitor
             if let Ok(Some(monitor)) = window.current_monitor() {
                 let x = monitor.position().x + (monitor.size().width as i32 - size.width as i32) / 2;
-                let y = monitor.position().y + (monitor.size().height as i32 - size.height as i32) / 5;
+                let y_offset = if collapsed { 30.0 } else { 80.0 };
+                let y = monitor.position().y + (y_offset * scale_factor) as i32;
                 let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
             }
             return;
@@ -197,7 +210,8 @@ fn position_window_on_active_monitor(window: &tauri::WebviewWindow) {
 
             if x >= pos.x && x < pos.x + monitor_size.width as i32 && y >= pos.y && y < pos.y + monitor_size.height as i32 {
                 let target_x = pos.x + (monitor_size.width as i32 - size.width as i32) / 2;
-                let target_y = pos.y + (monitor_size.height as i32 - size.height as i32) / 5;
+                let y_offset = if collapsed { 30.0 } else { 80.0 };
+                let target_y = pos.y + (y_offset * scale_factor) as i32;
                 let _ = window.set_position(tauri::PhysicalPosition::new(target_x, target_y));
                 return;
             }
@@ -207,7 +221,8 @@ fn position_window_on_active_monitor(window: &tauri::WebviewWindow) {
     // Default fallback if no monitor matched:
     if let Ok(Some(monitor)) = window.primary_monitor() {
         let x = monitor.position().x + (monitor.size().width as i32 - size.width as i32) / 2;
-        let y = monitor.position().y + (monitor.size().height as i32 - size.height as i32) / 5;
+        let y_offset = if collapsed { 30.0 } else { 80.0 };
+        let y = monitor.position().y + (y_offset * scale_factor) as i32;
         let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
     }
 }

@@ -52,12 +52,32 @@ function truncate(text: string | null, maxLength = 60): string {
   return text.length > maxLength ? text.slice(0, maxLength) + "…" : text;
 }
 
-function eventTypeIcon(type: string): string {
+function eventTypeIcon(type: string): React.ReactNode {
   switch (type) {
-    case "clipboard": return "📋";
-    case "url":       return "🌐";
-    case "window":    return "🪟";
-    default:          return "•";
+    case "clipboard":
+      return (
+        <svg viewBox="0 0 24 24" className="w-4 h-4 stroke-zinc-400 dark:stroke-zinc-500 fill-none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="9" width="12" height="12" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+      );
+    case "url":
+      return (
+        <svg viewBox="0 0 24 24" className="w-4 h-4 stroke-zinc-400 dark:stroke-zinc-500 fill-none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="2" y1="12" x2="22" y2="12"></line>
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+        </svg>
+      );
+    case "window":
+      return (
+        <svg viewBox="0 0 24 24" className="w-4 h-4 stroke-zinc-400 dark:stroke-zinc-500 fill-none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+          <line x1="2" y1="10" x2="22" y2="10"></line>
+        </svg>
+      );
+    default:
+      return <span className="text-zinc-400 dark:text-zinc-500 font-bold">•</span>;
   }
 }
 
@@ -217,9 +237,9 @@ function EventsTab({
                   key={event.id}
                   className="flex items-start gap-2.5 py-1.5 px-2 rounded-xl hover:bg-zinc-50/50 dark:hover:bg-zinc-900/10 group transition-colors"
                 >
-                  <span className="text-sm shrink-0 select-none mt-0.5">
+                  <div className="shrink-0 w-5 h-5 flex items-center justify-center select-none mt-0.5">
                     {eventTypeIcon(event.type)}
-                  </span>
+                  </div>
                   <div className="min-w-0 flex-1 flex flex-col gap-0.5">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 truncate">

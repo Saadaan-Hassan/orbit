@@ -13,12 +13,32 @@ interface CaptureEvent {
   source: string;
 }
 
-function eventTypeIcon(eventType: string): string {
+function eventTypeIcon(eventType: string): React.ReactNode {
   switch (eventType) {
-    case "clipboard": return "📋";
-    case "url":       return "🌐";
-    case "window":    return "🪟";
-    default:          return "•";
+    case "clipboard":
+      return (
+        <svg viewBox="0 0 24 24" className="w-4 h-4 stroke-zinc-400 dark:stroke-zinc-500 fill-none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="9" width="12" height="12" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+      );
+    case "url":
+      return (
+        <svg viewBox="0 0 24 24" className="w-4 h-4 stroke-zinc-400 dark:stroke-zinc-500 fill-none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="2" y1="12" x2="22" y2="12"></line>
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+        </svg>
+      );
+    case "window":
+      return (
+        <svg viewBox="0 0 24 24" className="w-4 h-4 stroke-zinc-400 dark:stroke-zinc-500 fill-none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+          <line x1="2" y1="10" x2="22" y2="10"></line>
+        </svg>
+      );
+    default:
+      return <span className="text-zinc-400 dark:text-zinc-500 font-bold">•</span>;
   }
 }
 
@@ -99,9 +119,9 @@ export function ActivityTimeline() {
             className="flex items-start gap-2.5 text-xs py-2 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/10 px-1 rounded-lg transition-colors duration-150"
           >
             {/* Event Icon */}
-            <span className="shrink-0 text-sm select-none" title={captureEvent.type}>
+            <div className="shrink-0 w-5 h-5 flex items-center justify-center select-none" title={captureEvent.type}>
               {eventTypeIcon(captureEvent.type)}
-            </span>
+            </div>
 
             {/* Event Content Details */}
             <div className="min-w-0 flex-1 flex flex-col gap-0.5">

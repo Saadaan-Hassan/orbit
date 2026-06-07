@@ -16,6 +16,7 @@
         "title": "Orbit",
         "decorations": false,
         "transparent": true,
+        "shadow": false,
         "skipTaskbar": true,
         "alwaysOnTop": false,
         "width": 380,

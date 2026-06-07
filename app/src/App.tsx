@@ -32,7 +32,7 @@ export default function App() {
         await appWindow.setSize(new LogicalSize(230, 60));
       } else {
         // Expanded panel size
-        await appWindow.setSize(new LogicalSize(440, 650));
+        await appWindow.setSize(new LogicalSize(500, 650));
       }
     } catch (err) {
       console.error("Failed to resize Tauri window:", err);
@@ -42,7 +42,7 @@ export default function App() {
   // System Theme Auto-Detection
   useEffect(() => {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    
+
     const updateTheme = (e: MediaQueryListEvent | MediaQueryList) => {
       if (e.matches) {
         document.documentElement.classList.add("dark");
@@ -50,9 +50,9 @@ export default function App() {
         document.documentElement.classList.remove("dark");
       }
     };
-    
+
     updateTheme(mediaQuery);
-    
+
     mediaQuery.addEventListener("change", updateTheme);
     return () => mediaQuery.removeEventListener("change", updateTheme);
   }, []);
@@ -70,7 +70,7 @@ export default function App() {
 
     // Auto-hide when expanded window loses focus (click away)
     let unlistenFocus: (() => void) | undefined;
-    
+
     const setupFocusListener = async () => {
       try {
         const appWindow = getCurrentWindow();
@@ -108,19 +108,19 @@ export default function App() {
 
   if (isCollapsed) {
     return (
-      <div 
+      <div
         className="w-full h-full p-2 flex items-center justify-center select-none"
         style={{ boxSizing: "border-box" }}
       >
         {/* Collapsed Pill UI */}
-        <div 
+        <div
           data-tauri-drag-region
-          className="w-[210px] h-[40px] px-3 rounded-full bg-zinc-900/90 dark:bg-black/95 flex items-center justify-between shadow-[0_4px_24px_rgba(0,0,0,0.6)] backdrop-blur-md transition-all duration-300"
+          className="w-[210px] h-[40px] px-3 rounded-full bg-zinc-900/90 dark:bg-black/95 flex items-center justify-between shadow-[0_4px_24px_rgba(0,0,0,0.6)] backdrop-blur-md transition-all duration-300 cursor-grab active:cursor-grabbing"
         >
           {/* Logo Handle */}
-          <div data-tauri-drag-region className="flex items-center gap-1.5 cursor-grab active:cursor-grabbing">
-            <span data-tauri-drag-region className="text-base animate-pulse-subtle">🪐</span>
-            <span data-tauri-drag-region className="text-xs font-semibold text-zinc-300 dark:text-zinc-200">Orbit</span>
+          <div data-tauri-drag-region className="flex items-center gap-1.5 pointer-events-none select-none">
+            <img data-tauri-drag-region src="/logo.png" className="w-5 h-5 object-contain select-none pointer-events-none" draggable="false" alt="Orbit" />
+            <span data-tauri-drag-region className="text-xs font-semibold text-zinc-300 dark:text-zinc-200 select-none pointer-events-none">Orbit</span>
           </div>
 
           {/* Quick tab controls */}
@@ -168,54 +168,51 @@ export default function App() {
   }
 
   return (
-    <div 
-      className="w-full h-full p-3 flex flex-col select-none"
+    <div
+      className="w-full h-full flex flex-col select-none"
       style={{ boxSizing: "border-box" }}
     >
       {/* Expanded Card UI */}
-      <div 
-        className="w-full h-full flex flex-col rounded-2xl bg-white dark:bg-black shadow-[0_16px_40px_rgba(0,0,0,0.6)] backdrop-blur-xl overflow-hidden transition-all duration-300"
+      <div
+        className="w-full h-full flex flex-col rounded-2xl bg-white dark:bg-black overflow-hidden transition-all duration-300"
       >
         {/* Custom Header Tab controller */}
-        <header 
+        <header
           data-tauri-drag-region
           className="flex items-center justify-between px-4 py-3 bg-zinc-50/50 dark:bg-black cursor-grab active:cursor-grabbing"
         >
           {/* Logo region */}
-          <div data-tauri-drag-region className="flex items-center gap-1.5">
-            <span data-tauri-drag-region className="text-base">🪐</span>
-            <span data-tauri-drag-region className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">Orbit</span>
+          <div data-tauri-drag-region className="flex items-center gap-1.5 pointer-events-none select-none">
+            <img data-tauri-drag-region src="/logo.png" className="w-5 h-5 object-contain select-none pointer-events-none" draggable="false" alt="Orbit" />
+            <span data-tauri-drag-region className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 select-none pointer-events-none">Orbit</span>
           </div>
 
           {/* Tab Selector */}
           <div className="flex items-center bg-zinc-200/50 dark:bg-zinc-900/60 p-0.5 rounded-lg">
             <button
               onClick={() => setActivePanel("chat")}
-              className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all cursor-pointer ${
-                activePanel === "chat"
-                  ? "bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm"
-                  : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200"
-              }`}
+              className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all cursor-pointer ${activePanel === "chat"
+                ? "bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm"
+                : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200"
+                }`}
             >
               Recall
             </button>
             <button
               onClick={() => setActivePanel("memory")}
-              className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all cursor-pointer ${
-                activePanel === "memory"
-                  ? "bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm"
-                  : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200"
-              }`}
+              className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all cursor-pointer ${activePanel === "memory"
+                ? "bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm"
+                : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200"
+                }`}
             >
               Memories
             </button>
             <button
               onClick={() => setActivePanel("privacy")}
-              className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all cursor-pointer ${
-                activePanel === "privacy"
-                  ? "bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm"
-                  : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200"
-              }`}
+              className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all cursor-pointer ${activePanel === "privacy"
+                ? "bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm"
+                : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200"
+                }`}
             >
               Privacy
             </button>
