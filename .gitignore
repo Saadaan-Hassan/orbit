@@ -2,9 +2,14 @@ node_modules/
 .env
 *.env
 backend/.env
-worker/.dev.vars
 __pycache__/
 .venv/
 target/
 *.db
 ~/.orbit/
+
+# Wrangler local state
+.wrangler/
+
+# Cloudflare build output (optional depending setup)
+.dev.vars
