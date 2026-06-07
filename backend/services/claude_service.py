@@ -6,8 +6,10 @@ One httpx.AsyncClient is created at module level and reused for every
 request — never instantiate a new client per call.
 """
 
+import json
 import logging
 import os
+from typing import AsyncGenerator
 
 import httpx
 from dotenv import load_dotenv
@@ -44,6 +46,64 @@ _http_client = httpx.AsyncClient(timeout=HTTP_REQUEST_TIMEOUT_SECONDS)
 # ---------------------------------------------------------------------------
 # Public async API
 # ---------------------------------------------------------------------------
+
+async def stream_recall_response(
+    system_prompt: str,
+    user_prompt: str,
+) -> AsyncGenerator[str, None]:
+    """
+    Sends a streaming chat request to Claude via the Cloudflare Worker and
+    yields raw text delta strings as they arrive over SSE.
+
+    The Worker pipes the Anthropic SSE stream straight through, so we parse
+    the Anthropic event format: lines starting with "data: " that contain
+    a JSON object with type "content_block_delta".
+
+    Args:
+        system_prompt: Recall persona and formatting instructions.
+        user_prompt:   User query + merged context from FTS5 and Qdrant.
+
+    Yields:
+        Plain text delta strings from each content_block_delta event.
+    """
+    request_payload = {
+        "model": CLAUDE_MODEL_NAME,
+        "max_tokens": 1024,
+        "stream": True,
+        "system": system_prompt,
+        "messages": [
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+
+    async with _http_client.stream(
+        "POST",
+        f"{_worker_url}/chat",
+        json=request_payload,
+    ) as streaming_response:
+        streaming_response.raise_for_status()
+
+        async for raw_line in streaming_response.aiter_lines():
+            if not raw_line.startswith("data: "):
+                continue
+
+            raw_json_payload = raw_line[len("data: "):]
+
+            if raw_json_payload.strip() == "[DONE]":
+                break
+
+            try:
+                event_data = json.loads(raw_json_payload)
+            except json.JSONDecodeError:
+                continue
+
+            # Anthropic SSE shape for streaming text deltas:
+            # {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "..."}}
+            if event_data.get("type") == "content_block_delta":
+                delta_text = event_data.get("delta", {}).get("text", "")
+                if delta_text:
+                    yield delta_text
+
 
 async def generate_session_summary(
     system_prompt: str,
