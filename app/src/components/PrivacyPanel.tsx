@@ -1,11 +1,6 @@
 import { useState } from "react";
 import { usePrivacySettings } from "../hooks/usePrivacySettings";
 
-// ---------------------------------------------------------------------------
-// Pause duration options shown when the user clicks the capture toggle.
-// null = pause indefinitely (until manually resumed).
-// ---------------------------------------------------------------------------
-
 interface PauseDurationOption {
   label: string;
   durationMinutes: number | null;
@@ -17,20 +12,15 @@ const PAUSE_DURATION_OPTIONS: PauseDurationOption[] = [
   { label: "Until I resume",  durationMinutes: null },
 ];
 
-// ---------------------------------------------------------------------------
-// Small primitives (Tailwind-only — ShadCN not yet installed in the project)
-// ---------------------------------------------------------------------------
-
 function SectionHeading({ children }: { children: React.ReactNode }) {
   return (
-    <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">
+    <h3 className="text-[11px] uppercase font-bold tracking-wider text-zinc-400 dark:text-zinc-500 mb-2">
       {children}
     </h3>
   );
 }
 
-// Inline confirmation dialog rendered as a fixed overlay — replaces ShadCN
-// AlertDialog until the library is wired into the project.
+// ─── Inline Confirm Dialog ───────────────────────────────────────────────────
 interface ConfirmDialogProps {
   isOpen: boolean;
   title: string;
@@ -51,22 +41,20 @@ function ConfirmDialog({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4">
-        <h4 className="text-base font-semibold text-gray-900 mb-2">{title}</h4>
-        <p className="text-sm text-gray-600 mb-6 leading-relaxed">{description}</p>
-        <div className="flex justify-end gap-3">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-white dark:bg-black rounded-xl shadow-2xl p-5 max-w-[280px] w-full animate-in zoom-in-95 duration-200">
+        <h4 className="text-sm font-bold text-zinc-900 dark:text-white mb-1">{title}</h4>
+        <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-4 leading-relaxed font-light">{description}</p>
+        <div className="flex justify-end gap-2">
           <button
             onClick={onCancel}
-            className="px-4 py-2 text-sm rounded-lg border border-gray-200
-                       text-gray-700 hover:bg-gray-50 transition-colors"
+            className="px-3 py-1.5 text-[11px] rounded-lg text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-900 hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className="px-4 py-2 text-sm rounded-lg bg-red-600 text-white
-                       hover:bg-red-700 transition-colors font-medium"
+            className="px-3 py-1.5 text-[11px] rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors font-semibold cursor-pointer"
           >
             {confirmLabel}
           </button>
@@ -76,10 +64,7 @@ function ConfirmDialog({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Section 1 — Capture Status
-// ---------------------------------------------------------------------------
-
+// ─── Section 1 — Capture Status ──────────────────────────────────────────────
 interface CaptureStatusSectionProps {
   isCapturing: boolean;
   pausedUntil: number | null;
@@ -104,7 +89,7 @@ function CaptureStatusSection({
       await onPause(durationMinutes);
       setShowDurationPicker(false);
     } catch {
-      setActionError("Could not pause capture. Is the backend running?");
+      setActionError("Could not pause capture.");
     }
   }
 
@@ -127,23 +112,28 @@ function CaptureStatusSection({
   }
 
   return (
-    <div>
+    <div className="flex flex-col gap-2">
       <SectionHeading>Capture Status</SectionHeading>
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50/20 dark:bg-zinc-900/10">
         <div className="flex items-center gap-3">
           {/* Status dot */}
-          <span
-            className={`inline-block w-2.5 h-2.5 rounded-full ${
-              isCapturing ? "bg-green-500" : "bg-orange-400"
-            }`}
-          />
+          <span className="relative flex h-2.5 w-2.5">
+            {isCapturing && (
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+            )}
+            <span
+              className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                isCapturing ? "bg-emerald-500" : "bg-amber-500"
+              }`}
+            />
+          </span>
           <div>
-            <p className="text-sm font-medium text-gray-900">
-              {isCapturing ? "Capturing" : "Paused"}
+            <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
+              {isCapturing ? "Active Logging" : "Paused"}
             </p>
             {!isCapturing && (
-              <p className="text-xs text-gray-500">
+              <p className="text-[10px] text-zinc-400 dark:text-zinc-500 mt-0.5 font-medium leading-none">
                 {formatPausedUntil(pausedUntil)}
               </p>
             )}
@@ -152,35 +142,31 @@ function CaptureStatusSection({
 
         {isCapturing ? (
           <button
-            onClick={() => setShowDurationPicker((previous) => !previous)}
-            className="px-3 py-1.5 text-sm rounded-lg border border-gray-200
-                       text-gray-700 hover:bg-gray-50 transition-colors"
+            onClick={() => setShowDurationPicker((prev) => !prev)}
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-zinc-100 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             Pause
           </button>
         ) : (
           <button
             onClick={handleResumeClick}
-            className="px-3 py-1.5 text-sm rounded-lg bg-green-600 text-white
-                       hover:bg-green-700 transition-colors font-medium"
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 hover:opacity-90 transition-colors cursor-pointer"
           >
             Resume
           </button>
         )}
       </div>
 
-      {/* Pause duration picker — slides in below the toggle row */}
+      {/* Slide-down pause duration selector */}
       {showDurationPicker && (
-        <div className="mt-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-          <p className="text-xs text-gray-500 mb-2">Pause for how long?</p>
+        <div className="p-3 bg-zinc-50 dark:bg-black rounded-xl flex flex-col gap-1.5 animate-in slide-in-from-top-2 duration-200">
+          <p className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-0.5">Select Duration</p>
           <div className="flex flex-col gap-1">
             {PAUSE_DURATION_OPTIONS.map((option) => (
               <button
                 key={option.label}
                 onClick={() => handlePauseOptionClick(option.durationMinutes)}
-                className="text-left text-sm px-3 py-2 rounded-md
-                           hover:bg-white hover:shadow-sm transition-all
-                           text-gray-700 font-medium"
+                className="text-left text-xs px-3 py-2 rounded-lg hover:bg-white dark:hover:bg-zinc-900 hover:shadow-sm dark:hover:shadow-none text-zinc-700 dark:text-zinc-300 font-medium cursor-pointer transition-all"
               >
                 {option.label}
               </button>
@@ -190,16 +176,13 @@ function CaptureStatusSection({
       )}
 
       {actionError && (
-        <p className="mt-2 text-xs text-red-500">{actionError}</p>
+        <p className="text-xs text-red-500 font-medium px-1 mt-1">{actionError}</p>
       )}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Section 2 — Excluded Apps
-// ---------------------------------------------------------------------------
-
+// ─── Section 2 — Excluded Apps ───────────────────────────────────────────────
 interface ExcludedAppsSectionProps {
   excludedApps: string[];
   onAdd: (appName: string) => Promise<void>;
@@ -225,7 +208,7 @@ function ExcludedAppsSection({
       await onAdd(trimmedName);
       setInputValue("");
     } catch {
-      setActionError("Could not add app. Is the backend running?");
+      setActionError("Could not exclude app.");
     } finally {
       setIsAdding(false);
     }
@@ -238,70 +221,64 @@ function ExcludedAppsSection({
   }
 
   return (
-    <div>
+    <div className="flex flex-col gap-2">
       <SectionHeading>Excluded Apps</SectionHeading>
-      <p className="text-xs text-gray-500 mb-3">
-        Events from these apps are never captured or stored.
+      <p className="text-xs text-zinc-400 dark:text-zinc-500 font-light leading-relaxed mb-1">
+        Activities from these apps are ignored at capture-time and never written to memory.
       </p>
 
-      {/* Existing excluded apps list */}
-      <div className="flex flex-col gap-1 mb-3">
+      {/* Grid of exclusions */}
+      <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto mb-2">
         {excludedApps.length === 0 && (
-          <p className="text-sm text-gray-400 italic">No apps excluded.</p>
+          <p className="text-xs text-zinc-400 dark:text-zinc-500 italic py-2 px-1">No applications excluded.</p>
         )}
         {excludedApps.map((appName) => (
           <div
             key={appName}
-            className="flex items-center justify-between px-3 py-2
-                       bg-gray-50 rounded-lg border border-gray-100"
+            className="flex items-center justify-between px-3.5 py-2 bg-zinc-50/50 dark:bg-zinc-900/10 rounded-xl"
           >
-            <span className="text-sm text-gray-800">{appName}</span>
+            <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">{appName}</span>
             <button
               onClick={() => onRemove(appName)}
-              aria-label={`Remove ${appName} from excluded apps`}
-              className="text-gray-400 hover:text-red-500 transition-colors
-                         text-base leading-none ml-2"
+              aria-label={`Remove ${appName}`}
+              className="text-zinc-400 hover:text-red-500 transition-colors p-1 hover:bg-red-500/10 rounded-lg cursor-pointer"
             >
-              ✕
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
             </button>
           </div>
         ))}
       </div>
 
-      {/* Add new app */}
+      {/* Form adder */}
       <div className="flex gap-2">
         <input
           type="text"
           value={inputValue}
-          onChange={(event) => setInputValue(event.target.value)}
+          onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleInputKeyDown}
-          placeholder="App name (e.g. Slack)"
-          className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2
-                     focus:outline-none focus:ring-2 focus:ring-blue-400
-                     bg-white placeholder-gray-400"
+          placeholder="App name (e.g. 1Password)"
+          className="flex-1 text-xs bg-zinc-100 dark:bg-zinc-900 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-zinc-400/20 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 border-0"
         />
         <button
           onClick={handleAddApp}
           disabled={!inputValue.trim() || isAdding}
-          className="px-3 py-2 text-sm rounded-lg bg-blue-600 text-white
-                     hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed
-                     transition-colors whitespace-nowrap"
+          className="px-3.5 py-2 text-xs font-semibold rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer whitespace-nowrap"
         >
-          Add App
+          Exclude
         </button>
       </div>
 
       {actionError && (
-        <p className="mt-2 text-xs text-red-500">{actionError}</p>
+        <p className="text-xs text-red-500 font-medium px-1 mt-1">{actionError}</p>
       )}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Section 3 — Danger Zone
-// ---------------------------------------------------------------------------
-
+// ─── Section 3 — Danger Zone ─────────────────────────────────────────────────
 interface DangerZoneSectionProps {
   isWiping: boolean;
   onWipe: () => Promise<void>;
@@ -319,42 +296,40 @@ function DangerZoneSection({ isWiping, onWipe }: DangerZoneSectionProps) {
       await onWipe();
       setWiped(true);
     } catch {
-      setWipeError("Wipe failed. Is the backend running?");
+      setWipeError("Wipe failed.");
     }
   }
 
   return (
     <>
-      <div className="border border-red-200 rounded-xl p-4 bg-red-50/50">
-        <SectionHeading>Danger Zone</SectionHeading>
+      <div className="rounded-2xl p-4 bg-red-500/5 flex flex-col gap-2">
+        <h4 className="text-[10px] font-bold text-red-500 uppercase tracking-wider leading-none">Danger Zone</h4>
 
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-gray-900">Wipe All Memory</p>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Permanently deletes all events, sessions, and memories.
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">Wipe All Memory</p>
+            <p className="text-[10px] text-zinc-400 dark:text-zinc-500 font-light leading-relaxed mt-0.5">
+              Permanently deletes all events, sessions, and database search histories. This cannot be undone.
             </p>
           </div>
 
           {wiped ? (
-            <span className="text-sm text-green-600 font-medium">
+            <span className="text-xs text-emerald-500 font-bold whitespace-nowrap">
               ✓ Memory wiped
             </span>
           ) : (
             <button
               onClick={() => setShowConfirmDialog(true)}
               disabled={isWiping}
-              className="px-3 py-1.5 text-sm rounded-lg bg-red-600 text-white
-                         hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed
-                         transition-colors font-medium"
+              className="px-3.5 py-2 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-700 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer whitespace-nowrap shadow-sm"
             >
-              {isWiping ? "Wiping…" : "Wipe All Memory"}
+              {isWiping ? "Wiping…" : "Wipe Memory"}
             </button>
           )}
         </div>
 
         {wipeError && (
-          <p className="mt-2 text-xs text-red-600">{wipeError}</p>
+          <p className="text-xs text-red-500 font-medium px-1 mt-1">{wipeError}</p>
         )}
       </div>
 
@@ -370,10 +345,7 @@ function DangerZoneSection({ isWiping, onWipe }: DangerZoneSectionProps) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// PrivacyPanel — root export
-// ---------------------------------------------------------------------------
-
+// ─── PrivacyPanel Root ────────────────────────────────────────────────────────
 export function PrivacyPanel() {
   const {
     isCapturing,
@@ -391,24 +363,20 @@ export function PrivacyPanel() {
 
   if (isLoading) {
     return (
-      <div className="p-4">
-        <p className="text-sm text-gray-500">Loading privacy settings…</p>
-      </div>
+      <p className="text-xs text-zinc-400 dark:text-zinc-500 italic py-4 text-center">Loading privacy settings…</p>
     );
   }
 
   if (error) {
     return (
-      <div className="p-4">
-        <p className="text-sm text-red-500">{error}</p>
+      <div className="p-3 rounded-lg bg-red-500/5 text-xs text-red-500 leading-normal">
+        ⚠️ {error}
       </div>
     );
   }
 
   return (
-    <div className="p-4 flex flex-col gap-6">
-      <h2 className="text-lg font-semibold">Privacy & Control</h2>
-
+    <div className="flex flex-col gap-6 bg-transparent">
       <CaptureStatusSection
         isCapturing={isCapturing}
         pausedUntil={pausedUntil}
@@ -416,7 +384,7 @@ export function PrivacyPanel() {
         onResume={resumeCapture}
       />
 
-      <hr className="border-gray-100" />
+      <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
 
       <ExcludedAppsSection
         excludedApps={excludedApps}
@@ -424,7 +392,7 @@ export function PrivacyPanel() {
         onRemove={removeExcludedApp}
       />
 
-      <hr className="border-gray-100" />
+      <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
 
       <DangerZoneSection isWiping={isWiping} onWipe={wipeAllMemory} />
     </div>

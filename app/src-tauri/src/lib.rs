@@ -34,6 +34,29 @@ where
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            // Register global shortcut
+            let shortcut_plugin = tauri_plugin_global_shortcut::Builder::new()
+                .with_shortcuts(["alt+space"])?
+                .with_handler(|app_handle, shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        if shortcut.matches(tauri_plugin_global_shortcut::Modifiers::ALT, tauri_plugin_global_shortcut::Code::Space) {
+                            if let Some(main_window) = app_handle.get_webview_window("main") {
+                                let is_visible = main_window.is_visible().unwrap_or(false);
+                                if is_visible {
+                                    let _ = main_window.hide();
+                                } else {
+                                    position_window_on_active_monitor(&main_window);
+                                    let _ = main_window.show();
+                                    let _ = main_window.set_focus();
+                                    let _ = app_handle.emit("navigate", "chat");
+                                }
+                            }
+                        }
+                    }
+                })
+                .build();
+            app.handle().plugin(shortcut_plugin)?;
+
             let orbit_item = MenuItem::with_id(
                 app,
                 "orbit",
@@ -82,6 +105,27 @@ where
             TrayIconBuilder::new()
                 .icon(tray_icon)
                 .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(move |tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
+                    } = event {
+                        let app_handle = tray.app_handle();
+                        if let Some(main_window) = app_handle.get_webview_window("main") {
+                            let is_visible = main_window.is_visible().unwrap_or(false);
+                            if is_visible {
+                                let _ = main_window.hide();
+                            } else {
+                                position_window_on_active_monitor(&main_window);
+                                let _ = main_window.show();
+                                let _ = main_window.set_focus();
+                                let _ = app_handle.emit("navigate", "chat");
+                            }
+                        }
+                    }
+                })
                 .on_menu_event(move |app_handle, menu_event| {
                     match menu_event.id.as_ref() {
                         "orbit" | "memory" | "privacy" => {
@@ -97,6 +141,7 @@ where
                             if let Some(main_window) =
                                 app_handle.get_webview_window("main")
                             {
+                                position_window_on_active_monitor(&main_window);
                                 let _ = main_window.show();
                                 let _ = main_window.set_focus();
                             }
@@ -125,4 +170,44 @@ where
         .invoke_handler(tauri::generate_handler![])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn position_window_on_active_monitor(window: &tauri::WebviewWindow) {
+    let size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(440, 650));
+    
+    let cursor_pos = match window.cursor_position() {
+        Ok(pos) => pos,
+        Err(_) => {
+            // Fallback: just use current monitor
+            if let Ok(Some(monitor)) = window.current_monitor() {
+                let x = monitor.position().x + (monitor.size().width as i32 - size.width as i32) / 2;
+                let y = monitor.position().y + (monitor.size().height as i32 - size.height as i32) / 5;
+                let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+            }
+            return;
+        }
+    };
+
+    if let Ok(monitors) = window.available_monitors() {
+        for monitor in monitors {
+            let pos = monitor.position();
+            let monitor_size = monitor.size();
+            let x = cursor_pos.x as i32;
+            let y = cursor_pos.y as i32;
+
+            if x >= pos.x && x < pos.x + monitor_size.width as i32 && y >= pos.y && y < pos.y + monitor_size.height as i32 {
+                let target_x = pos.x + (monitor_size.width as i32 - size.width as i32) / 2;
+                let target_y = pos.y + (monitor_size.height as i32 - size.height as i32) / 5;
+                let _ = window.set_position(tauri::PhysicalPosition::new(target_x, target_y));
+                return;
+            }
+        }
+    }
+
+    // Default fallback if no monitor matched:
+    if let Ok(Some(monitor)) = window.primary_monitor() {
+        let x = monitor.position().x + (monitor.size().width as i32 - size.width as i32) / 2;
+        let y = monitor.position().y + (monitor.size().height as i32 - size.height as i32) / 5;
+        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+    }
 }

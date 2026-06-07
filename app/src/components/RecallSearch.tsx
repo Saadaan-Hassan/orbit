@@ -1,27 +1,36 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 
 const BACKEND_RECALL_URL = "http://localhost:8000/recall";
 
 type RecallStatus = "idle" | "thinking" | "streaming" | "done" | "error";
 
-export function RecallSearch() {
-  const [queryInputValue, setQueryInputValue]   = useState("");
-  const [recallResponse, setRecallResponse]     = useState("");
-  const [recallStatus, setRecallStatus]         = useState<RecallStatus>("idle");
+interface RecallSearchProps {
+  children?: React.ReactNode;
+}
+
+export function RecallSearch({ children }: RecallSearchProps) {
+  const [queryInputValue, setQueryInputValue] = useState("");
+  const [recallResponse, setRecallResponse] = useState("");
+  const [recallStatus, setRecallStatus] = useState<RecallStatus>("idle");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-focus input on mount
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
 
   async function submitQuery() {
     const trimmedQuery = queryInputValue.trim();
     if (!trimmedQuery) return;
 
-    // Reset state for the new query before anything async starts.
     setRecallResponse("");
     setRecallStatus("thinking");
 
     try {
       const response = await fetch(BACKEND_RECALL_URL, {
-        method:  "POST",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ query: trimmedQuery }),
+        body: JSON.stringify({ query: trimmedQuery }),
       });
 
       if (!response.ok || !response.body) {
@@ -31,8 +40,8 @@ export function RecallSearch() {
       setRecallStatus("streaming");
 
       const streamReader = response.body.getReader();
-      const textDecoder  = new TextDecoder();
-      let   buffer       = "";
+      const textDecoder = new TextDecoder();
+      let buffer = "";
 
       while (true) {
         const { done: streamDone, value: chunk } = await streamReader.read();
@@ -40,8 +49,6 @@ export function RecallSearch() {
 
         buffer += textDecoder.decode(chunk, { stream: true });
 
-        // SSE lines are separated by double newlines. Process all complete
-        // events in the buffer and leave any incomplete line for the next chunk.
         const sseLines = buffer.split("\n\n");
         buffer = sseLines.pop() ?? "";
 
@@ -64,7 +71,7 @@ export function RecallSearch() {
               setRecallResponse((previous) => previous + parsedEvent.chunk);
             }
           } catch {
-            // Malformed SSE payload — skip and continue.
+            // Malformed chunk — skip
           }
         }
       }
@@ -81,49 +88,79 @@ export function RecallSearch() {
   }
 
   return (
-    <div className="p-4">
-      <h2 className="text-lg font-semibold mb-3">Ask Orbit</h2>
+    <div className="flex flex-col h-full min-h-0 select-none bg-white dark:bg-black">
+      {/* Scrollable history and responses */}
+      <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-4 min-h-0">
+        {recallStatus === "idle" && children}
 
-      <div className="flex gap-2 mb-4">
-        <input
-          type="text"
-          value={queryInputValue}
-          onChange={(e) => setQueryInputValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="What was I working on before lunch?"
-          disabled={recallStatus === "thinking" || recallStatus === "streaming"}
-          className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm
-                     focus:outline-none focus:ring-2 focus:ring-blue-400
-                     disabled:opacity-50"
-        />
-        <button
-          onClick={submitQuery}
-          disabled={
-            !queryInputValue.trim() ||
-            recallStatus === "thinking"   ||
-            recallStatus === "streaming"
-          }
-          className="px-4 py-2 bg-blue-600 text-white text-sm rounded
-                     hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          Ask Orbit
-        </button>
-      </div>
-
-      {recallStatus === "thinking" && (
-        <p className="text-sm text-gray-500 italic">Thinking…</p>
-      )}
-
-      {(recallStatus === "streaming" || recallStatus === "done") &&
-        recallResponse && (
-          <div className="text-sm whitespace-pre-wrap leading-relaxed text-gray-800">
-            {recallResponse}
+        {/* States Indicator */}
+        {recallStatus === "thinking" && (
+          <div className="flex items-center gap-2 px-1 py-4 text-xs text-zinc-400 dark:text-zinc-500 italic">
+            <span className="flex h-1.5 w-1.5 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-zinc-400 opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-zinc-400" />
+            </span>
+            <span>Searching your digital history…</span>
           </div>
         )}
 
-      {recallStatus === "error" && (
-        <p className="text-sm text-red-500">{recallResponse}</p>
-      )}
+        {/* Results Box */}
+        {(recallStatus === "streaming" || recallStatus === "done") && recallResponse && (
+          <div className="flex flex-col gap-2 py-2">
+            <h3 className="text-[11px] uppercase font-bold tracking-wider text-zinc-400 dark:text-zinc-500">
+              Recall Answer
+            </h3>
+            <div className="p-4 rounded-xl bg-zinc-50/50 dark:bg-zinc-900/30 text-sm whitespace-pre-wrap leading-relaxed text-zinc-800 dark:text-zinc-200 font-light select-text">
+              {recallResponse}
+            </div>
+          </div>
+        )}
+
+        {/* Error state */}
+        {recallStatus === "error" && (
+          <div className="p-3 rounded-lg bg-red-500/5 text-xs text-red-500 leading-normal">
+            ⚠️ {recallResponse}
+          </div>
+        )}
+
+        {/* Show timeline under results when search is complete */}
+        {recallStatus !== "idle" && recallStatus !== "thinking" && (
+          <div className="mt-4 pt-4">
+            {children}
+          </div>
+        )}
+      </div>
+
+      {/* Input region always at the bottom */}
+      <div className="pt-3 bg-white dark:bg-black shrink-0">
+        <div className="relative flex items-center">
+          <input
+            ref={inputRef}
+            type="text"
+            value={queryInputValue}
+            onChange={(e) => setQueryInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="What was I working on before lunch?"
+            disabled={recallStatus === "thinking" || recallStatus === "streaming"}
+            className="w-full h-11 pl-4 pr-10 bg-zinc-100 dark:bg-zinc-900/60 text-zinc-900 dark:text-zinc-100 rounded-xl text-sm focus:outline-none focus:ring-1 focus:ring-zinc-400/20 dark:focus:ring-zinc-500/10 transition-all placeholder:text-zinc-400 dark:placeholder:text-zinc-500 disabled:opacity-50 border-0"
+          />
+          <button
+            onClick={submitQuery}
+            disabled={
+              !queryInputValue.trim() ||
+              recallStatus === "thinking" ||
+              recallStatus === "streaming"
+            }
+            className="absolute right-2 p-1.5 rounded-lg text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100 disabled:opacity-30 disabled:hover:text-zinc-500 cursor-pointer transition-colors"
+            title="Send query"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

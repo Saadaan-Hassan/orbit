@@ -7,10 +7,7 @@ import {
   type SessionSummaryJson,
 } from "../hooks/useMemoryData";
 
-// ---------------------------------------------------------------------------
-// Formatting helpers
-// ---------------------------------------------------------------------------
-
+// ─── Formatting Helpers ───────────────────────────────────────────────────────
 function formatTimestamp(timestampMs: number): string {
   const date = new Date(timestampMs);
   const today = new Date();
@@ -25,7 +22,7 @@ function formatTimestamp(timestampMs: number): string {
   });
 
   return isToday
-    ? `Today ${timeString}`
+    ? timeString
     : date.toLocaleDateString([], {
         month: "short",
         day: "numeric",
@@ -34,7 +31,6 @@ function formatTimestamp(timestampMs: number): string {
       });
 }
 
-// Returns a plain date string used as a group header, e.g. "Jun 7, 2026".
 function formatDateGroup(timestampMs: number): string {
   return new Date(timestampMs).toLocaleDateString([], {
     month: "short",
@@ -51,7 +47,7 @@ function formatDuration(startMs: number, endMs: number): string {
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }
 
-function truncate(text: string | null, maxLength = 80): string {
+function truncate(text: string | null, maxLength = 60): string {
   if (!text) return "";
   return text.length > maxLength ? text.slice(0, maxLength) + "…" : text;
 }
@@ -74,23 +70,25 @@ function parseSummaryJson(rawJson: string | null): SessionSummaryJson | null {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Shared primitives
-// ---------------------------------------------------------------------------
-
+// ─── Trash Button (Inline SVG) ───────────────────────────────────────────────
 function TrashButton({ onClick, label }: { onClick: () => void; label: string }) {
   return (
     <button
       onClick={onClick}
       aria-label={label}
-      className="text-gray-300 hover:text-red-500 transition-colors shrink-0
-                 text-sm leading-none p-1"
+      className="text-zinc-400 hover:text-red-500 transition-colors shrink-0 p-1.5 rounded-lg hover:bg-red-500/10 cursor-pointer"
     >
-      🗑
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="3 6 5 6 21 6"></polyline>
+        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        <line x1="10" y1="11" x2="10" y2="17"></line>
+        <line x1="14" y1="11" x2="14" y2="17"></line>
+      </svg>
     </button>
   );
 }
 
+// ─── Dialog Confirmation ─────────────────────────────────────────────────────
 interface DeleteConfirmProps {
   isOpen: boolean;
   onConfirm: () => void;
@@ -100,27 +98,24 @@ interface DeleteConfirmProps {
 function DeleteConfirm({ isOpen, onConfirm, onCancel }: DeleteConfirmProps) {
   if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white rounded-xl shadow-2xl p-5 max-w-xs w-full mx-4">
-        <p className="text-sm font-semibold text-gray-900 mb-1">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-white dark:bg-black rounded-xl shadow-2xl p-5 max-w-[280px] w-full animate-in zoom-in-95 duration-200">
+        <p className="text-sm font-bold text-zinc-900 dark:text-white mb-1.5">
           Delete this session?
         </p>
-        <p className="text-xs text-gray-500 mb-4 leading-relaxed">
-          The session summary will be deleted. The raw events will be kept but
-          unlinked from this session.
+        <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-4 leading-relaxed font-light">
+          The summary will be deleted. The raw captured events will remain intact but unlinked.
         </p>
         <div className="flex justify-end gap-2">
           <button
             onClick={onCancel}
-            className="px-3 py-1.5 text-xs rounded-lg border border-gray-200
-                       text-gray-700 hover:bg-gray-50 transition-colors"
+            className="px-3 py-1.5 text-[11px] rounded-lg text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-900 hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className="px-3 py-1.5 text-xs rounded-lg bg-red-600 text-white
-                       hover:bg-red-700 transition-colors font-medium"
+            className="px-3 py-1.5 text-[11px] rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors font-semibold cursor-pointer"
           >
             Delete
           </button>
@@ -130,10 +125,7 @@ function DeleteConfirm({ isOpen, onConfirm, onCancel }: DeleteConfirmProps) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Events tab
-// ---------------------------------------------------------------------------
-
+// ─── Events Tab ──────────────────────────────────────────────────────────────
 interface EventsTabProps {
   events: MemoryEvent[];
   totalEvents: number;
@@ -173,7 +165,6 @@ function EventsTab({
     }
   }
 
-  // Group events by calendar date for the section headers.
   const eventsByDate = events.reduce<Record<string, MemoryEvent[]>>(
     (accumulator, event) => {
       const dateKey = formatDateGroup(event.timestamp);
@@ -185,70 +176,66 @@ function EventsTab({
   );
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Filter bar */}
-      <div className="flex gap-1 px-4 py-2 border-b border-gray-100 shrink-0">
+    <div className="flex flex-col h-full bg-transparent">
+      {/* Filter capsule bar */}
+      <div className="flex gap-1 py-2 shrink-0">
         {EVENT_FILTER_OPTIONS.map((option) => (
           <button
             key={option.value}
             onClick={() => onFilterChange(option.value)}
-            className={`px-2.5 py-1 text-xs rounded-full font-medium transition-colors ${
+            className={`px-2.5 py-1 text-[10px] rounded-full font-medium transition-colors cursor-pointer ${
               eventsTypeFilter === option.value
-                ? "bg-blue-600 text-white"
-                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                ? "bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 shadow-sm"
+                : "bg-zinc-100 dark:bg-zinc-900 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-200/50 dark:hover:bg-zinc-800"
             }`}
           >
             {option.label}
           </button>
         ))}
-        <span className="ml-auto text-xs text-gray-400 self-center">
-          {totalEvents} total
+        <span className="ml-auto text-[10px] text-zinc-400 dark:text-zinc-500 self-center font-medium">
+          {totalEvents} events
         </span>
       </div>
 
-      {/* Event list */}
-      <div className="flex-1 overflow-y-auto px-4 py-2">
+      {/* Scrollable event lists */}
+      <div className="flex-1 overflow-y-auto py-3">
         {isLoadingEvents && events.length === 0 && (
-          <p className="text-xs text-gray-400 py-4 text-center">Loading…</p>
+          <p className="text-xs text-zinc-400 dark:text-zinc-500 py-4 text-center">Loading events…</p>
         )}
         {!isLoadingEvents && events.length === 0 && (
-          <p className="text-xs text-gray-400 py-4 text-center">
-            No events found.
-          </p>
+          <p className="text-xs text-zinc-400 dark:text-zinc-500 py-4 text-center">No events found.</p>
         )}
 
         {Object.entries(eventsByDate).map(([dateLabel, dateEvents]) => (
-          <div key={dateLabel} className="mb-3">
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide
-                          py-1 sticky top-0 bg-white">
+          <div key={dateLabel} className="mb-4">
+            <p className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-1 px-1">
               {dateLabel}
             </p>
             <div className="flex flex-col gap-0.5">
               {dateEvents.map((event) => (
                 <div
                   key={event.id}
-                  className="flex items-start gap-2 py-1.5 px-2 rounded-lg
-                             hover:bg-gray-50 group transition-colors"
+                  className="flex items-start gap-2.5 py-1.5 px-2 rounded-xl hover:bg-zinc-50/50 dark:hover:bg-zinc-900/10 group transition-colors"
                 >
-                  <span className="text-base shrink-0 mt-0.5">
+                  <span className="text-sm shrink-0 select-none mt-0.5">
                     {eventTypeIcon(event.type)}
                   </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline gap-1.5">
-                      <span className="text-xs font-medium text-gray-800">
-                        {event.app_name ?? "Unknown"}
+                  <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 truncate">
+                        {event.app_name ?? "System"}
                       </span>
-                      <span className="text-xs text-gray-400">
+                      <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-medium">
                         {formatTimestamp(event.timestamp)}
                       </span>
                     </div>
-                    <p className="text-xs text-gray-500 truncate">
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate font-light leading-relaxed">
                       {truncate(event.raw_content)}
                     </p>
                   </div>
                   <TrashButton
                     onClick={() => onDelete(event.id)}
-                    label={`Delete event from ${event.app_name}`}
+                    label={`Delete event`}
                   />
                 </div>
               ))}
@@ -260,10 +247,9 @@ function EventsTab({
           <button
             onClick={handleLoadMore}
             disabled={loadingMore}
-            className="w-full py-2 text-xs text-blue-600 hover:text-blue-800
-                       disabled:opacity-50 transition-colors font-medium"
+            className="w-full py-2 text-xs font-semibold text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-white disabled:opacity-50 transition-colors cursor-pointer mt-1"
           >
-            {loadingMore ? "Loading…" : "Load more"}
+            {loadingMore ? "Loading…" : "Load older events"}
           </button>
         )}
       </div>
@@ -271,10 +257,7 @@ function EventsTab({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Sessions tab
-// ---------------------------------------------------------------------------
-
+// ─── Sessions Tab ────────────────────────────────────────────────────────────
 interface SessionsTabProps {
   sessions: MemorySession[];
   totalSessions: number;
@@ -305,81 +288,76 @@ function SessionRow({ session, onDelete }: SessionRowProps) {
 
   return (
     <>
-      <div className="border border-gray-100 rounded-xl mb-2 overflow-hidden">
-        {/* Session header row */}
-        <div className="flex items-start gap-2 p-3">
+      <div className="rounded-2xl mb-2 overflow-hidden bg-zinc-50/10 dark:bg-zinc-900/10">
+        {/* Header summary info */}
+        <div className="flex items-start gap-2.5 p-3.5">
           <button
-            onClick={() => setIsExpanded((previous) => !previous)}
-            aria-label={isExpanded ? "Collapse session" : "Expand session"}
-            className="text-gray-400 hover:text-gray-600 transition-colors
-                       text-xs mt-0.5 shrink-0"
+            onClick={() => setIsExpanded((prev) => !prev)}
+            aria-label={isExpanded ? "Collapse" : "Expand"}
+            className="text-zinc-400 dark:text-zinc-600 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors mt-0.5 shrink-0 cursor-pointer"
           >
-            {isExpanded ? "▾" : "▸"}
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={`transform transition-transform ${isExpanded ? "rotate-90" : ""}`}>
+              <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
           </button>
 
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 flex flex-col gap-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-semibold text-gray-900">
-                {session.project_name ?? "Unnamed session"}
+              <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 truncate">
+                {session.project_name ?? "Unnamed Session"}
               </span>
-              {/* Event count badge */}
-              <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5
-                               rounded-full font-medium shrink-0">
+              <span className="text-[9px] bg-zinc-100 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">
                 {session.event_count} event{session.event_count !== 1 ? "s" : ""}
               </span>
-              <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5
-                               rounded-full font-medium shrink-0">
+              <span className="text-[9px] bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">
                 {durationLabel}
               </span>
             </div>
             {session.goal && (
-              <p className="text-xs text-gray-500 mt-0.5 truncate">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 font-light truncate leading-relaxed">
                 {session.goal}
               </p>
             )}
-            <p className="text-xs text-gray-400 mt-0.5">{startLabel}</p>
+            <p className="text-[10px] text-zinc-400 dark:text-zinc-500 font-medium">{startLabel}</p>
           </div>
 
           <TrashButton
             onClick={() => setShowDeleteConfirm(true)}
-            label={`Delete session ${session.project_name}`}
+            label={`Delete session`}
           />
         </div>
 
-        {/* Expanded summary */}
+        {/* Dynamic drop-down summaries */}
         {isExpanded && parsedSummary && (
-          <div className="border-t border-gray-100 bg-gray-50 px-4 py-3
-                          text-xs text-gray-700 space-y-2">
+          <div className="bg-zinc-50/50 dark:bg-zinc-900/20 px-4 py-3 text-xs text-zinc-600 dark:text-zinc-300 space-y-3 font-light leading-relaxed">
             {parsedSummary.summary && (
-              <p className="leading-relaxed">{parsedSummary.summary}</p>
+              <p className="font-light">{parsedSummary.summary}</p>
             )}
-            {parsedSummary.key_resources &&
-              parsedSummary.key_resources.length > 0 && (
-                <div>
-                  <p className="font-semibold text-gray-500 mb-1">Had open:</p>
-                  <ul className="space-y-0.5">
-                    {parsedSummary.key_resources.map((resource, index) => (
-                      <li key={index} className="flex items-start gap-1">
-                        <span className="text-gray-400">→</span>
-                        <span className="break-all">{resource}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+            {parsedSummary.key_resources && parsedSummary.key_resources.length > 0 && (
+              <div className="pt-1.5">
+                <p className="font-bold text-zinc-400 dark:text-zinc-500 text-[10px] uppercase tracking-wider mb-1">Key Context Items</p>
+                <ul className="space-y-1">
+                  {parsedSummary.key_resources.map((resource, index) => (
+                    <li key={index} className="flex items-start gap-2">
+                      <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium">→</span>
+                      <span className="break-all text-zinc-500 dark:text-zinc-400">{resource}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {parsedSummary.last_action && (
-              <p>
-                <span className="font-semibold text-gray-500">Last action: </span>
-                {parsedSummary.last_action}
+              <p className="pt-1.5 text-[11px]">
+                <span className="font-bold text-zinc-400 dark:text-zinc-500 text-[10px] uppercase tracking-wider">Last Action: </span>
+                <span className="text-zinc-500 dark:text-zinc-400">{parsedSummary.last_action}</span>
               </p>
             )}
           </div>
         )}
 
-        {/* Raw JSON fallback when summary isn't in the expected shape */}
         {isExpanded && !parsedSummary && session.ai_summary && (
-          <div className="border-t border-gray-100 bg-gray-50 px-4 py-3">
-            <pre className="text-xs text-gray-600 whitespace-pre-wrap break-all">
+          <div className="bg-zinc-50/50 dark:bg-zinc-900/20 px-4 py-3">
+            <pre className="text-xs text-zinc-500 dark:text-zinc-400 whitespace-pre-wrap break-all font-mono">
               {session.ai_summary}
             </pre>
           </div>
@@ -415,17 +393,19 @@ function SessionsTab({
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 shrink-0">
-        <span className="text-xs text-gray-400">{totalSessions} sessions generated</span>
+    <div className="flex flex-col h-full bg-transparent">
+      <div className="flex items-center justify-between py-2 shrink-0">
+        <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-bold uppercase tracking-wider">
+          {totalSessions} sessions generated
+        </span>
       </div>
-      <div className="flex-1 overflow-y-auto px-4 py-3">
+      <div className="flex-1 overflow-y-auto py-3">
         {isLoadingSessions && sessions.length === 0 && (
-          <p className="text-xs text-gray-400 py-4 text-center">Loading…</p>
+          <p className="text-xs text-zinc-400 dark:text-zinc-500 py-4 text-center">Loading sessions…</p>
         )}
         {!isLoadingSessions && sessions.length === 0 && (
-          <p className="text-xs text-gray-400 py-4 text-center">
-            No sessions yet. Sessions are generated every 30 minutes.
+          <p className="text-xs text-zinc-400 dark:text-zinc-500 py-4 text-center italic">
+            No sessions yet. Synthesized summaries generate every 30 minutes.
           </p>
         )}
 
@@ -437,10 +417,9 @@ function SessionsTab({
           <button
             onClick={handleLoadMore}
             disabled={loadingMore}
-            className="w-full py-2 text-xs text-blue-600 hover:text-blue-800
-                       disabled:opacity-50 transition-colors font-medium"
+            className="w-full py-2 text-xs font-semibold text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-white disabled:opacity-50 transition-colors cursor-pointer mt-1"
           >
-            {loadingMore ? "Loading…" : "Load more"}
+            {loadingMore ? "Loading…" : "Load older sessions"}
           </button>
         )}
       </div>
@@ -448,10 +427,7 @@ function SessionsTab({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Feedback bar
-// ---------------------------------------------------------------------------
-
+// ─── Feedback Bar ────────────────────────────────────────────────────────────
 interface FeedbackBarProps {
   onSubmit: (
     rating: "positive" | "negative",
@@ -461,18 +437,13 @@ interface FeedbackBarProps {
 }
 
 function FeedbackBar({ onSubmit }: FeedbackBarProps) {
-  const [selectedRating, setSelectedRating] = useState<
-    "positive" | "negative" | null
-  >(null);
+  const [selectedRating, setSelectedRating] = useState<"positive" | "negative" | null>(null);
   const [comment, setComment] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   function handleRatingClick(rating: "positive" | "negative"): void {
-    // Second click on the same rating closes the form.
-    setSelectedRating((previous) =>
-      previous === rating ? null : rating
-    );
+    setSelectedRating((prev) => (prev === rating ? null : rating));
     setSubmitted(false);
   }
 
@@ -490,53 +461,52 @@ function FeedbackBar({ onSubmit }: FeedbackBarProps) {
   }
 
   return (
-    <div className="border-t border-gray-100 px-4 py-2 shrink-0">
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-gray-400">How's Orbit's memory?</span>
-        <button
-          onClick={() => handleRatingClick("positive")}
-          className={`text-base transition-opacity ${
-            selectedRating === "positive" ? "opacity-100" : "opacity-40 hover:opacity-80"
-          }`}
-          aria-label="Positive feedback"
-        >
-          👍
-        </button>
-        <button
-          onClick={() => handleRatingClick("negative")}
-          className={`text-base transition-opacity ${
-            selectedRating === "negative" ? "opacity-100" : "opacity-40 hover:opacity-80"
-          }`}
-          aria-label="Negative feedback"
-        >
-          👎
-        </button>
+    <div className="pt-3 pb-1 shrink-0 bg-transparent flex flex-col gap-2">
+      <div className="flex items-center gap-3">
+        <span className="text-[11px] font-semibold text-zinc-400 dark:text-zinc-500">How is Orbit's memory?</span>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => handleRatingClick("positive")}
+            className={`text-sm p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-950 transition-colors cursor-pointer ${
+              selectedRating === "positive" ? "opacity-100" : "opacity-40 hover:opacity-85"
+            }`}
+            aria-label="Thumbs up"
+          >
+            👍
+          </button>
+          <button
+            onClick={() => handleRatingClick("negative")}
+            className={`text-sm p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-950 transition-colors cursor-pointer ${
+              selectedRating === "negative" ? "opacity-100" : "opacity-40 hover:opacity-85"
+            }`}
+            aria-label="Thumbs down"
+          >
+            👎
+          </button>
+        </div>
         {submitted && (
-          <span className="text-xs text-green-600 font-medium ml-1">
-            Thanks!
+          <span className="text-xs text-emerald-500 font-semibold ml-1 animate-in fade-in duration-200">
+            Received!
           </span>
         )}
       </div>
 
       {selectedRating !== null && (
-        <div className="mt-2 flex gap-2">
+        <div className="flex gap-2 animate-in slide-in-from-bottom-2 duration-200">
           <input
             type="text"
             value={comment}
-            onChange={(event) => setComment(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") handleSubmit();
+            onChange={(e) => setComment(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSubmit();
             }}
-            placeholder="Optional comment…"
-            className="flex-1 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5
-                       focus:outline-none focus:ring-1 focus:ring-blue-400
-                       placeholder-gray-400"
+            placeholder="Add optional comment…"
+            className="flex-1 text-xs bg-zinc-100 dark:bg-zinc-900 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-zinc-400/20 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 border-0"
           />
           <button
             onClick={handleSubmit}
             disabled={isSubmitting}
-            className="px-3 py-1.5 text-xs rounded-lg bg-blue-600 text-white
-                       hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 hover:opacity-90 disabled:opacity-50 transition-colors cursor-pointer"
           >
             Send
           </button>
@@ -546,10 +516,7 @@ function FeedbackBar({ onSubmit }: FeedbackBarProps) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// MemoryViewer — root export
-// ---------------------------------------------------------------------------
-
+// ─── MemoryViewer Root ───────────────────────────────────────────────────────
 type MemoryTab = "events" | "sessions";
 
 export function MemoryViewer() {
@@ -574,30 +541,28 @@ export function MemoryViewer() {
   } = useMemoryData();
 
   return (
-    <div className="flex flex-col h-screen bg-white font-sans">
-      {/* Header */}
-      <div className="px-4 pt-4 pb-2 shrink-0">
-        <h2 className="text-lg font-semibold text-gray-900">Memory</h2>
-      </div>
-
-      {/* Tab bar */}
-      <div className="flex border-b border-gray-200 px-4 shrink-0">
+    <div className="flex flex-col h-full bg-transparent font-sans">
+      {/* Sub-tab selection bar */}
+      <div className="flex shrink-0">
         {(["events", "sessions"] as MemoryTab[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`pb-2 mr-5 text-sm font-medium capitalize transition-colors ${
+            className={`pb-2.5 mr-5 text-[11px] font-bold uppercase tracking-wider transition-colors cursor-pointer relative ${
               activeTab === tab
-                ? "border-b-2 border-blue-600 text-blue-600"
-                : "text-gray-500 hover:text-gray-700"
+                ? "text-zinc-900 dark:text-white"
+                : "text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
             }`}
           >
             {tab}
+            {activeTab === tab && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-zinc-900 dark:bg-white rounded-full animate-in fade-in zoom-in duration-200" />
+            )}
           </button>
         ))}
       </div>
 
-      {/* Tab content — flex-1 so it fills the remaining space and scrolls internally */}
+      {/* Tab content view frame */}
       <div className="flex-1 min-h-0">
         {activeTab === "events" ? (
           <EventsTab
@@ -622,7 +587,7 @@ export function MemoryViewer() {
         )}
       </div>
 
-      {/* Feedback bar — always visible at the bottom */}
+      {/* Feedbacks */}
       <FeedbackBar onSubmit={submitFeedback} />
     </div>
   );
