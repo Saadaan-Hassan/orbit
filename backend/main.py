@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -14,12 +15,21 @@ from routes.privacy import router as privacy_router
 from routes.recall import router as recall_router
 from scheduler import create_session_scheduler
 from services.qdrant_service import initialize_qdrant_collection
+from services.sentry_service import initialise_sentry_error_reporting
 
 load_dotenv()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    sentry_dsn = os.getenv("SENTRY_DSN", "")
+    if sentry_dsn:
+        initialise_sentry_error_reporting(
+            sentry_dsn=sentry_dsn,
+            app_environment=os.getenv("APP_ENVIRONMENT", "beta"),
+            app_version=os.getenv("APP_VERSION", "0.1.0"),
+        )
+
     await create_all_tables()
     await initialize_qdrant_collection()
 
