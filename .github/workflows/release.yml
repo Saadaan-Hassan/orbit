@@ -105,6 +105,14 @@ jobs:
           echo "Signed sidecar:"
           codesign -dv "backend/dist/orbit-backend-${TARGET_TRIPLE}"
 
+      # ── Decode signing key ────────────────────────────────────────────────
+      # TAURI_SIGNING_PRIVATE_KEY secret stores the raw base64 file content
+      # (exactly what `cat ~/.tauri/orbit-signing-key.key` prints on disk).
+      # We decode it to a temp file and pass the path to Tauri — this avoids
+      # GitHub mangling multi-line secret values on paste.
+      - name: Decode signing key to temp file
+        run: echo "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" | base64 --decode > /tmp/orbit-signing-key.key
+
       # ── Build and release ─────────────────────────────────────────────────
       # tauri-apps/tauri-action@v0 is the stable major-version-pinned tag.
       # includeUpdaterJson: true uploads latest.json as a release asset so the
@@ -113,9 +121,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Ed25519 signing key — store both secrets in:
-          #   GitHub repo → Settings → Secrets and variables → Actions
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # Use the file path instead of the raw key string — avoids multiline
+          # secret mangling that causes "Missing comment in secret key" errors.
+          TAURI_SIGNING_PRIVATE_KEY_PATH: /tmp/orbit-signing-key.key
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Vite bakes these into the frontend bundle at build time
           VITE_POSTHOG_PROJECT_KEY: ${{ secrets.VITE_POSTHOG_PROJECT_KEY }}
