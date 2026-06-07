@@ -15,7 +15,7 @@
 import { z } from "zod";
 import { Resend } from "resend";
 import { supabase } from "@/lib/supabase";
-import WaitlistConfirmation from "@/emails/WaitlistConfirmation";
+import WaitlistConfirmation from "@/emails/waitlist-confirmation";
 
 // ─── Validation schema ────────────────────────────────────────────────────────
 
@@ -93,13 +93,16 @@ export async function joinWaitlist(
 
   // 3. Send confirmation email via Resend.
   const fromAddress =
-    process.env.RESEND_FROM_EMAIL ?? "hello@tryorbit.app";
+    process.env.RESEND_FROM_EMAIL ?? "no-reply@saadaan.dev";
+
+  const replyTo = process.env.REPLY_TO_EMAIL;
 
   const { error: emailError } = await resend.emails.send({
     from: `Orbit <${fromAddress}>`,
     to: email,
-    subject: "You're on the Orbit waitlist 🪐",
+    subject: "You're on the Orbit waitlist",
     react: WaitlistConfirmation({ name }),
+    ...(replyTo ? { replyTo } : {}),
   });
 
   if (emailError) {
