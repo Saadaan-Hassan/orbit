@@ -9,8 +9,8 @@ export default function Header() {
           <Image
             src="/logo.png"
             alt="Orbit Logo"
-            width={26}
-            height={26}
+            width={48}
+            height={48}
             className="object-cover"
           />
         </div>

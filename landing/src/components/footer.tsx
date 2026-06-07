@@ -3,7 +3,7 @@ import Image from "next/image";
 
 export default function Footer() {
   return (
-    <footer className="relative z-10 py-6 border-t border-white/5 w-full">
+    <footer className="relative z-10 py-6 w-full">
       <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 text-sm text-zinc-500 font-light px-6">
         <div className="flex items-center gap-1">
           <Image
@@ -19,7 +19,7 @@ export default function Footer() {
               href="https://saadaan.dev"
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-white transition-colors cursor-pointer hover:underline"
+              className="hover:text-white transition-colors cursor-pointer underline"
               aria-label="My Website"
             >
               {" "}
@@ -28,7 +28,7 @@ export default function Footer() {
             · © {new Date().getFullYear()} ·{" "}
             <Link
               href="/privacy"
-              className="hover:text-white transition-colors cursor-pointer hover:underline"
+              className="hover:text-white transition-colors cursor-pointer underline"
             >
               Privacy Policy
             </Link>
