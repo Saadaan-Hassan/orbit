@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import create_all_tables
 from routes.capture import router as capture_router
+from scheduler import create_session_scheduler
 
 load_dotenv()
 
@@ -14,7 +15,13 @@ load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await create_all_tables()
+
+    session_scheduler = create_session_scheduler()
+    session_scheduler.start()
+
     yield
+
+    session_scheduler.shutdown(wait=False)
 
 
 app = FastAPI(lifespan=lifespan)
