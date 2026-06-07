@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 
 from database import _async_engine
+from services.analytics_service import capture_analytics_event
 from services.claude_service import generate_session_summary
 from services.gemini_service import classify_events_batch
 from services.qdrant_service import add_session_embedding, initialize_qdrant_collection
@@ -186,8 +187,14 @@ async def generate_sessions_from_recent_events() -> None:
     # ------------------------------------------------------------------
     # Step 5 — Parse Claude's response and persist the Session row
     # ------------------------------------------------------------------
+    # Strip markdown fences if Claude wraps the JSON in ```json ... ```
+    cleaned_response = raw_claude_response.strip()
+    if cleaned_response.startswith("```"):
+        cleaned_response = cleaned_response.split("\n", 1)[-1]
+        cleaned_response = cleaned_response.rsplit("```", 1)[0].strip()
+
     try:
-        session_data = json.loads(raw_claude_response.strip())
+        session_data = json.loads(cleaned_response)
     except json.JSONDecodeError as json_parse_error:
         logger.error(
             "Session generator: failed to parse Claude JSON: %s. "
@@ -300,6 +307,11 @@ async def generate_sessions_from_recent_events() -> None:
             ),
             {"session_id": new_session_id, **id_bindings},
         )
+
+    capture_analytics_event("session_generated", {
+        "event_count": len(classified_events),
+        "project_detected": bool(project_name),
+    })
 
     logger.info(
         "Session generator: marked %d event(s) with session_id %s. Run complete.",

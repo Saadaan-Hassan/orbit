@@ -9,6 +9,7 @@ dependencies = [
     "apscheduler>=3.10",
     "fastapi>=0.136.3",
     "httpx>=0.28.1",
+    "posthog>=7.18.0",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
     "qdrant-client>=1.18.0",

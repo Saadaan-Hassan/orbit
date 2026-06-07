@@ -15,6 +15,7 @@ from routes.privacy import router as privacy_router
 from routes.recall import router as recall_router
 from scheduler import create_session_scheduler
 from services.qdrant_service import initialize_qdrant_collection
+from services.analytics_service import capture_analytics_event
 from services.sentry_service import initialise_sentry_error_reporting
 
 load_dotenv()
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await create_all_tables()
     await initialize_qdrant_collection()
+    capture_analytics_event("app_started")
 
     session_scheduler = create_session_scheduler()
     session_scheduler.start()

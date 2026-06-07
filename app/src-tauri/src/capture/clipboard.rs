@@ -43,20 +43,62 @@ fn ethereum_address_regex() -> &'static Regex {
 
 // Checked via str::starts_with — no regex needed, faster and unambiguous.
 const KNOWN_API_KEY_PREFIXES: &[&str] = &[
-    "sk-",       // OpenAI / Anthropic secret keys
-    "AIza",      // Google API keys
-    "AKIA",      // AWS Access Key IDs
-    "xoxb-",     // Slack bot tokens
-    "ghp_",      // GitHub personal access tokens
-    "gho_",      // GitHub OAuth tokens
-    "ghs_",      // GitHub server-to-server tokens
-    "pk_live_",  // Stripe publishable live keys
-    "sk_live_",  // Stripe secret live keys
-    "pk_test_",  // Stripe publishable test keys
-    "sk_test_",  // Stripe secret test keys
-    "pa-",       // Voyage AI / PaLM API keys
-    "sntrys_",   // Sentry organisation auth tokens
-    "re_",       // Resend API keys
+    // OpenAI / Anthropic
+    "sk-",
+    // Google APIs (Maps, YouTube, Firebase, etc.)
+    "AIza",
+    // AWS access key IDs
+    "AKIA",
+    // Slack — bot, user, app, and refresh tokens
+    "xoxb-",
+    "xoxp-",
+    "xoxa-",
+    "xoxr-",
+    "xapp-",
+    // GitHub — classic PATs, OAuth, server-to-server, fine-grained PATs, refresh
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "github_pat_",
+    "ghr_",
+    // GitLab — personal, project/group access tokens, deploy tokens
+    "glpat-",
+    "glptt-",
+    "gldt-",
+    // Stripe — live/test publishable+secret, restricted, webhook signing secrets
+    "pk_live_",
+    "sk_live_",
+    "pk_test_",
+    "sk_test_",
+    "rk_live_",
+    "rk_test_",
+    "whsec_",
+    // Voyage AI / PaLM
+    "pa-",
+    // Sentry organisation auth tokens
+    "sntrys_",
+    // Resend email API keys
+    "re_",
+    // PostHog API keys
+    "phc_",
+    // SendGrid
+    "SG.",
+    // npm access tokens
+    "npm_",
+    // HuggingFace user access tokens
+    "hf_",
+    // DigitalOcean personal access tokens
+    "dop_v1_",
+    // Shopify access tokens and shared secrets
+    "shpat_",
+    "shpss_",
+    "shpca_",
+    // Supabase service role / secret keys
+    "sb_secret_",
+    // Linear API keys
+    "lin_api_",
+    // Cloudflare API tokens
+    "cf_",
 ];
 
 // PEM header fragments that identify a private key block.
@@ -404,6 +446,86 @@ mod tests {
     fn detects_resend_api_key() {
         assert_eq!(
             detect_sensitive_content_type("re_14MnVmp8_MzvoDCe3ZV7SnLaeKKvGj5mH"),
+            Some("api_key"),
+        );
+    }
+
+    #[test]
+    fn detects_posthog_api_key() {
+        assert_eq!(
+            detect_sensitive_content_type("phc_zwWNeoMtL7wrCvmMbkNq7fQkSa7PVrgC3TrWzh9rp3DM"),
+            Some("api_key"),
+        );
+    }
+
+    #[test]
+    fn detects_sendgrid_api_key() {
+        assert_eq!(
+            detect_sensitive_content_type("SG.abc123XYZdefghijklmnopqrstuvwxyz"),
+            Some("api_key"),
+        );
+    }
+
+    #[test]
+    fn detects_npm_token() {
+        assert_eq!(
+            detect_sensitive_content_type("npm_abc123DEF456ghi789JKL012mno345"),
+            Some("api_key"),
+        );
+    }
+
+    #[test]
+    fn detects_huggingface_token() {
+        assert_eq!(
+            detect_sensitive_content_type("hf_abcdefghijklmnopqrstuvwxyz123456"),
+            Some("api_key"),
+        );
+    }
+
+    #[test]
+    fn detects_github_fine_grained_pat() {
+        assert_eq!(
+            detect_sensitive_content_type("github_pat_11ABCDEF_abcdefghijklmnopqrstuvwxyz0123456789"),
+            Some("api_key"),
+        );
+    }
+
+    #[test]
+    fn detects_gitlab_pat() {
+        assert_eq!(
+            detect_sensitive_content_type("glpat-abcdefghijklmnopqrst"),
+            Some("api_key"),
+        );
+    }
+
+    #[test]
+    fn detects_stripe_webhook_secret() {
+        assert_eq!(
+            detect_sensitive_content_type("whsec_abcdefghijklmnopqrstuvwxyz012345"),
+            Some("api_key"),
+        );
+    }
+
+    #[test]
+    fn detects_supabase_secret_key() {
+        assert_eq!(
+            detect_sensitive_content_type("sb_secret_RBgPp12uvjFiggCvatd_zg_pSoyIcP1"),
+            Some("api_key"),
+        );
+    }
+
+    #[test]
+    fn detects_slack_user_token() {
+        assert_eq!(
+            detect_sensitive_content_type("xoxp-123456789-abcdefghijklmnopqrstuvwxyz"),
+            Some("api_key"),
+        );
+    }
+
+    #[test]
+    fn detects_digitalocean_token() {
+        assert_eq!(
+            detect_sensitive_content_type("dop_v1_abcdefghijklmnopqrstuvwxyz0123456789"),
             Some("api_key"),
         );
     }

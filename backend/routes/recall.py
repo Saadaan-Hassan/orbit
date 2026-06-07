@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from database import search_events_fts
+from services.analytics_service import capture_analytics_event
 from services.claude_service import stream_recall_response
 from services.qdrant_service import search_sessions_semantic
 
@@ -142,6 +143,11 @@ async def _stream_sse_recall(query: str) -> AsyncGenerator[str, None]:
         len(keyword_matched_events),
         len(semantic_matched_sessions),
     )
+
+    capture_analytics_event("recall_query_made", {
+        "had_results": bool(keyword_matched_events or semantic_matched_sessions),
+        "result_count": len(keyword_matched_events) + len(semantic_matched_sessions),
+    })
 
     context_block = _build_context_block(
         keyword_matched_events,
