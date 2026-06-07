@@ -4,12 +4,17 @@ import { ActivityTimeline } from "./components/ActivityTimeline";
 import { MemoryViewer } from "./components/MemoryViewer";
 import { PrivacyPanel } from "./components/PrivacyPanel";
 import { RecallSearch } from "./components/RecallSearch";
+import { useUpdater } from "./hooks/useUpdater";
 
 // The tray menu emits "navigate" events with one of these panel names.
 type ActivePanel = "chat" | "memory" | "privacy";
 
 function App() {
   const [activePanel, setActivePanel] = useState<ActivePanel>("chat");
+
+  // Check for a new GitHub release once on startup. The plugin shows the
+  // native "update available" dialog and relaunches after installation.
+  useUpdater();
 
   useEffect(() => {
     // Listen for navigation events emitted by the Rust tray menu handler.

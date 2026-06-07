@@ -22,6 +22,12 @@ where
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Auto-updater: checks the endpoint in tauri.conf.json on startup.
+        // tauri-plugin-dialog drives the "update available" prompt natively.
+        // tauri-plugin-process provides relaunch() after the update installs.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // Removes dock icon and Cmd+Tab entry on macOS.
             // Info.plist handles bundled builds; this covers dev mode.

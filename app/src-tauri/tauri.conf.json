@@ -47,6 +47,16 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEyQzQ5QzM1QTU3NDlGQkUKUldTK24zU2xOWnpFRXZRRVVoWjFQaHNWaDY0TXJjeEd4T1pLRUhQTU16cUh3QVZDdmZnREN3YlkK",
+      "endpoints": [
+        "https://raw.githubusercontent.com/saadaanhassan/orbit/main/releases/latest.json"
+      ],
+      "dialog": true
+    }
   }
 }

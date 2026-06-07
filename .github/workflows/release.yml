@@ -1,0 +1,125 @@
+name: Release
+
+# Trigger by pushing a version tag: git tag v0.2.0 && git push origin v0.2.0
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-macos:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            runner: macos-13          # Intel — last runner with x86_64
+          - target: aarch64-apple-darwin
+            runner: macos-latest      # Apple Silicon
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install Node + pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm i -g pnpm
+
+      - name: Install Python + uv
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      # Cache Cargo registry and build artefacts across runs.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('app/src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: pnpm install
+
+      - name: Build and sign Tauri app
+        working-directory: app
+        env:
+          # These are the two secrets you added in GitHub → Settings → Secrets.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build --target ${{ matrix.target }}
+
+      # Upload the signed .dmg and its .tar.gz + .sig companion as release assets.
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.tar.gz
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.tar.gz.sig
+
+  # After both platform builds succeed, update releases/latest.json and
+  # commit it back to main so the updater endpoint serves the new version.
+  update-release-manifest:
+    needs: build-macos
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Download the .sig files produced by the build jobs so we can embed
+      # their content as the "signature" field in latest.json.
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: sigs
+
+      - name: Write releases/latest.json
+        env:
+          TAG: ${{ github.ref_name }}   # e.g. "v0.2.0"
+        run: |
+          VERSION="${TAG#v}"            # strip the leading "v"
+          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          SIG_X64=$(cat sigs/*x64*.dmg.tar.gz.sig 2>/dev/null || echo "")
+          SIG_ARM=$(cat sigs/*aarch64*.dmg.tar.gz.sig 2>/dev/null || echo "")
+
+          cat > releases/latest.json <<EOF
+          {
+            "version": "$VERSION",
+            "notes": "See https://github.com/saadaanhassan/orbit/releases/tag/$TAG",
+            "pub_date": "$PUB_DATE",
+            "platforms": {
+              "darwin-x86_64": {
+                "signature": "$SIG_X64",
+                "url": "https://github.com/saadaanhassan/orbit/releases/download/$TAG/orbit_${VERSION}_x64.dmg.tar.gz"
+              },
+              "darwin-aarch64": {
+                "signature": "$SIG_ARM",
+                "url": "https://github.com/saadaanhassan/orbit/releases/download/$TAG/orbit_${VERSION}_aarch64.dmg.tar.gz"
+              }
+            }
+          }
+          EOF
+
+      - name: Commit updated manifest
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add releases/latest.json
+          git commit -m "chore: update release manifest to ${{ github.ref_name }}"
+          git push
