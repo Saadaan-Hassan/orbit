@@ -5,6 +5,47 @@ use tauri::{
 };
 
 // ---------------------------------------------------------------------------
+// Production sidecar state
+//
+// In release builds the backend runs as a bundled PyInstaller binary (sidecar)
+// rather than a uv-spawned uvicorn process. The child handle is stored in Tauri
+// app state so the quit handler can cleanly terminate it.
+// ---------------------------------------------------------------------------
+
+/// Compile-time API keys — injected from CI secrets during `pnpm tauri build`.
+/// In dev mode these are empty; the uv-based backend reads them from backend/.env.
+#[cfg(not(debug_assertions))]
+const SIDECAR_VOYAGE_API_KEY: &str = match option_env!("VOYAGE_API_KEY") {
+    Some(v) => v,
+    None => "",
+};
+#[cfg(not(debug_assertions))]
+const SIDECAR_GEMINI_API_KEY: &str = match option_env!("GEMINI_API_KEY") {
+    Some(v) => v,
+    None => "",
+};
+#[cfg(not(debug_assertions))]
+const SIDECAR_POSTHOG_API_KEY: &str = match option_env!("POSTHOG_API_KEY") {
+    Some(v) => v,
+    None => "",
+};
+#[cfg(not(debug_assertions))]
+const SIDECAR_SENTRY_DSN: &str = match option_env!("SENTRY_DSN_BACKEND") {
+    Some(v) => v,
+    None => "",
+};
+#[cfg(not(debug_assertions))]
+const SIDECAR_WORKER_URL: &str = match option_env!("WORKER_URL") {
+    Some(v) => v,
+    None => "https://orbit-api-proxy.heyorbit.workers.dev",
+};
+
+/// Wraps the sidecar child handle so it can be stored in Tauri app state and
+/// killed cleanly when the user quits.
+#[cfg(not(debug_assertions))]
+struct SidecarHandle(std::sync::Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
+
+// ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
 
@@ -71,6 +112,9 @@ where
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Shell plugin — provides the sidecar() API used in production builds
+        // to spawn the bundled orbit-backend binary.
+        .plugin(tauri_plugin_shell::init())
         // Auto-updater: checks the endpoint in tauri.conf.json on startup.
         // tauri-plugin-dialog drives the "update available" prompt natively.
         // tauri-plugin-process provides relaunch() after the update installs.
@@ -200,8 +244,23 @@ where
                             let _ = app_handle.emit("navigate", panel_name);
                         }
                         "quit" => {
-                            // Run the exit hook (kills FastAPI) before telling
-                            // Tauri to terminate the process.
+                            // In production, kill the bundled sidecar process
+                            // before exiting so port 8000 is not left occupied.
+                            #[cfg(not(debug_assertions))]
+                            {
+                                if let Some(sidecar_state) =
+                                    app_handle.try_state::<SidecarHandle>()
+                                {
+                                    if let Ok(mut guard) = sidecar_state.0.lock() {
+                                        if let Some(child) = guard.take() {
+                                            let _ = child.kill();
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Run the exit hook (kills FastAPI in dev) before
+                            // telling Tauri to terminate the process.
                             if let Ok(mut guard) = exit_hook_cell.lock() {
                                 if let Some(hook) = guard.take() {
                                     hook();
@@ -227,6 +286,35 @@ where
                 };
                 position_window_on_active_monitor(&main_window, startup_mode);
                 let _ = main_window.show();
+            }
+
+            // ── Production sidecar ───────────────────────────────────────────
+            // In release builds the backend runs as a bundled PyInstaller binary
+            // instead of a uv-spawned uvicorn process. Spawn it here, store the
+            // child handle in app state so the quit handler can kill it cleanly.
+            #[cfg(not(debug_assertions))]
+            {
+                use tauri_plugin_shell::ShellExt;
+                let home = std::env::var("HOME").unwrap_or_default();
+                let orbit_db_path = format!("{}/.orbit/orbit.db", home);
+                let qdrant_path = format!("{}/.orbit/qdrant_storage", home);
+
+                let (_rx, sidecar_child) = app
+                    .shell()
+                    .sidecar("orbit-backend")
+                    .expect("orbit-backend sidecar not found in bundle")
+                    .env("ORBIT_DB_PATH", &orbit_db_path)
+                    .env("QDRANT_STORAGE_PATH", &qdrant_path)
+                    .env("WORKER_URL", SIDECAR_WORKER_URL)
+                    .env("VOYAGE_API_KEY", SIDECAR_VOYAGE_API_KEY)
+                    .env("GEMINI_API_KEY", SIDECAR_GEMINI_API_KEY)
+                    .env("POSTHOG_API_KEY", SIDECAR_POSTHOG_API_KEY)
+                    .env("SENTRY_DSN", SIDECAR_SENTRY_DSN)
+                    .env("APP_ENVIRONMENT", "production")
+                    .spawn()
+                    .expect("Failed to spawn orbit-backend sidecar");
+
+                app.manage(SidecarHandle(std::sync::Mutex::new(Some(sidecar_child))));
             }
 
             // Poll GET /health up to 10 times (1-second intervals) so the

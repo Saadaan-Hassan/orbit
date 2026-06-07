@@ -69,6 +69,38 @@ jobs:
         working-directory: app
         run: pnpm install --frozen-lockfile
 
+      # ── Python / PyInstaller backend sidecar ─────────────────────────────
+      # Build the self-contained orbit-backend binary and rename it to include
+      # the target triple so Tauri's externalBin lookup finds it at bundle time.
+      # The .spec file lives in backend/ and references run.py as the entry point.
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install backend dependencies (including PyInstaller)
+        working-directory: backend
+        run: ~/.local/bin/uv sync --all-groups
+
+      - name: Build orbit-backend sidecar with PyInstaller
+        working-directory: backend
+        env:
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: ~/.local/bin/uv run pyinstaller orbit-backend.spec --noconfirm
+
+      # Tauri's externalBin looks for `orbit-backend-{target-triple}` next to
+      # the binary defined in tauri.conf.json. On the macos-latest runner the
+      # target is aarch64-apple-darwin.
+      - name: Rename sidecar binary with target triple
+        run: |
+          TARGET_TRIPLE=$(rustc -vV | grep '^host:' | awk '{print $2}')
+          cp backend/dist/orbit-backend "backend/dist/orbit-backend-${TARGET_TRIPLE}"
+          echo "Sidecar binary: backend/dist/orbit-backend-${TARGET_TRIPLE}"
+
       # ── Build and release ─────────────────────────────────────────────────
       # tauri-apps/tauri-action@v0 is the stable major-version-pinned tag.
       # includeUpdaterJson: true uploads latest.json as a release asset so the
@@ -87,6 +119,13 @@ jobs:
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
           VITE_APP_ENVIRONMENT: production
           VITE_APP_VERSION: ${{ github.ref_name }}
+          # Baked into the sidecar binary at Rust compile time via option_env!()
+          # so the bundled backend never needs a .env file on the user's machine.
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          SENTRY_DSN_BACKEND: ${{ secrets.SENTRY_DSN_BACKEND }}
+          WORKER_URL: ${{ secrets.WORKER_URL }}
         with:
           # The Tauri project lives in app/, not the repo root.
           projectPath: ./app

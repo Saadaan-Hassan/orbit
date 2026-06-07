@@ -53,6 +53,9 @@
       "icons/icon.png"
     ],
     "createUpdaterArtifacts": true,
+    "externalBin": [
+      "../../backend/dist/orbit-backend"
+    ],
     "macOS": {
       "entitlements": "entitlements.plist",
       "exceptionDomain": "localhost",
