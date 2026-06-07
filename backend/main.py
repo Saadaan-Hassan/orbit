@@ -8,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import create_all_tables
 from routes.capture import router as capture_router
+from routes.feedback import router as feedback_router
+from routes.memory import router as memory_router
 from routes.privacy import router as privacy_router
 from routes.recall import router as recall_router
 from scheduler import create_session_scheduler
@@ -42,3 +44,5 @@ app.add_middleware(
 app.include_router(capture_router)
 app.include_router(recall_router)
 app.include_router(privacy_router)
+app.include_router(memory_router)
+app.include_router(feedback_router)

@@ -96,6 +96,18 @@ async def create_all_tables() -> None:
             )
         """))
 
+        # Stores thumbs-up / thumbs-down ratings submitted via the UI after
+        # a recall response. Used to surface quality signals over time.
+        await connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS feedback (
+                id        TEXT PRIMARY KEY,
+                timestamp INTEGER NOT NULL,
+                rating    TEXT NOT NULL,
+                comment   TEXT,
+                context   TEXT
+            )
+        """))
+
         # Apps whose window events are silently dropped at capture time.
         # Seeded with a default list of password managers and system
         # credential stores on first run (when the table is empty).

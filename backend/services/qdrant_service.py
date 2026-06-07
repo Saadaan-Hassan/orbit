@@ -109,6 +109,31 @@ async def initialize_qdrant_collection() -> None:
         )
 
 
+async def delete_session_embedding(embedding_id: str) -> None:
+    """
+    Removes a single point from the Qdrant collection by its embedding_id.
+
+    The embedding_id stored in SQLite is the string form of the integer point
+    ID we derived at upsert time. We convert it back to int before calling
+    Qdrant. If the point no longer exists (e.g. already wiped) this is a no-op.
+    """
+    client = _get_client()
+
+    try:
+        integer_point_id = int(embedding_id)
+    except (ValueError, TypeError):
+        # embedding_id is malformed — nothing useful we can delete.
+        return
+
+    from qdrant_client.models import PointIdsList
+
+    await asyncio.to_thread(
+        client.delete,
+        collection_name=COLLECTION_NAME,
+        points_selector=PointIdsList(points=[integer_point_id]),
+    )
+
+
 async def add_session_embedding(
     session_id: str,
     summary_text: str,
