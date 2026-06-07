@@ -1,16 +1,14 @@
 """
 APScheduler background job runner.
 
-One job runs every 30 minutes: generate_sessions_from_recent_events().
-It consumes raw events from SQLite, classifies them with Gemini, summarises
-them with Claude, and persists the result as a Session row + Qdrant embedding.
-
-The scheduler is started and stopped from main.py's lifespan context manager.
+AsyncIOScheduler runs generate_sessions_from_recent_events() every 30 minutes
+on the FastAPI event loop. The scheduler is started and shut down from
+main.py's lifespan context manager.
 """
 
+import asyncio
 import json
 import logging
-import os
 import uuid
 from datetime import datetime, timezone
 
@@ -20,9 +18,8 @@ from sqlalchemy import text
 
 from database import _async_engine
 from services.claude_service import generate_session_summary
-from services.embedding_service import embed_text
 from services.gemini_service import classify_events_batch
-from services.qdrant_service import upsert_session_embedding
+from services.qdrant_service import add_session_embedding, initialize_qdrant_collection
 
 load_dotenv()
 
@@ -32,7 +29,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# How far back to look for unprocessed events on each scheduler run.
+# How far back to look for unprocessed events on each run.
 EVENT_LOOKBACK_SECONDS = 60 * 60  # 60 minutes
 
 # Minimum number of events required to generate a meaningful session summary.
@@ -60,11 +57,12 @@ Respond with this exact JSON structure:
 # Schema migration helper
 # ---------------------------------------------------------------------------
 
-async def _ensure_session_id_column_exists() -> None:
+async def _ensure_events_schema_columns_exist() -> None:
     """
-    Adds the session_id column to the events table if it is not already
-    present. SQLite does not support IF NOT EXISTS on ALTER TABLE, so we
-    check the schema first and skip the ALTER when the column already exists.
+    Adds session_id and category columns to the events table when absent.
+
+    SQLite does not support IF NOT EXISTS on ALTER TABLE, so we inspect
+    PRAGMA table_info first and only ALTER for missing columns.
     """
     async with _async_engine.begin() as connection:
         pragma_rows = await connection.execute(text("PRAGMA table_info(events)"))
@@ -76,6 +74,12 @@ async def _ensure_session_id_column_exists() -> None:
             )
             logger.info("Added session_id column to events table.")
 
+        if "category" not in existing_column_names:
+            await connection.execute(
+                text("ALTER TABLE events ADD COLUMN category TEXT")
+            )
+            logger.info("Added category column to events table.")
+
 
 # ---------------------------------------------------------------------------
 # Core job
@@ -83,15 +87,14 @@ async def _ensure_session_id_column_exists() -> None:
 
 async def generate_sessions_from_recent_events() -> None:
     """
-    Scheduled job: runs every 30 minutes.
-
     Fetches unprocessed events from the last 60 minutes, classifies them
-    with Gemini, summarises the batch with Claude, persists the Session,
+    with Gemini, summarises the batch with Claude, persists the Session row,
     embeds it in Qdrant, and marks the events as processed.
     """
-    logger.info("Scheduler: starting session generation run.")
+    logger.info("Session generator: starting run.")
 
-    await _ensure_session_id_column_exists()
+    await _ensure_events_schema_columns_exist()
+    await initialize_qdrant_collection()
 
     # ------------------------------------------------------------------
     # Step 1 — Fetch recent unprocessed events
@@ -102,7 +105,7 @@ async def generate_sessions_from_recent_events() -> None:
     )
 
     async with _async_engine.connect() as connection:
-        rows = await connection.execute(
+        result_rows = await connection.execute(
             text(
                 """
                 SELECT id, timestamp, type, raw_content, app_name, url, source
@@ -114,21 +117,22 @@ async def generate_sessions_from_recent_events() -> None:
             ),
             {"cutoff": lookback_cutoff_timestamp_ms},
         )
-        unprocessed_events = [dict(row._mapping) for row in rows.fetchall()]
+        unprocessed_events = [dict(row._mapping) for row in result_rows.fetchall()]
 
     # ------------------------------------------------------------------
     # Step 2 — Guard: skip if too few events for a useful session
     # ------------------------------------------------------------------
     if len(unprocessed_events) < MINIMUM_EVENTS_FOR_SESSION:
         logger.info(
-            "Scheduler: only %d event(s) found (minimum %d). Skipping this run.",
+            "Session generator: only %d event(s) found (minimum %d). Skipping.",
             len(unprocessed_events),
             MINIMUM_EVENTS_FOR_SESSION,
         )
         return
 
     logger.info(
-        "Scheduler: classifying %d event(s) with Gemini.", len(unprocessed_events)
+        "Session generator: classifying %d event(s) with Gemini.",
+        len(unprocessed_events),
     )
 
     # ------------------------------------------------------------------
@@ -139,9 +143,7 @@ async def generate_sessions_from_recent_events() -> None:
     async with _async_engine.begin() as connection:
         for classified_event in classified_events:
             await connection.execute(
-                text(
-                    "UPDATE events SET category = :category WHERE id = :id"
-                ),
+                text("UPDATE events SET category = :category WHERE id = :id"),
                 {
                     "category": classified_event.get("category"),
                     "id":       classified_event["id"],
@@ -167,7 +169,7 @@ async def generate_sessions_from_recent_events() -> None:
         events_json=json.dumps(events_payload_for_prompt, ensure_ascii=False, indent=2)
     )
 
-    logger.info("Scheduler: requesting session summary from Claude.")
+    logger.info("Session generator: requesting summary from Claude.")
 
     try:
         raw_claude_response = await generate_session_summary(
@@ -176,7 +178,7 @@ async def generate_sessions_from_recent_events() -> None:
         )
     except Exception as claude_error:
         logger.error(
-            "Scheduler: Claude summary request failed: %s. Aborting this run.",
+            "Session generator: Claude request failed: %s. Aborting this run.",
             claude_error,
         )
         return
@@ -186,11 +188,11 @@ async def generate_sessions_from_recent_events() -> None:
     # ------------------------------------------------------------------
     try:
         session_data = json.loads(raw_claude_response.strip())
-    except json.JSONDecodeError as json_error:
+    except json.JSONDecodeError as json_parse_error:
         logger.error(
-            "Scheduler: failed to parse Claude JSON response: %s. "
+            "Session generator: failed to parse Claude JSON: %s. "
             "Raw response: %.200s",
-            json_error,
+            json_parse_error,
             raw_claude_response,
         )
         return
@@ -224,7 +226,7 @@ async def generate_sessions_from_recent_events() -> None:
         )
 
     logger.info(
-        "Scheduler: created session %s — project=%s goal=%s",
+        "Session generator: created session %s — project=%s goal=%s",
         new_session_id,
         project_name,
         goal,
@@ -233,8 +235,6 @@ async def generate_sessions_from_recent_events() -> None:
     # ------------------------------------------------------------------
     # Step 6 — Embed the session summary and store in Qdrant
     # ------------------------------------------------------------------
-    # Build a rich text blob so the embedding captures all the context
-    # Claude produced, not just the two-line summary.
     full_text_for_embedding = " | ".join(
         filter(
             None,
@@ -249,26 +249,23 @@ async def generate_sessions_from_recent_events() -> None:
     )
 
     embedding_metadata = {
-        "session_id":   new_session_id,
-        "project_name": project_name,
-        "goal":         goal,
-        "ai_summary":   ai_summary,
-        "last_action":  session_data.get("last_action"),
+        "session_id":    new_session_id,
+        "project_name":  project_name,
+        "goal":          goal,
+        "ai_summary":    ai_summary,
+        "last_action":   session_data.get("last_action"),
         "key_resources": session_data.get("key_resources", []),
-        "start_time":   session_start_timestamp_ms,
-        "end_time":     session_end_timestamp_ms,
+        "start_time":    session_start_timestamp_ms,
+        "end_time":      session_end_timestamp_ms,
     }
 
     try:
-        session_embedding_vector = await embed_text(full_text_for_embedding)
-        await upsert_session_embedding(
+        await add_session_embedding(
             session_id=new_session_id,
-            embedding_vector=session_embedding_vector,
+            summary_text=full_text_for_embedding,
             metadata=embedding_metadata,
         )
 
-        # Persist the Qdrant point ID back to the sessions row so recall
-        # queries can cross-reference SQLite ↔ Qdrant by session UUID.
         async with _async_engine.begin() as connection:
             await connection.execute(
                 text("UPDATE sessions SET embedding_id = :eid WHERE id = :sid"),
@@ -276,7 +273,7 @@ async def generate_sessions_from_recent_events() -> None:
             )
     except Exception as embedding_error:
         logger.warning(
-            "Scheduler: Qdrant upsert failed for session %s: %s. "
+            "Session generator: Qdrant upsert failed for session %s: %s. "
             "Session is saved in SQLite; semantic search will not include it.",
             new_session_id,
             embedding_error,
@@ -287,9 +284,9 @@ async def generate_sessions_from_recent_events() -> None:
     # ------------------------------------------------------------------
     processed_event_ids = [event["id"] for event in unprocessed_events]
 
-    # SQLAlchemy's text() doesn't support list binding directly — build
-    # the placeholder string explicitly from the known-safe UUID list.
-    id_placeholders = ", ".join(f":id_{index}" for index in range(len(processed_event_ids)))
+    id_placeholders = ", ".join(
+        f":id_{index}" for index in range(len(processed_event_ids))
+    )
     id_bindings = {
         f"id_{index}": event_id
         for index, event_id in enumerate(processed_event_ids)
@@ -305,7 +302,7 @@ async def generate_sessions_from_recent_events() -> None:
         )
 
     logger.info(
-        "Scheduler: marked %d event(s) with session_id %s. Run complete.",
+        "Session generator: marked %d event(s) with session_id %s. Run complete.",
         len(processed_event_ids),
         new_session_id,
     )
@@ -319,8 +316,9 @@ def create_session_scheduler() -> AsyncIOScheduler:
     """
     Builds and returns a configured AsyncIOScheduler.
 
-    The caller (main.py lifespan) is responsible for calling .start() and
-    .shutdown() at the right points in the app lifecycle.
+    The caller (main.py lifespan) is responsible for .start() and .shutdown().
+    next_run_time is set to now so the first run happens immediately on startup
+    rather than after a 30-minute wait.
     """
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
@@ -329,8 +327,6 @@ def create_session_scheduler() -> AsyncIOScheduler:
         minutes=30,
         id="generate_sessions",
         name="Generate sessions from recent activity events",
-        # Run once immediately on startup so the first session is generated
-        # without waiting 30 minutes.
         next_run_time=datetime.now(timezone.utc),
     )
     return scheduler

@@ -54,23 +54,31 @@ We are starting Phase 1. Update backend dependencies using uv.
 
 Run these commands in the backend/ directory:
 
-uv add "qdrant-client[fastembed]"
-uv add google-generativeai
-uv add "apscheduler>=4.0"
+uv add qdrant-client
+uv add google-genai
+
+Do NOT install apscheduler v4 — it is explicitly pre-release and unstable.
+Do NOT install qdrant-client[fastembed], sentence-transformers, torch,
+or onnxruntime — none of these have Intel Mac wheels on macOS 26.
+Embeddings are handled by Voyage AI via httpx (already installed).
+Scheduling is handled by a plain asyncio background loop — no scheduler library needed.
 
 After adding, show me the updated pyproject.toml [dependencies] section.
 Do not write any code yet — just add dependencies.
 ```
 
-**Why `qdrant-client[fastembed]`:** The fastembed extra bundles sentence-transformers embedding generation directly into the Qdrant client. We can pass text directly and it handles embedding — no separate embedding pipeline needed.
+**Why plain `qdrant-client`:** The `[fastembed]` extra requires `onnxruntime` which has no Intel Mac wheel on macOS 26. Plain `qdrant-client` is just an HTTP/gRPC client — no ML deps. Voyage AI handles embedding via HTTP.
+
+**Why no APScheduler:** v4 is pre-release and unstable. v3 works but is unnecessary — a plain `asyncio` background loop is simpler and has zero dependencies for one recurring task.
+
+**Get a Voyage AI API key:** https://dash.voyageai.com → free tier, 200M tokens/month.
+Add to `backend/.env`: `VOYAGE_API_KEY=your_key_here`
 
 **✅ Verify:**
 ```bash
 cd backend && uv sync
-# Should install without errors
 uv run python -c "from qdrant_client import QdrantClient; print('qdrant ok')"
-uv run python -c "import google.generativeai as genai; print('gemini ok')"
-uv run python -c "from apscheduler import AsyncScheduler; print('apscheduler ok')"
+uv run python -c "import google.generativeai; print('gemini ok')"
 ```
 
 ---
@@ -131,38 +139,54 @@ sqlite3 ~/.orbit/orbit.db \
 ## Step 3 — Qdrant Local Mode Setup
 
 ```
-We are on Phase 1, Step 3: Qdrant local mode setup.
+We are on Phase 1, Step 3: Qdrant local mode + Voyage AI embeddings.
 
-Create backend/services/qdrant_service.py.
+Create two files:
 
-Use Qdrant's local file mode — no Docker, no server.
-The client is initialized as:
+--- FILE 1: backend/services/voyage_service.py ---
+
+Use the existing singleton httpx.AsyncClient (import get_http_client from
+claude_service.py or create one here following the same singleton pattern).
+Read VOYAGE_API_KEY from env via python-dotenv.
+
+Create one async function:
+
+generate_text_embedding(text_to_embed: str) -> list[float]
+  POST to https://api.voyageai.com/v1/embeddings
+  Headers: Authorization: Bearer {VOYAGE_API_KEY}
+  Body: {"input": [text_to_embed], "model": "voyage-3-lite", "input_type": "document"}
+  Returns: response["data"][0]["embedding"]  — a list of 512 floats
+  On HTTP error: log with print(), raise the error
+
+--- FILE 2: backend/services/qdrant_service.py ---
+
+Use Qdrant local file mode — no Docker, no fastembed, no onnxruntime.
+Initialize ONE QdrantClient at module level (singleton):
   QdrantClient(path=str(Path.home() / ".orbit" / "qdrant_storage"))
 
-This creates a persistent local vector store at ~/.orbit/qdrant_storage/.
+Collection name: "orbit_sessions"
+Vector size: 512 (voyage-3-lite output dimension)
+Distance: Cosine
 
-The collection name is "orbit_sessions". Vectors use the fastembed model
-"sentence-transformers/all-MiniLM-L6-v2" (384 dimensions, cosine distance).
-
-Create these async functions (wrap sync Qdrant client calls in asyncio.to_thread):
+Create these async functions (wrap all sync QdrantClient calls in asyncio.to_thread):
 
 1. initialize_qdrant_collection()
-   Creates the "orbit_sessions" collection if it doesn't exist.
-   Vector size: 384 (all-MiniLM-L6-v2 output size)
-   Distance: Cosine
+   If "orbit_sessions" collection does not exist, create it:
+     VectorParams(size=512, distance=Distance.COSINE)
 
-2. upsert_session_embedding(session_id: str, summary_text: str, metadata: dict)
-   Generates embedding for summary_text using fastembed (via Qdrant client).
-   Upserts a point with the session_id as the point ID (convert to int via hash).
-   Stores metadata as the point payload.
+2. add_session_embedding(session_id: str, summary_text: str, metadata: dict)
+   Call generate_text_embedding(summary_text) to get the 512-dim vector.
+   Convert session_id to a stable integer point ID: abs(hash(session_id)) % (10**9)
+   Upsert to Qdrant:
+     PointStruct(id=point_id, vector=embedding_vector, payload={**metadata, "session_id": session_id})
 
-3. search_sessions_semantic(query_text: str, limit: int = 10) -> list[dict]
-   Embeds the query_text using fastembed.
-   Searches "orbit_sessions" collection.
-   Returns list of payloads from matching points with score >= 0.3.
+3. search_sessions_semantic(query_text: str, result_limit: int = 10) -> list[dict]
+   Call generate_text_embedding(query_text) to get the query vector.
+   Search the collection with that vector, limit=result_limit, score_threshold=0.3.
+   Return list of hit.payload dicts for results above the threshold.
 
-Important: Initialize ONE QdrantClient instance at module level (singleton).
-Never instantiate per request. Follow AGENTS.md conventions.
+Follow all AGENTS.md conventions. Descriptive variable names throughout.
+Show me both complete files.
 ```
 
 **✅ Verify:**
@@ -242,7 +266,7 @@ print(result)
 ```
 We are on Phase 1, Step 5: Automatic session generation every 30 minutes.
 
-Create backend/scheduler.py using APScheduler v4 (AsyncScheduler).
+Create backend/scheduler.py using APScheduler v3 .
 
 The scheduler runs one job every 30 minutes: generate_sessions_from_recent_events()
 
@@ -277,7 +301,7 @@ This function does the following in order:
    id=uuid, start_time=earliest_event_timestamp, end_time=latest_event_timestamp,
    project_name, goal, ai_summary=summary
 
-6. Call upsert_session_embedding() with the session_id and the full summary text
+6. Call add_session_embedding() with the session_id and the full summary text
 
 7. Mark all processed events as belonging to this session (update session_id column)
 
