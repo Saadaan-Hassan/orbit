@@ -1,7 +1,7 @@
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager,
+    Emitter, Manager,
 };
 
 /// Entry point used by main.rs when no exit hook is needed (mobile / tests).
@@ -28,15 +28,31 @@ where
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let open_orbit_menu_item = MenuItem::with_id(
+            let orbit_item = MenuItem::with_id(
                 app,
-                "open_orbit",
-                "Open Orbit",
+                "orbit",
+                "Orbit",
                 true,
                 None::<&str>,
             )?;
 
-            let quit_menu_item = MenuItem::with_id(
+            let memory_item = MenuItem::with_id(
+                app,
+                "memory",
+                "Memory",
+                true,
+                None::<&str>,
+            )?;
+
+            let privacy_item = MenuItem::with_id(
+                app,
+                "privacy",
+                "Privacy",
+                true,
+                None::<&str>,
+            )?;
+
+            let quit_item = MenuItem::with_id(
                 app,
                 "quit",
                 "Quit",
@@ -46,7 +62,7 @@ where
 
             let tray_menu = Menu::with_items(
                 app,
-                &[&open_orbit_menu_item, &quit_menu_item],
+                &[&orbit_item, &memory_item, &privacy_item, &quit_item],
             )?;
 
             TrayIconBuilder::new()
@@ -54,11 +70,26 @@ where
                 .menu(&tray_menu)
                 .on_menu_event(move |app_handle, menu_event| {
                     match menu_event.id.as_ref() {
-                        "open_orbit" => {
-                            if let Some(main_window) = app_handle.get_webview_window("main") {
+                        "orbit" | "memory" | "privacy" => {
+                            // Map the menu item ID directly to the panel name the
+                            // React router expects. "orbit" → "chat", the others
+                            // match their menu ID verbatim.
+                            let panel_name = if menu_event.id.as_ref() == "orbit" {
+                                "chat"
+                            } else {
+                                menu_event.id.as_ref()
+                            };
+
+                            if let Some(main_window) =
+                                app_handle.get_webview_window("main")
+                            {
                                 let _ = main_window.show();
                                 let _ = main_window.set_focus();
                             }
+
+                            // Tell React which panel to render. The "navigate"
+                            // event is listened to in App.tsx via @tauri-apps/api/event.
+                            let _ = app_handle.emit("navigate", panel_name);
                         }
                         "quit" => {
                             // Run the exit hook (kills FastAPI) before telling

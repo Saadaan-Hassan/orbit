@@ -84,9 +84,18 @@ async def get_sessions_paginated(
         data_result = await connection.execute(
             text(
                 """
-                SELECT id, start_time, end_time, project_name, goal, ai_summary, embedding_id
-                FROM   sessions
-                ORDER  BY start_time DESC
+                SELECT s.id,
+                       s.start_time,
+                       s.end_time,
+                       s.project_name,
+                       s.goal,
+                       s.ai_summary,
+                       s.embedding_id,
+                       COUNT(e.id) AS event_count
+                FROM   sessions s
+                LEFT JOIN events e ON e.session_id = s.id
+                GROUP  BY s.id
+                ORDER  BY s.start_time DESC
                 LIMIT  :limit OFFSET :offset
                 """
             ),
