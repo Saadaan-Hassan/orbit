@@ -58,6 +58,10 @@ fn main() {
 
     tokio_runtime.spawn(capture::clipboard::start_clipboard_monitor(
         orbit_database_file_path,
+        sqlx_connection_pool.clone(),
+    ));
+
+    tokio_runtime.spawn(capture::window::start_window_tracker(
         sqlx_connection_pool,
     ));
 
