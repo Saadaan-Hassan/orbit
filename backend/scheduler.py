@@ -20,6 +20,7 @@ from sqlalchemy import text
 
 from database import _async_engine
 from services.claude_service import generate_session_summary
+from services.embedding_service import embed_text
 from services.gemini_service import classify_events_batch
 from services.qdrant_service import upsert_session_embedding
 
@@ -259,9 +260,10 @@ async def generate_sessions_from_recent_events() -> None:
     }
 
     try:
+        session_embedding_vector = await embed_text(full_text_for_embedding)
         await upsert_session_embedding(
             session_id=new_session_id,
-            embedding_vector=await _get_embedding_vector(full_text_for_embedding),
+            embedding_vector=session_embedding_vector,
             metadata=embedding_metadata,
         )
 
@@ -307,18 +309,6 @@ async def generate_sessions_from_recent_events() -> None:
         len(processed_event_ids),
         new_session_id,
     )
-
-
-async def _get_embedding_vector(text_to_embed: str) -> list[float]:
-    """
-    Returns a 384-dimensional embedding vector for the given text.
-
-    Placeholder until embedding_service.py is implemented in a later step.
-    Uses a deterministic zero vector so the pipeline runs end-to-end now
-    and semantic search simply returns no results until real embeddings land.
-    """
-    # TODO(Phase 1 Step 6): replace with embedding_service.embed_text()
-    return [0.0] * 384
 
 
 # ---------------------------------------------------------------------------
