@@ -65,7 +65,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEyQzQ5QzM1QTU3NDlGQkUKUldTK24zU2xOWnpFRXZRRVVoWjFQaHNWaDY0TXJjeEd4T1pLRUhQTU16cUh3QVZDdmZnREN3YlkK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU2QkMzOEUyRkZEOTgxQTMKUldTamdkbi80amk4NXAyV2VYQVRESnJhQlZOV3pDMEg0RHdvWWVjMnczZFAzRU5BcUs2WU9GQkYK",
       "endpoints": [
         "https://github.com/saadaanhassan/orbit/releases/latest/download/latest.json"
       ],
