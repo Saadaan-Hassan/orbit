@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Orbit",
+  "version": "0.1.0",
+  "description": "Orbit browser activity capture",
+  "permissions": ["tabs", "activeTab", "storage"],
+  "background": {
+    "service_worker": "src/background.ts",
+    "type": "module"
+  },
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "js": ["src/content.ts"]
+  }]
+}
