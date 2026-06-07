@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import text
@@ -26,6 +27,49 @@ async def create_all_tables() -> None:
                 source      TEXT NOT NULL
             )
         """))
+        # FTS5 virtual table mirrors the three text columns users are most
+        # likely to search. content='events' tells FTS5 to read from the
+        # events table for snippet/highlight queries rather than duplicating
+        # the data; content_rowid links it back to the events primary key.
+        # porter tokenizer enables stemming so "debugging" matches "debug".
+        await connection.execute(text("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS events_fts
+            USING fts5(
+                raw_content,
+                app_name,
+                url,
+                content='events',
+                content_rowid='rowid',
+                tokenize='porter unicode61'
+            )
+        """))
+
+        # Keep the FTS index in sync with events automatically so callers
+        # never need to manage the index manually.
+        await connection.execute(text("""
+            CREATE TRIGGER IF NOT EXISTS events_fts_insert
+            AFTER INSERT ON events BEGIN
+                INSERT INTO events_fts(rowid, raw_content, app_name, url)
+                VALUES (new.rowid, new.raw_content, new.app_name, new.url);
+            END
+        """))
+        await connection.execute(text("""
+            CREATE TRIGGER IF NOT EXISTS events_fts_update
+            AFTER UPDATE ON events BEGIN
+                UPDATE events_fts
+                SET raw_content = new.raw_content,
+                    app_name    = new.app_name,
+                    url         = new.url
+                WHERE rowid = old.rowid;
+            END
+        """))
+        await connection.execute(text("""
+            CREATE TRIGGER IF NOT EXISTS events_fts_delete
+            AFTER DELETE ON events BEGIN
+                DELETE FROM events_fts WHERE rowid = old.rowid;
+            END
+        """))
+
         await connection.execute(text("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id           TEXT PRIMARY KEY,
@@ -49,6 +93,46 @@ async def create_all_tables() -> None:
                 embedding_id TEXT
             )
         """))
+
+
+def _sanitize_fts5_query(raw_query: str) -> str:
+    # FTS5 treats these characters as syntax operators. Stripping them prevents
+    # user input from accidentally forming broken or malicious FTS5 expressions.
+    # We keep alphanumerics, spaces, hyphens, and apostrophes (needed for
+    # contractions like "don't") and discard everything else.
+    sanitized = re.sub(r'[^\w\s\-\']', ' ', raw_query)
+    # Collapse runs of whitespace so the FTS5 parser sees clean token gaps.
+    return re.sub(r'\s+', ' ', sanitized).strip()
+
+
+async def search_events_fts(query: str, limit: int = 20) -> list[dict]:
+    sanitized_query = _sanitize_fts5_query(query)
+    if not sanitized_query:
+        return []
+
+    async with _async_engine.connect() as connection:
+        result = await connection.execute(
+            text(
+                """
+                SELECT e.id,
+                       e.timestamp,
+                       e.type,
+                       e.raw_content,
+                       e.app_name,
+                       e.url,
+                       e.source
+                FROM   events e
+                JOIN   events_fts fts ON e.rowid = fts.rowid
+                WHERE  events_fts MATCH :query
+                ORDER  BY rank
+                LIMIT  :limit
+                """
+            ),
+            {"query": sanitized_query, "limit": limit},
+        )
+        rows = result.fetchall()
+
+    return [dict(row._mapping) for row in rows]
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
