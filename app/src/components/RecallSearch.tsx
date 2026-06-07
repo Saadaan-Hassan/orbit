@@ -5,14 +5,30 @@ const BACKEND_RECALL_URL = "http://localhost:8000/recall";
 
 type RecallStatus = "idle" | "thinking" | "streaming" | "done" | "error";
 
+// Classify the raw error into a user-facing message.
+function classifyRecallError(rawError: unknown): string {
+  const message = rawError instanceof Error ? rawError.message.toLowerCase() : "";
+  if (
+    message.includes("connect") ||
+    message.includes("network") ||
+    message.includes("failed to fetch") ||
+    message.includes("networkerror")
+  ) {
+    return "Orbit's AI isn't reachable right now. Check your internet connection.";
+  }
+  return "Couldn't get an answer. Try again in a moment.";
+}
+
 interface RecallSearchProps {
   children?: React.ReactNode;
 }
 
 export function RecallSearch({ children }: RecallSearchProps) {
   const [queryInputValue, setQueryInputValue] = useState("");
+  const [lastSubmittedQuery, setLastSubmittedQuery] = useState("");
   const [recallResponse, setRecallResponse] = useState("");
   const [recallStatus, setRecallStatus] = useState<RecallStatus>("idle");
+  const [errorMessage, setErrorMessage] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const { captureEvent } = useAnalytics();
 
@@ -21,12 +37,14 @@ export function RecallSearch({ children }: RecallSearchProps) {
     inputRef.current?.focus();
   }, []);
 
-  async function submitQuery() {
-    const trimmedQuery = queryInputValue.trim();
+  async function submitQuery(queryOverride?: string) {
+    const trimmedQuery = (queryOverride ?? queryInputValue).trim();
     if (!trimmedQuery) return;
 
     captureEvent("recall_query_submitted"); // no query text — privacy
+    setLastSubmittedQuery(trimmedQuery);
     setRecallResponse("");
+    setErrorMessage("");
     setRecallStatus("thinking");
 
     try {
@@ -45,6 +63,7 @@ export function RecallSearch({ children }: RecallSearchProps) {
       const streamReader = response.body.getReader();
       const textDecoder = new TextDecoder();
       let buffer = "";
+      let receivedAnyChunk = false;
 
       while (true) {
         const { done: streamDone, value: chunk } = await streamReader.read();
@@ -66,11 +85,20 @@ export function RecallSearch({ children }: RecallSearchProps) {
             const parsedEvent = JSON.parse(rawJsonPayload);
 
             if (parsedEvent.done === true) {
+              if (!receivedAnyChunk) {
+                // Stream completed but sent no content — no sessions yet
+                setRecallStatus("error");
+                setErrorMessage(
+                  "Orbit is still learning your patterns. Use your computer normally for 30–60 minutes, then ask again."
+                );
+                return;
+              }
               setRecallStatus("done");
               return;
             }
 
             if (typeof parsedEvent.chunk === "string") {
+              receivedAnyChunk = true;
               setRecallResponse((previous) => previous + parsedEvent.chunk);
             }
           } catch {
@@ -79,15 +107,27 @@ export function RecallSearch({ children }: RecallSearchProps) {
         }
       }
 
+      if (!receivedAnyChunk) {
+        setRecallStatus("error");
+        setErrorMessage(
+          "Orbit is still learning your patterns. Use your computer normally for 30–60 minutes, then ask again."
+        );
+        return;
+      }
+
       setRecallStatus("done");
-    } catch {
+    } catch (rawError) {
       setRecallStatus("error");
-      setRecallResponse("Could not reach Orbit backend.");
+      setErrorMessage(classifyRecallError(rawError));
     }
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter") submitQuery();
+  }
+
+  function handleRetry() {
+    submitQuery(lastSubmittedQuery);
   }
 
   return (
@@ -96,7 +136,7 @@ export function RecallSearch({ children }: RecallSearchProps) {
       <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-4 min-h-0">
         {recallStatus === "idle" && children}
 
-        {/* States Indicator */}
+        {/* Thinking indicator */}
         {recallStatus === "thinking" && (
           <div className="flex items-center gap-2 px-1 py-4 text-xs text-zinc-400 dark:text-zinc-500 italic">
             <span className="flex h-1.5 w-1.5 relative">
@@ -121,8 +161,18 @@ export function RecallSearch({ children }: RecallSearchProps) {
 
         {/* Error state */}
         {recallStatus === "error" && (
-          <div className="p-3 rounded-lg bg-red-500/5 text-xs text-red-500 leading-normal">
-            ⚠️ {recallResponse}
+          <div className="flex flex-col gap-3 py-2">
+            <div className="p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 flex flex-col gap-2">
+              <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                {errorMessage}
+              </p>
+            </div>
+            <button
+              onClick={handleRetry}
+              className="self-start px-4 py-2 text-xs font-semibold rounded-lg bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 hover:opacity-90 transition-all cursor-pointer"
+            >
+              Try again
+            </button>
           </div>
         )}
 
@@ -148,7 +198,7 @@ export function RecallSearch({ children }: RecallSearchProps) {
             className="w-full h-11 pl-4 pr-10 bg-zinc-100 dark:bg-zinc-900/60 text-zinc-900 dark:text-zinc-100 rounded-xl text-sm focus:outline-none focus:ring-1 focus:ring-zinc-400/20 dark:focus:ring-zinc-500/10 transition-all placeholder:text-zinc-400 dark:placeholder:text-zinc-500 disabled:opacity-50 border-0"
           />
           <button
-            onClick={submitQuery}
+            onClick={() => submitQuery()}
             disabled={
               !queryInputValue.trim() ||
               recallStatus === "thinking" ||

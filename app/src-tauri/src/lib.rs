@@ -38,6 +38,12 @@ fn get_onboarding_completed() -> bool {
     std::path::Path::new(&format!("{}/.orbit/onboarding_done", home)).exists()
 }
 
+/// Restarts the Tauri application using tauri-plugin-process.
+#[tauri::command]
+fn restart_app(app_handle: tauri::AppHandle) {
+    app_handle.restart();
+}
+
 /// Writes ~/.orbit/onboarding_done to mark onboarding as complete.
 #[tauri::command]
 fn mark_onboarding_completed() {
@@ -223,6 +229,40 @@ where
                 let _ = main_window.show();
             }
 
+            // Poll GET /health up to 10 times (1-second intervals) so the
+            // frontend knows when the backend is actually ready. If it never
+            // responds, emit "backend-unavailable" so the UI can show a message.
+            // Once the backend is confirmed up, emit "backend-ready" so the UI
+            // can dismiss any loading overlay.
+            let health_check_app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let http_client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(1))
+                    .build()
+                    .unwrap_or_default();
+
+                let mut backend_is_up = false;
+                for _ in 0..10 {
+                    if http_client
+                        .get("http://localhost:8000/health")
+                        .send()
+                        .await
+                        .map(|r| r.status().is_success())
+                        .unwrap_or(false)
+                    {
+                        backend_is_up = true;
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+
+                if backend_is_up {
+                    let _ = health_check_app_handle.emit("backend-ready", ());
+                } else {
+                    let _ = health_check_app_handle.emit("backend-unavailable", ());
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -230,6 +270,7 @@ where
             open_accessibility_system_settings,
             get_onboarding_completed,
             mark_onboarding_completed,
+            restart_app,
             position_window,
         ])
         .run(tauri::generate_context!())

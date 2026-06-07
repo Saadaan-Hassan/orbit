@@ -28,6 +28,7 @@ uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 regex = "1"
 tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
 tauri-plugin-global-shortcut = "2.3.2"
 
 # Auto-updater plugins — desktop only (not android / ios).
