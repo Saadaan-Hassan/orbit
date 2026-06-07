@@ -188,7 +188,23 @@ orbit/
 | Keyword search | SQLite FTS5 (built-in) | BM25 ranking, porter tokenizer, zero extra deps |
 | Semantic search | Qdrant local file mode (`~/.orbit/qdrant_storage/`) | No Docker, no server, `QdrantClient(path=...)` |
 
-### Infrastructure
+### Landing Page (landing/)
+| Layer | Tool | Notes |
+|---|---|---|
+| Framework | Next.js 16.2.7 | Latest LTS — App Router only, no Pages Router |
+| Styling | Tailwind CSS v4 | CSS-first config: `@import "tailwindcss"` in globals.css. No `tailwind.config.js` |
+| Email sending | Resend | Server Actions pattern — `'use server'` directive |
+| Email templates | React Email | React components compiled to HTML email |
+| Waitlist storage | Supabase Postgres | Service role key server-side only, never exposed to client |
+| Validation | Zod | All Server Action inputs validated before DB write |
+| Deployment | Vercel | Root directory set to `landing/` |
+
+**Next.js 16 rules:**
+- App Router only — never use Pages Router
+- Server Components by default — add `'use client'` only when needed (event handlers, hooks)
+- Server Actions with `'use server'` for form submissions — no API routes for simple mutations
+- Fetch in Server Components directly — no useEffect for server data
+- `params` and `searchParams` are now async in Next.js 16 — always `await params`
 | Tool | Purpose |
 |---|---|
 | Cloudflare Worker | API key proxy — Claude, ElevenLabs, STT. Keys **never** in app binary |
@@ -215,13 +231,22 @@ orbit/
 | `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + sync triggers on startup. |
 | `backend/scheduler.py` | `start_session_generation_loop()` — `while True: await asyncio.sleep(1800)` loop. `generate_sessions_from_recent_events()` — fetches unprocessed events, classifies with Gemini, summarises with Claude, stores session, embeds with Voyage AI → Qdrant. |
 | `backend/routes/capture.py` | `POST /capture` — receives events from extension + Rust. `GET /events` — returns latest N events for timeline UI. |
-| `backend/routes/recall.py` | `POST /recall` — parallel FTS5 + Qdrant search, merged results sent to Claude, streamed back as SSE. raw_content is safe to forward — secrets were redacted by Rust before DB write. |
+| `backend/routes/recall.py` | `POST /recall` — parallel FTS5 + Qdrant search, merged results sent to Claude, streamed back as SSE. **FTS5 query never includes clipboard raw_content that was redacted.** |
 | `backend/services/claude_service.py` | Claude API via Cloudflare Worker. Singleton `httpx.AsyncClient`. Handles SSE streaming. |
-| `backend/services/gemini_service.py` | Gemini classification. Uses `google-genai` (`from google import genai`). Singleton `genai.Client`. Sends id, type, app_name, timestamp, raw_content (already sanitised by Rust), and url per event. |
+| `backend/services/gemini_service.py` | Gemini classification. Uses `google-genai` (`from google import genai`). Singleton `genai.Client`. Wraps sync `generate_content` in `asyncio.to_thread`. **Only sends app_name + event type to Gemini — never clipboard raw_content.** |
 | `backend/services/voyage_service.py` | Voyage AI embeddings. POST to `api.voyageai.com/v1/embeddings`, model `voyage-3-lite`. Uses singleton httpx client. Returns 512-dim float list. |
 | `backend/services/qdrant_service.py` | Qdrant local file mode. Singleton `QdrantClient(path=~/.orbit/qdrant_storage)`. Collection `orbit_sessions`, 512 dims, cosine distance. `add_session_embedding()` + `search_sessions_semantic()`. |
 | `extension/src/background.ts` | MV3 service worker. Uses `chrome.storage.session` for state (never global vars — service workers terminate when idle). Fails silently if Orbit backend not running. |
-| `worker/src/index.ts` | Cloudflare Worker proxy. `/chat` → Claude, `/tts` → ElevenLabs (stub), `/stt-token` (stub). All API keys in Cloudflare secrets only. |
+| `backend/routes/privacy.py` | Privacy control endpoints: excluded apps CRUD, pause/resume, capture status, full memory wipe. |
+| `backend/routes/feedback.py` | `POST /feedback` — stores user rating + comment in SQLite. |
+| `app/src/components/PrivacyPanel.tsx` | Privacy settings UI: capture toggle, excluded apps list, wipe button with AlertDialog confirmation. |
+| `app/src/components/MemoryViewer.tsx` | Two-tab UI: Events (paginated, filterable, deletable) + Sessions (expandable summaries, deletable). Feedback bar at bottom. |
+| `app/src/hooks/usePrivacySettings.ts` | Hook wrapping all privacy API calls. No fetch() in components — always via hooks. |
+| `app/src/hooks/useMemoryData.ts` | Hook for memory viewer data: events, sessions, pagination, delete operations. |
+| `landing/src/lib/waitlist-actions.ts` | `'use server'` Server Action. Validates with Zod, inserts to Supabase, sends Resend confirmation. Never exposes DB errors to client. |
+| `landing/src/emails/WaitlistConfirmation.tsx` | React Email confirmation template. |
+| `releases/latest.json` | Tauri updater manifest. Updated by GitHub Actions on each release. |
+| `.github/workflows/release.yml` | Builds + signs macOS .dmg on `v*` tag push. Uses tauri-apps/tauri-action. |
 
 ---
 
@@ -281,11 +306,10 @@ These rules are non-negotiable. Every feature must pass through them.
 The event is still written — Orbit knows *you copied something from which app* — just not the sensitive value.
 
 ### AI Context Sanitisation (Python — in scheduler.py and recall.py)
-**The Rust capture layer is the security boundary.** Secrets are redacted before any DB write, so by the time `raw_content` reaches Python it is either safe plaintext or a `[REDACTED:<type>]` placeholder. AI services receive this already-sanitised content.
-
-- Gemini receives: `id`, `type`, `app_name`, `timestamp`, `raw_content` (already sanitised), and `url` for url events — enough to classify accurately.
-- Claude receives: FTS5 event matches (including clipboard `raw_content`, already sanitised) + session summaries (Tier 2). This is what makes recall meaningful — Claude can tell the user what they copied or worked with.
-- **Never pass unsanitised clipboard text to any external API.** The guarantee is upheld by the Rust redaction layer at capture time, not by filtering at the Python layer.
+**Clipboard `raw_content` is NEVER sent to Gemini or Claude.**
+- Gemini receives: `id`, `type`, `app_name`, `timestamp` only — enough to classify, not to leak secrets
+- Claude receives: session summaries (Tier 2), window titles, URLs — never raw clipboard text
+- Clipboard content is local-only: used exclusively for FTS5 keyword search on device
 
 ### App Exclude List
 Password managers (1Password, Bitwarden, etc.) and banking apps must be in the default exclude list. Window events from excluded apps are dropped at capture time in `window.rs`.
@@ -491,7 +515,7 @@ Grant Accessibility first (System Settings → Privacy & Security → Accessibil
 - Put API keys in source code, committed `.env` files, or app binaries.
 - Remove `LSUIElement = true` from Info.plist.
 - Set `focus: true` on the overlay window.
-- Send clipboard content to any external API **before** it has passed through the Rust redaction layer. Post-redaction `raw_content` (safe plaintext or `[REDACTED:<type>]`) is intentionally forwarded to Gemini and Claude for classification and recall.
+- Send clipboard `raw_content` to Gemini, Claude, or any external API.
 - Use global variables in the Chrome Extension service worker.
 - Write synchronous FastAPI route handlers.
 - Use `any` in TypeScript.
