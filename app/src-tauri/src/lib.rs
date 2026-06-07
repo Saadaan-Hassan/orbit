@@ -71,8 +71,16 @@ where
                 &[&orbit_item, &memory_item, &privacy_item, &quit_item],
             )?;
 
+            // Load the dedicated tray icon at compile time so the correct
+            // Orbit icon always appears in the menu bar, regardless of what
+            // Tauri infers as the "default window icon" from the bundle.
+            let tray_icon = tauri::image::Image::from_bytes(
+                include_bytes!("../icons/trayicon.png"),
+            )
+            .expect("trayicon.png must be a valid PNG");
+
             TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(tray_icon)
                 .menu(&tray_menu)
                 .on_menu_event(move |app_handle, menu_event| {
                     match menu_event.id.as_ref() {

@@ -1,6 +1,7 @@
 // Landing page — Server Component.
 // Client interactivity (waitlist form) is isolated in WaitlistForm.tsx.
 
+import Image from "next/image";
 import WaitlistForm from "@/components/WaitlistForm";
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
@@ -30,6 +31,16 @@ function HeroSection() {
       </div>
 
       <div className="relative z-10 flex flex-col items-center gap-6 max-w-3xl mx-auto">
+        {/* Orbit logo */}
+        <Image
+          src="/logo.png"
+          alt="Orbit"
+          width={64}
+          height={64}
+          className="rounded-2xl"
+          priority
+        />
+
         {/* Coming soon badge with pulse dot */}
         <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-xs font-medium text-zinc-400 tracking-wide uppercase">
           <span className="relative flex h-2 w-2">
