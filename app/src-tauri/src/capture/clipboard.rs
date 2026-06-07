@@ -55,6 +55,8 @@ const KNOWN_API_KEY_PREFIXES: &[&str] = &[
     "pk_test_",  // Stripe publishable test keys
     "sk_test_",  // Stripe secret test keys
     "pa-",       // Voyage AI / PaLM API keys
+    "sntrys_",   // Sentry organisation auth tokens
+    "re_",       // Resend API keys
 ];
 
 // PEM header fragments that identify a private key block.
@@ -386,6 +388,22 @@ mod tests {
         );
         assert_eq!(
             detect_sensitive_content_type("STRIPE_SECRET=sk_live_abcdef123456"),
+            Some("api_key"),
+        );
+    }
+
+    #[test]
+    fn detects_sentry_auth_token() {
+        assert_eq!(
+            detect_sensitive_content_type("sntrys_eyJpYXQiOjE3ODA4NTY3MjIsInVybCI6Imh0dHBzOi8vc2VudHJ5LmlvIn0"),
+            Some("api_key"),
+        );
+    }
+
+    #[test]
+    fn detects_resend_api_key() {
+        assert_eq!(
+            detect_sensitive_content_type("re_14MnVmp8_MzvoDCe3ZV7SnLaeKKvGj5mH"),
             Some("api_key"),
         );
     }

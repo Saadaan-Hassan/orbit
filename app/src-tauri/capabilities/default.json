@@ -6,6 +6,15 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "global-shortcut:default"
+    "global-shortcut:default",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-is-visible",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-set-ignore-cursor-events",
+    "core:window:allow-start-dragging"
   ]
 }

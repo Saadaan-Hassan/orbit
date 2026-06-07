@@ -109,13 +109,13 @@ export default function App() {
   if (isCollapsed) {
     return (
       <div
-        className="w-full h-full p-2 flex items-center justify-center select-none"
+        className="w-full h-full flex items-center justify-center select-none"
         style={{ boxSizing: "border-box" }}
       >
         {/* Collapsed Pill UI */}
         <div
           data-tauri-drag-region
-          className="w-[210px] h-[40px] px-3 rounded-full bg-zinc-900/90 dark:bg-black/95 flex items-center justify-between shadow-[0_4px_24px_rgba(0,0,0,0.6)] backdrop-blur-md transition-all duration-300 cursor-grab active:cursor-grabbing"
+          className="w-[210px] h-[40px] px-3 rounded-full bg-zinc-900/90 dark:bg-black/95 flex items-center justify-between transition-all duration-300 cursor-grab active:cursor-grabbing"
         >
           {/* Logo Handle */}
           <div data-tauri-drag-region className="flex items-center gap-1.5 pointer-events-none select-none">
