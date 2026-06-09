@@ -108,10 +108,14 @@ jobs:
       # ── Decode signing key ────────────────────────────────────────────────
       # TAURI_SIGNING_PRIVATE_KEY secret stores the raw base64 file content
       # (exactly what `cat ~/.tauri/orbit-signing-key.key` prints on disk).
-      # We decode it to a temp file and pass the path to Tauri — this avoids
-      # GitHub mangling multi-line secret values on paste.
-      - name: Decode signing key to temp file
-        run: echo "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" | base64 --decode > /tmp/orbit-signing-key.key
+      # We decode it and write it into GITHUB_ENV using the heredoc syntax so
+      # GitHub Actions preserves the multi-line value correctly. Tauri v2 only
+      # supports TAURI_SIGNING_PRIVATE_KEY (not a file path variant).
+      - name: Decode signing key into environment
+        run: |
+          echo "TAURI_SIGNING_PRIVATE_KEY<<EOF" >> $GITHUB_ENV
+          echo "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" | base64 --decode >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
       # ── Build and release ─────────────────────────────────────────────────
       # tauri-apps/tauri-action@v0 is the stable major-version-pinned tag.
@@ -121,9 +125,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Use the file path instead of the raw key string — avoids multiline
-          # secret mangling that causes "Missing comment in secret key" errors.
-          TAURI_SIGNING_PRIVATE_KEY_PATH: /tmp/orbit-signing-key.key
+          # TAURI_SIGNING_PRIVATE_KEY is already in the environment from the
+          # "Decode signing key" step above — no need to set it here again.
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Vite bakes these into the frontend bundle at build time
           VITE_POSTHOG_PROJECT_KEY: ${{ secrets.VITE_POSTHOG_PROJECT_KEY }}
