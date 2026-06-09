@@ -237,7 +237,7 @@ where
                         }
                         "quit" => {
                             // In production, kill the bundled sidecar process
-                            // before exiting so port 8000 is not left occupied.
+                            // before exiting so port 47821 is not left occupied.
                             #[cfg(not(debug_assertions))]
                             {
                                 if let Some(sidecar_state) =
@@ -322,7 +322,7 @@ where
                 let mut backend_is_up = false;
                 for _ in 0..10 {
                     if http_client
-                        .get("http://localhost:8000/health")
+                        .get("http://localhost:47821/health")
                         .send()
                         .await
                         .map(|r| r.status().is_success())

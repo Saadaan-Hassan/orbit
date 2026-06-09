@@ -7,7 +7,7 @@
  * within the same browser session.
  */
 
-const ORBIT_CAPTURE_ENDPOINT = "http://localhost:8000/capture";
+const ORBIT_CAPTURE_ENDPOINT = "http://localhost:47821/capture";
 
 // URL schemes that are browser-internal and should never be sent to Orbit.
 const BLOCKED_URL_PREFIXES = ["chrome://", "chrome-extension://", "about:", "edge://", "brave://"];

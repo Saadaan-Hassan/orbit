@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useAnalytics } from "../hooks/useAnalytics";
 
-const BACKEND_RECALL_URL = "http://localhost:8000/recall";
+const BACKEND_RECALL_URL = "http://localhost:47821/recall";
 
 type RecallStatus = "idle" | "thinking" | "streaming" | "done" | "error";
 

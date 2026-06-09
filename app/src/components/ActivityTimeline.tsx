@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const BACKEND_EVENTS_URL = "http://localhost:8000/events?limit=50";
+const BACKEND_EVENTS_URL = "http://localhost:47821/events?limit=50";
 const REFRESH_INTERVAL_MS = 30_000; // Refresh every 30s to keep timeline active
 
 interface CaptureEvent {
