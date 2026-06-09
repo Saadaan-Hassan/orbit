@@ -115,6 +115,9 @@ jobs:
         run: |
           echo "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" | base64 --decode > /tmp/tauri-signing.key
           echo "TAURI_SIGNING_PRIVATE_KEY=/tmp/tauri-signing.key" >> $GITHUB_ENV
+          # Verify the decoded key has the correct minisign header
+          head -1 /tmp/tauri-signing.key | grep -q "untrusted comment" \
+            || (echo "ERROR: decoded key is missing 'untrusted comment' header — secret is corrupt" && exit 1)
 
       # ── Build and release ─────────────────────────────────────────────────
       # tauri-apps/tauri-action@v0 is the stable major-version-pinned tag.
