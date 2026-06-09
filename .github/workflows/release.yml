@@ -108,14 +108,13 @@ jobs:
       # ── Decode signing key ────────────────────────────────────────────────
       # TAURI_SIGNING_PRIVATE_KEY secret stores the raw base64 file content
       # (exactly what `cat ~/.tauri/orbit-signing-key.key` prints on disk).
-      # We decode it and write it into GITHUB_ENV using the heredoc syntax so
-      # GitHub Actions preserves the multi-line value correctly. Tauri v2 only
-      # supports TAURI_SIGNING_PRIVATE_KEY (not a file path variant).
-      - name: Decode signing key into environment
+      # Tauri v2 accepts TAURI_SIGNING_PRIVATE_KEY as either a key string OR
+      # a file path. We decode to a temp file and pass the path — this
+      # completely bypasses multiline secret mangling in GitHub Actions.
+      - name: Decode signing key to temp file
         run: |
-          echo "TAURI_SIGNING_PRIVATE_KEY<<EOF" >> $GITHUB_ENV
-          echo "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" | base64 --decode >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          echo "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" | base64 --decode > /tmp/tauri-signing.key
+          echo "TAURI_SIGNING_PRIVATE_KEY=/tmp/tauri-signing.key" >> $GITHUB_ENV
 
       # ── Build and release ─────────────────────────────────────────────────
       # tauri-apps/tauri-action@v0 is the stable major-version-pinned tag.
@@ -125,8 +124,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # TAURI_SIGNING_PRIVATE_KEY is already in the environment from the
-          # "Decode signing key" step above — no need to set it here again.
+          # TAURI_SIGNING_PRIVATE_KEY is set to a file path via GITHUB_ENV in
+          # the "Decode signing key" step above — Tauri v2 accepts a path.
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Vite bakes these into the frontend bundle at build time
           VITE_POSTHOG_PROJECT_KEY: ${{ secrets.VITE_POSTHOG_PROJECT_KEY }}
