@@ -26,6 +26,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-and-release:
     runs-on: macos-latest   # Apple Silicon (M-series) runner
+    environment: dev
 
     steps:
       - uses: actions/checkout@v4
