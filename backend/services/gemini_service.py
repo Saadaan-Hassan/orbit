@@ -55,11 +55,19 @@ _http_client = httpx.AsyncClient(timeout=HTTP_REQUEST_TIMEOUT_SECONDS)
 # ---------------------------------------------------------------------------
 
 def _build_classification_prompt(events: list[dict]) -> str:
-    """Strips events down to the fields Gemini needs — keeps token counts low."""
-    # raw_content is safe to include here: Rust's capture layer redacts all
-    # secrets (API keys, JWTs, private keys, etc.) before writing to SQLite,
-    # so by the time events reach this function raw_content is either
-    # innocuous plaintext or a [REDACTED:<type>] placeholder.
+    """
+    Builds the JSON prompt payload for Gemini classification.
+
+    Fields sent per event: id, type, app_name, url, raw_content.
+
+    raw_content is safe to send — Rust's capture layer redacts all secrets
+    (API keys, JWTs, private keys, credit cards, SSNs, etc.) before any
+    SQLite write, so by the time events reach this function raw_content is
+    either innocuous plaintext or a [REDACTED:<type>] placeholder.
+    Gemini needs the actual content — app names alone are not enough to
+    classify accurately (e.g. distinguishing a work YouTube tab from a
+    personal one requires the page title or URL).
+    """
     stripped_events = [
         {
             "id":          event.get("id", ""),

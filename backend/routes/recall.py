@@ -27,24 +27,26 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 RECALL_SYSTEM_PROMPT = """\
-You are Orbit, an AI memory companion.
-You have access to summaries of the user's recent computer activity.
-Answer their question directly and specifically, like a colleague who \
-was watching their screen.
+You are Orbit, the user's personal AI memory. You've been quietly watching
+everything they work on. You know their projects, their patterns, their
+unfinished tasks. Respond like a trusted colleague who genuinely cares
+about helping them pick up where they left off — warm, specific, honest.
 
-Format your response as:
-📌 [Time period] — [App or context]
+Rules:
+- Be specific. Name actual files, URLs, project names from the context.
+- Be honest. If the context doesn't answer the question, say so clearly.
+  Never guess or make things up.
+- Connect the dots. If the question relates to a previous session, say so:
+  "This looks related to what you were debugging on Tuesday."
+- Keep it concise. One structured answer, not an essay.
+- If they seem to be resuming a task, proactively remind them where they
+  left off — even if they didn't explicitly ask.
+- Never use developer-specific language. Respond in plain language anyone
+  can understand, adapted to the context of what the user was actually doing.
 
-[What they were doing, specifically]
-
-You had open:
-→ [resource 1]
-→ [resource 2]
-
-Last action: [most recent relevant thing]
-
-Be specific. Use exact file names, URLs, and project names from the context.
-If the context doesn't answer the question, say so honestly.\
+Format: start with 📌 [time + context anchor], then the specific answer,
+then supporting details only if genuinely useful. Skip any section that
+has nothing real to say.\
 """
 
 # ---------------------------------------------------------------------------
@@ -53,6 +55,7 @@ If the context doesn't answer the question, say so honestly.\
 
 class RecallRequest(BaseModel):
     query: str
+    conversation_history: list[dict] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -121,13 +124,16 @@ def _build_context_block(
 # SSE generator
 # ---------------------------------------------------------------------------
 
-async def _stream_sse_recall(query: str) -> AsyncGenerator[str, None]:
+async def _stream_sse_recall(
+    query: str,
+    conversation_history: list[dict] | None,
+) -> AsyncGenerator[str, None]:
     """
     Runs the full recall pipeline and yields SSE-formatted strings.
 
     1. FTS5 + Qdrant searched in parallel via asyncio.gather.
     2. Results merged into a context block.
-    3. Claude streamed via the Cloudflare Worker.
+    3. Claude streamed via the Cloudflare Worker with prior conversation turns.
     4. Each text delta yielded as:  data: {"chunk": "..."}\n\n
     5. Final sentinel yielded as:   data: {"done": true}\n\n
     """
@@ -163,6 +169,7 @@ async def _stream_sse_recall(query: str) -> AsyncGenerator[str, None]:
         async for text_delta in stream_recall_response(
             system_prompt=RECALL_SYSTEM_PROMPT,
             user_prompt=user_prompt,
+            conversation_history=conversation_history,
         ):
             yield f"data: {json.dumps({'chunk': text_delta})}\n\n"
     except Exception as streaming_error:
@@ -184,7 +191,7 @@ from typing import AsyncGenerator  # noqa: E402  (placed after helper defs for r
 @router.post("/recall")
 async def recall(request: RecallRequest) -> StreamingResponse:
     return StreamingResponse(
-        _stream_sse_recall(request.query),
+        _stream_sse_recall(request.query, request.conversation_history),
         media_type="text/event-stream",
         headers={
             # Prevent any proxy or browser from buffering the SSE stream.

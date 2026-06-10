@@ -39,7 +39,7 @@ same experience, AI adapts to what they actually do.
 | **APScheduler v3.x (stable)** | Session generation uses `AsyncIOScheduler` from `apscheduler.schedulers.asyncio` — this is v3.x stable. Import path: `from apscheduler.schedulers.asyncio import AsyncIOScheduler`. Never use APScheduler v4 (`from apscheduler import AsyncScheduler`) — that is explicitly pre-release and unstable. |
 | **Rust writes SQLite directly** | Clipboard + window events → SQLite directly from Rust. Never through FastAPI. Only the Chrome Extension POSTs to FastAPI. |
 | **No Docker for Qdrant** | `QdrantClient(path="~/.orbit/qdrant_storage")` local file mode. No server, no Docker. |
-| **Clipboard never reaches AI** | Clipboard `raw_content` used for local FTS5 search only. Never sent to Gemini, Claude, or Voyage AI. |
+| **Secrets redacted at capture, content flows to AI** | Clipboard secrets become `[REDACTED:type]` in `clipboard.rs` BEFORE any DB write. After that, `raw_content` (window titles, URLs, safe clipboard text) IS sent to Gemini and Claude — they need it to write useful summaries. App names alone are meaningless. The redaction layer is what makes this safe. |
 | **Personal events excluded from work recall** | `category = 'personal'` events excluded from Claude context unless user explicitly asks about personal activity. |
 | **Conversation history is stateful** | Last 4 turns kept in Zustand, passed with every `/recall` request. Claude is NOT stateless per query. Max 4 turns to control token cost. |
 
@@ -338,13 +338,13 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `app/src-tauri/tauri.conf.json` | Two windows: `main` (panel, skipTaskbar, transparent, decorations:false) and `overlay` (Phase 4: fullscreen, alwaysOnTop, focus:false, transparent). |
 | `backend/main.py` | FastAPI with `@asynccontextmanager` lifespan. Inits Sentry, starts `asyncio.create_task(start_session_generation_loop())`. No APScheduler. GET /health endpoint. |
 | `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + sync triggers on startup. |
-| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now` so first run is immediate. `generate_sessions_from_recent_events()`: fetch → classify (Gemini via Worker) → summarise (Claude Haiku via Worker) → Qdrant embed (Voyage via Worker) → mark events processed. **Clipboard `raw_content` must be filtered out of the Claude payload** — only window/url event `raw_content` goes to Claude. Redacted values (`[REDACTED:type]`) are harmless but clipboard content should stay local. |
+| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now` so first run is immediate. `generate_sessions_from_recent_events()`: fetch → classify (Gemini via Worker) → summarise (Claude Haiku via Worker) → Qdrant embed (Voyage via Worker) → mark events processed. Sends redacted `raw_content` to Claude (secrets already stripped at capture). Splits on project change. Force-processes events >2h old with null session_id. |
 | `backend/routes/recall.py` | Parallel FTS5 + Qdrant. Re-ranks by `(similarity × 0.7) + (recency × 0.3)`. Excludes personal events. Parses time references. Accepts `conversation_history`. Falls back to FTS5-only if Worker unreachable (offline). |
 | `backend/routes/capture.py` | POST /capture (extension only — Rust writes direct). Checks pause state + exclude list (cached 30s). GET /events for timeline. GET /health. |
 | `backend/routes/privacy.py` | Excluded apps CRUD, pause/resume, capture status, full data wipe (SQLite + Qdrant). |
 | `backend/routes/feedback.py` | POST /feedback — stores rating + comment in SQLite. |
 | `backend/services/claude_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/chat`. Handles SSE streaming. Uses Claude Haiku for session gen, Claude Sonnet for recall. Accepts `conversation_history` param. |
-| `backend/services/gemini_service.py` | Singleton `httpx.AsyncClient` (can share with claude_service). POST to `WORKER_URL/classify`. Builds Gemini REST API body. Extracts text from `candidates[0].content.parts[0].text`. Sends ONLY: `id, type, app_name, timestamp` — never `raw_content`. Falls back to `category='work'` if JSON parse fails. |
+| `backend/services/gemini_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/classify`. Builds Gemini REST API body. Extracts text from `candidates[0].content.parts[0].text`. Sends `id, type, app_name, url, raw_content` — raw_content is already redacted at capture, so it's safe and needed for accurate classification. Falls back to `category='work'` if JSON parse fails. |
 | `backend/services/voyage_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/embed`. Body: `{"input": [text], "model": "voyage-3-lite", "input_type": "document"}`. Returns 512-dim float list. |
 | `backend/services/qdrant_service.py` | `QdrantClient(path=~/.orbit/qdrant_storage)` singleton. Collection `orbit_sessions`, 512 dims, cosine. Raw vector upsert (no fastembed). `add_session_embedding()` + `search_sessions_semantic()`. |
 | `backend/services/analytics_service.py` | PostHog Python singleton. Device ID in `~/.orbit/device_id`. Strips forbidden property keys. try/except on every call — never crashes the app. |
@@ -486,11 +486,31 @@ Event is still written — Orbit knows you copied something from which app, not 
 
 ### AI Context Rules
 
-- Gemini receives: `id, type, app_name, timestamp` only
-- Claude recall receives: session summaries + window titles + URLs only
-- Claude session gen receives: classified events (window/url raw_content only, never clipboard)
-- `category = 'personal'` events excluded from work recall context
-- Offline mode: FTS5 results returned directly, no Claude call
+**The principle:** Secrets are redacted at capture time (Rust). Everything that
+reaches the database is already safe. AI services need real content to write
+useful summaries — app names alone are meaningless. So we DO send content, but
+only content that has already passed through redaction.
+
+- **Gemini (classification)** receives: `id, type, app_name, url, raw_content`
+  (raw_content is already redacted — `[REDACTED:type]` for any secret). Gemini
+  needs the content to classify accurately ("is this work or personal?").
+- **Claude (session summaries)** receives: classified events with `app_name`,
+  `url`, `window title`, and `raw_content` — all already redacted. Claude needs
+  this to write a summary that actually describes what the user did.
+- **Claude (recall)** receives: session summaries + matching events (window
+  titles, URLs, redacted clipboard content).
+
+**What makes this safe:**
+- Secrets never reach the database — redaction happens in `clipboard.rs` before
+  any write. By the time AI sees content, `sk-abc123` is already `[REDACTED:api_key]`.
+- Password manager and banking app events never captured (exclude list).
+- `category = 'personal'` events excluded from work recall context.
+- All AI calls go through the Cloudflare Worker over encrypted HTTPS.
+- Nothing is stored on the AI providers' side (no training, stateless calls).
+
+**What is still never sent:**
+- Raw secret values (they don't exist past the redaction layer).
+- Personal-category events in response to work queries.
 
 ### App Exclude List
 
@@ -720,7 +740,8 @@ and auto-advances when granted.
 - Put API keys in source code, committed files, or app binary.
 - Remove `LSUIElement = true` from Info.plist.
 - Set `focus: true` on the overlay window.
-- Send clipboard `raw_content` to any external API.
+- Send raw secret values to any AI — but redacted `raw_content` (window titles, URLs, safe clipboard text) IS sent; secrets are already stripped at capture time.
+- Capture from password managers or banking apps (exclude list).
 - Include `category = 'personal'` events in work recall context.
 - Pass more than 4 turns in `conversation_history` — token cost.
 - Use global variables in the Chrome Extension service worker.

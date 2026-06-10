@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-const BACKEND_BASE_URL = "http://localhost:47821";
+import { BACKEND_BASE_URL } from "@/lib/config";
 const EVENTS_PAGE_SIZE = 50;
 const SESSIONS_PAGE_SIZE = 20;
 

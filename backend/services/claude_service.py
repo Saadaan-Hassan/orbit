@@ -59,6 +59,7 @@ _http_client = httpx.AsyncClient(timeout=HTTP_REQUEST_TIMEOUT_SECONDS)
 async def stream_recall_response(
     system_prompt: str,
     user_prompt: str,
+    conversation_history: list[dict] | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Sends a streaming chat request to Claude via the Cloudflare Worker and
@@ -69,18 +70,29 @@ async def stream_recall_response(
     a JSON object with type "content_block_delta".
 
     Args:
-        system_prompt: Recall persona and formatting instructions.
-        user_prompt:   User query + merged context from FTS5 and Qdrant.
+        system_prompt:        Recall persona and formatting instructions.
+        user_prompt:          User query + merged context from FTS5 and Qdrant.
+        conversation_history: Prior turns from Zustand (max 4 turns = 8 messages).
+                              Each entry is {"role": "user"|"assistant", "content": "..."}.
 
     Yields:
         Plain text delta strings from each content_block_delta event.
     """
+    # Strip any client-only fields (e.g. timestamp) and skip malformed entries.
+    # Anthropic's messages API only accepts {role, content} per message.
+    prior_messages = [
+        {"role": msg["role"], "content": msg["content"]}
+        for msg in (conversation_history or [])
+        if msg.get("role") in ("user", "assistant") and msg.get("content")
+    ]
+
     request_payload = {
         "model": RECALL_MODEL,
         "max_tokens": 1024,
         "stream": True,
         "system": system_prompt,
         "messages": [
+            *prior_messages,
             {"role": "user", "content": user_prompt},
         ],
     }
