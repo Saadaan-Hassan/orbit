@@ -107,13 +107,28 @@ def _build_context_block(
         for session in semantic_matched_sessions:
             start_time_ms = session.get("start_time", 0)
             readable_timestamp = _format_timestamp_as_human_readable(start_time_ms)
-            project = session.get("project_name") or "unknown project"
-            goal    = session.get("goal") or ""
-            summary = session.get("ai_summary") or ""
-            context_lines.append(
-                f"  [{readable_timestamp}] Project: {project} | "
-                f"Goal: {goal} | Summary: {summary}"
-            )
+            project     = session.get("project_name") or "unknown project"
+            goal        = session.get("goal") or ""
+            summary     = session.get("ai_summary") or ""
+            last_action = session.get("last_action") or ""
+
+            raw_resources = session.get("key_resources") or []
+            if isinstance(raw_resources, str):
+                # Stored as a JSON array string in SQLite; Qdrant payload may
+                # deserialise it as a list already — handle both forms.
+                try:
+                    raw_resources = json.loads(raw_resources)
+                except Exception:
+                    raw_resources = []
+            resources_text = ", ".join(raw_resources) if raw_resources else ""
+
+            context_lines.append(f"  [{readable_timestamp}] Project: {project}")
+            context_lines.append(f"    Goal: {goal}")
+            context_lines.append(f"    Summary: {summary}")
+            if last_action:
+                context_lines.append(f"    Last action: {last_action}")
+            if resources_text:
+                context_lines.append(f"    Resources: {resources_text}")
     else:
         context_lines.append("  (no semantic matches found)")
 

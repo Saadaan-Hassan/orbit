@@ -165,27 +165,33 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     session_start_timestamp = project_events[0]["timestamp"]
     session_end_timestamp   = project_events[-1]["timestamp"]
 
-    project_name = session_data.get("project_name")
-    goal         = session_data.get("goal")
-    ai_summary   = session_data.get("summary", "")
+    project_name  = session_data.get("project_name")
+    goal          = session_data.get("goal")
+    ai_summary    = session_data.get("summary", "")
+    last_action   = session_data.get("last_action")
+    key_resources = json.dumps(session_data.get("key_resources", []))
 
     async with _async_engine.begin() as connection:
         await connection.execute(
             text(
                 """
                 INSERT INTO sessions
-                    (id, start_time, end_time, project_name, goal, ai_summary)
+                    (id, start_time, end_time, project_name, goal, ai_summary,
+                     last_action, key_resources)
                 VALUES
-                    (:id, :start_time, :end_time, :project_name, :goal, :ai_summary)
+                    (:id, :start_time, :end_time, :project_name, :goal, :ai_summary,
+                     :last_action, :key_resources)
                 """
             ),
             {
-                "id":           new_session_id,
-                "start_time":   session_start_timestamp,
-                "end_time":     session_end_timestamp,
-                "project_name": project_name,
-                "goal":         goal,
-                "ai_summary":   ai_summary,
+                "id":            new_session_id,
+                "start_time":    session_start_timestamp,
+                "end_time":      session_end_timestamp,
+                "project_name":  project_name,
+                "goal":          goal,
+                "ai_summary":    ai_summary,
+                "last_action":   last_action,
+                "key_resources": key_resources,
             },
         )
 

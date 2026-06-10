@@ -26,7 +26,9 @@ async def create_all_tables() -> None:
                 raw_content TEXT,
                 app_name    TEXT,
                 url         TEXT,
-                source      TEXT NOT NULL
+                source      TEXT NOT NULL,
+                session_id  TEXT,
+                category    TEXT
             )
         """))
         # FTS5 virtual table mirrors the three text columns users are most
@@ -74,13 +76,15 @@ async def create_all_tables() -> None:
 
         await connection.execute(text("""
             CREATE TABLE IF NOT EXISTS sessions (
-                id           TEXT PRIMARY KEY,
-                start_time   INTEGER NOT NULL,
-                end_time     INTEGER NOT NULL,
-                project_name TEXT,
-                goal         TEXT,
-                ai_summary   TEXT,
-                embedding_id TEXT
+                id            TEXT PRIMARY KEY,
+                start_time    INTEGER NOT NULL,
+                end_time      INTEGER NOT NULL,
+                project_name  TEXT,
+                goal          TEXT,
+                ai_summary    TEXT,
+                last_action   TEXT,
+                key_resources TEXT,
+                embedding_id  TEXT
             )
         """))
         await connection.execute(text("""
