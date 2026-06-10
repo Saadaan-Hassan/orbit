@@ -18,6 +18,7 @@ from database import search_events_fts
 from services.analytics_service import capture_analytics_event
 from services.claude_service import stream_recall_response
 from services.qdrant_service import search_sessions_semantic
+from services.time_parser import extract_time_range_from_query
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -70,9 +71,24 @@ def _format_timestamp_as_human_readable(timestamp_milliseconds: int) -> str:
     return event_datetime.strftime("%b %d %I:%M %p")
 
 
+def _format_time_range_label(time_range: dict) -> str:
+    """Returns a human-readable string like 'this morning (Jun 10, 5 AM–12 PM)'."""
+    start_dt = datetime.fromtimestamp(time_range["start_ms"] / 1000)
+    end_dt   = datetime.fromtimestamp(time_range["end_ms"] / 1000)
+
+    def _fmt_hour(dt: datetime) -> str:
+        # strftime("%I %p") produces "05 PM" — strip the leading zero.
+        return dt.strftime("%I %p").lstrip("0").strip()
+
+    # strftime("%b %d") gives "Jun 01"; replace " 0" → " " gives "Jun 1".
+    date_part = start_dt.strftime("%b %d").replace(" 0", " ")
+    return f"{time_range['label']} ({date_part}, {_fmt_hour(start_dt)}–{_fmt_hour(end_dt)})"
+
+
 def _build_context_block(
     keyword_matched_events: list[dict],
     semantic_matched_sessions: list[dict],
+    time_range: dict | None = None,
 ) -> str:
     """
     Formats the parallel search results into a single context string that
@@ -85,6 +101,13 @@ def _build_context_block(
     # Sending the actual clipboard content is essential for meaningful recall
     # — without it Claude cannot tell the user what they copied or worked with.
     context_lines: list[str] = []
+
+    # --- Time range context (when the query contained a time reference) ---
+    if time_range:
+        context_lines.append(
+            f"User is asking about: {_format_time_range_label(time_range)}"
+        )
+        context_lines.append("")
 
     # --- FTS5 keyword matches ---
     context_lines.append("RECENT ACTIVITY (keyword matches):")
@@ -154,10 +177,36 @@ async def _stream_sse_recall(
     """
     logger.info("Recall: running parallel search for query: %.80s", query)
 
+    now_ms = int(datetime.now().timestamp() * 1000)
+    time_range = extract_time_range_from_query(query, now_ms)
+
+    if time_range:
+        logger.info(
+            "Recall: time reference detected — %s (start=%d end=%d).",
+            time_range["label"], time_range["start_ms"], time_range["end_ms"],
+        )
+
     keyword_matched_events, semantic_matched_sessions = await asyncio.gather(
-        search_events_fts(query, limit=15),
+        search_events_fts(
+            query,
+            limit=15,
+            start_ms=time_range["start_ms"] if time_range else None,
+            end_ms=time_range["end_ms"] if time_range else None,
+        ),
         search_sessions_semantic(query_text=query, result_limit=8),
     )
+
+    # Filter Qdrant sessions to those that overlap the detected time range.
+    # A session overlaps when it started before the range ends AND ended after
+    # the range starts — the standard interval-overlap check.
+    if time_range:
+        semantic_matched_sessions = [
+            session for session in semantic_matched_sessions
+            if (
+                session.get("start_time", 0) <= time_range["end_ms"]
+                and session.get("end_time", 0) >= time_range["start_ms"]
+            )
+        ]
 
     logger.info(
         "Recall: FTS5 returned %d event(s), Qdrant returned %d session(s).",
@@ -168,11 +217,13 @@ async def _stream_sse_recall(
     capture_analytics_event("recall_query_made", {
         "had_results": bool(keyword_matched_events or semantic_matched_sessions),
         "result_count": len(keyword_matched_events) + len(semantic_matched_sessions),
+        "time_filtered": bool(time_range),
     })
 
     context_block = _build_context_block(
         keyword_matched_events,
         semantic_matched_sessions,
+        time_range=time_range,
     )
 
     user_prompt = (
