@@ -85,6 +85,77 @@ def _format_time_range_label(time_range: dict) -> str:
     return f"{time_range['label']} ({date_part}, {_fmt_hour(start_dt)}–{_fmt_hour(end_dt)})"
 
 
+def calculate_recency_score(session_end_time_ms: int, now_ms: int) -> float:
+    """
+    Returns a 0–1 recency score based on how recently the session ended.
+
+    Recency matters for a memory tool because the user is almost always asking
+    about recent work. A semantically similar session from this morning should
+    outrank one from three weeks ago — the older one may be less relevant even
+    if the vocabulary matches better. This decay schedule reflects how quickly
+    work context fades in practice: today's work is fully relevant, last week's
+    work is half as likely to be what the user means, last month's is a distant
+    reference.
+
+    Decay schedule:
+      < 24 h    → 1.0            (today — maximum weight)
+      1–7 days  → 1.0 → 0.5     (linear decay through the work week)
+      7–30 days → 0.5 → 0.2     (older, still potentially relevant)
+      > 30 days → 0.1            (floor — never fully discarded in case it's relevant)
+    """
+    age_ms = max(0, now_ms - session_end_time_ms)
+
+    one_day_ms    = 24 * 60 * 60 * 1_000
+    seven_days_ms = 7  * 24 * 60 * 60 * 1_000
+    thirty_days_ms = 30 * 24 * 60 * 60 * 1_000
+
+    if age_ms < one_day_ms:
+        return 1.0
+    elif age_ms < seven_days_ms:
+        # Linear: 1.0 at 1 day → 0.5 at 7 days
+        progress = (age_ms - one_day_ms) / (seven_days_ms - one_day_ms)
+        return 1.0 - (progress * 0.5)
+    elif age_ms < thirty_days_ms:
+        # Linear: 0.5 at 7 days → 0.2 at 30 days
+        progress = (age_ms - seven_days_ms) / (thirty_days_ms - seven_days_ms)
+        return 0.5 - (progress * 0.3)
+    else:
+        return 0.1
+
+
+def _rerank_sessions_by_combined_score(
+    sessions: list[dict],
+    now_ms: int,
+    time_range_active: bool,
+) -> list[dict]:
+    """
+    Sorts sessions by a combined semantic + recency score, descending.
+
+    When a time range filter is already active (e.g. the user asked about
+    "yesterday"), the sessions are already bounded to a narrow window. Recency
+    differences within that window are small and should not override semantic
+    relevance — reducing the recency weight avoids penalising sessions twice
+    (once by the time filter, again by the recency decay) for being "old" when
+    the user explicitly asked about that period.
+
+    Without time filter: combined = (similarity × 0.7) + (recency × 0.3)
+    With time filter:    combined = (similarity × 0.9) + (recency × 0.1)
+    """
+    if time_range_active:
+        similarity_weight = 0.9
+        recency_weight    = 0.1
+    else:
+        similarity_weight = 0.7
+        recency_weight    = 0.3
+
+    def _combined(session: dict) -> float:
+        semantic = session.get("score", 0.0)
+        recency  = calculate_recency_score(session.get("end_time", 0), now_ms)
+        return (semantic * similarity_weight) + (recency * recency_weight)
+
+    return sorted(sessions, key=_combined, reverse=True)
+
+
 def _build_context_block(
     keyword_matched_events: list[dict],
     semantic_matched_sessions: list[dict],
@@ -207,6 +278,16 @@ async def _stream_sse_recall(
                 and session.get("end_time", 0) >= time_range["start_ms"]
             )
         ]
+
+    # Re-rank sessions by combined score: semantic similarity weighted with
+    # recency. Qdrant returns results ordered by cosine similarity alone;
+    # re-ranking ensures this morning's work beats a 3-week-old session that
+    # happens to match the query vocabulary equally well.
+    semantic_matched_sessions = _rerank_sessions_by_combined_score(
+        semantic_matched_sessions,
+        now_ms=now_ms,
+        time_range_active=time_range is not None,
+    )
 
     logger.info(
         "Recall: FTS5 returned %d event(s), Qdrant returned %d session(s).",
