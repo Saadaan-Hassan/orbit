@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useRecall } from "../hooks/useRecall";
 
 interface RecallSearchProps {
@@ -54,8 +56,23 @@ export function RecallSearch({ children }: RecallSearchProps) {
             </div>
           ) : (
             <div key={index} className="flex justify-start">
-              <div className="max-w-[95%] p-4 rounded-xl bg-zinc-50/50 dark:bg-zinc-900/30 text-sm whitespace-pre-wrap leading-relaxed text-zinc-800 dark:text-zinc-200 font-light select-text">
-                {message.content}
+              <div className="max-w-[95%] px-4 py-3 rounded-xl bg-zinc-50/50 dark:bg-zinc-900/30 select-text">
+                <div className="prose prose-sm prose-zinc dark:prose-invert max-w-none
+                  prose-p:leading-relaxed prose-p:my-1.5
+                  prose-headings:font-semibold prose-headings:my-2
+                  prose-h1:text-base prose-h2:text-sm prose-h3:text-sm
+                  prose-strong:text-zinc-900 dark:prose-strong:text-zinc-100
+                  prose-code:text-xs prose-code:bg-zinc-100 dark:prose-code:bg-zinc-800
+                  prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:font-mono
+                  prose-code:before:content-none prose-code:after:content-none
+                  prose-pre:bg-zinc-100 dark:prose-pre:bg-zinc-800/80 prose-pre:rounded-lg
+                  prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5
+                  prose-hr:border-zinc-200 dark:prose-hr:border-zinc-700 prose-hr:my-3
+                  prose-a:text-blue-600 dark:prose-a:text-blue-400">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {message.content}
+                  </ReactMarkdown>
+                </div>
               </div>
             </div>
           )
@@ -72,11 +89,28 @@ export function RecallSearch({ children }: RecallSearchProps) {
           </div>
         )}
 
-        {/* In-progress streaming response */}
+        {/* In-progress streaming response — same ReactMarkdown rendering as
+            completed messages. Partial markdown syntax (e.g. a lone ** before
+            its closing ** arrives) resolves naturally as more tokens stream in. */}
         {isStreaming && currentResponse && (
           <div className="flex justify-start">
-            <div className="max-w-[95%] p-4 rounded-xl bg-zinc-50/50 dark:bg-zinc-900/30 text-sm whitespace-pre-wrap leading-relaxed text-zinc-800 dark:text-zinc-200 font-light select-text">
-              {currentResponse}
+            <div className="max-w-[95%] px-4 py-3 rounded-xl bg-zinc-50/50 dark:bg-zinc-900/30 select-text">
+              <div className="prose prose-sm prose-zinc dark:prose-invert max-w-none
+                prose-p:leading-relaxed prose-p:my-1.5
+                prose-headings:font-semibold prose-headings:my-2
+                prose-h1:text-base prose-h2:text-sm prose-h3:text-sm
+                prose-strong:text-zinc-900 dark:prose-strong:text-zinc-100
+                prose-code:text-xs prose-code:bg-zinc-100 dark:prose-code:bg-zinc-800
+                prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:font-mono
+                prose-code:before:content-none prose-code:after:content-none
+                prose-pre:bg-zinc-100 dark:prose-pre:bg-zinc-800/80 prose-pre:rounded-lg
+                prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5
+                prose-hr:border-zinc-200 dark:prose-hr:border-zinc-700 prose-hr:my-3
+                prose-a:text-blue-600 dark:prose-a:text-blue-400">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {currentResponse}
+                </ReactMarkdown>
+              </div>
             </div>
           </div>
         )}
