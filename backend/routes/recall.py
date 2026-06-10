@@ -5,10 +5,11 @@ Runs FTS5 keyword search and Qdrant semantic search in parallel, merges the
 results into a context block, then streams Claude's response back as SSE.
 """
 
-import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+
+import httpx
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -44,11 +45,73 @@ Rules:
   left off — even if they didn't explicitly ask.
 - Never use developer-specific language. Respond in plain language anyone
   can understand, adapted to the context of what the user was actually doing.
+- When the user asks about things they watched, read, or browsed for leisure,
+  include the actual links (URLs) so they can revisit them.
 
 Format: start with 📌 [time + context anchor], then the specific answer,
 then supporting details only if genuinely useful. Skip any section that
 has nothing real to say.\
 """
+
+# ---------------------------------------------------------------------------
+# Query intent classification
+#
+# Determines whether the user is asking about work, personal, or general
+# activity. This drives which events are included in search results and
+# what hints are sent to Claude.
+#
+# Currently keyword-based for simplicity. Can be upgraded to an LLM
+# classifier (Gemini via Worker /classify) if keyword matching proves
+# too imprecise in practice — the function signature stays the same.
+# ---------------------------------------------------------------------------
+
+_PERSONAL_INTENT_SIGNALS: frozenset[str] = frozenset({
+    "watch", "watched", "watching", "video", "youtube", "netflix",
+    "movie", "show", "series", "episode", "instagram", "insta",
+    "reddit", "twitter", "x.com", "tiktok", "facebook", "social",
+    "post", "liked", "scrolling", "browsing for fun", "music",
+    "spotify", "listened", "song", "entertainment",
+})
+
+_WORK_INTENT_SIGNALS: frozenset[str] = frozenset({
+    "working on", "work", "building", "coding", "debugging",
+    "project", "fixing", "writing", "task", "code", "file",
+    "editing", "developing",
+})
+
+# Actions that Orbit does NOT capture (it tracks pages visited, not in-app
+# interactions). When detected in a personal query, a limitation note is
+# added to the Claude context so it can set the user's expectations.
+_UNTRACKED_ACTION_SIGNALS: frozenset[str] = frozenset({
+    "liked", "saved", "favorited", "bookmarked", "shared",
+    "commented", "retweeted", "reposted",
+})
+
+
+def classify_query_intent(query: str) -> str:
+    """
+    Returns "work", "personal", or "general" based on keyword matching.
+
+    "general" is the safe default — returned when no signals match, or when
+    both work and personal signals are present (ambiguous intent). In that
+    case all events are included and Claude sorts out the relevance.
+    """
+    query_lower = query.lower()
+    has_personal = any(signal in query_lower for signal in _PERSONAL_INTENT_SIGNALS)
+    has_work     = any(signal in query_lower for signal in _WORK_INTENT_SIGNALS)
+
+    if has_personal and not has_work:
+        return "personal"
+    if has_work and not has_personal:
+        return "work"
+    return "general"
+
+
+def _query_asks_about_untracked_action(query: str) -> bool:
+    """Returns True if the query asks about an in-app action Orbit doesn't capture."""
+    query_lower = query.lower()
+    return any(signal in query_lower for signal in _UNTRACKED_ACTION_SIGNALS)
+
 
 # ---------------------------------------------------------------------------
 # Request schema
@@ -160,6 +223,8 @@ def _build_context_block(
     keyword_matched_events: list[dict],
     semantic_matched_sessions: list[dict],
     time_range: dict | None = None,
+    intent: str = "general",
+    show_action_limitation_note: bool = False,
 ) -> str:
     """
     Formats the parallel search results into a single context string that
@@ -180,6 +245,26 @@ def _build_context_block(
         )
         context_lines.append("")
 
+    # --- Intent hint — tells Claude what kind of answer to produce ---
+    if intent == "personal":
+        context_lines.append(
+            "Query intent: personal — the user is asking about leisure/browsing "
+            "activity. Include relevant links (URLs) in your answer."
+        )
+        if show_action_limitation_note:
+            context_lines.append(
+                "Note: Orbit captures pages you visited, not actions like 'liked' "
+                "or 'saved' inside apps. If you can't determine the specific action, "
+                "tell the user what they were browsing around that time and offer "
+                "the links you do have."
+            )
+        context_lines.append("")
+    elif intent == "work":
+        context_lines.append(
+            "Query intent: work — focus on work activity, ignore leisure browsing."
+        )
+        context_lines.append("")
+
     # --- FTS5 keyword matches ---
     context_lines.append("RECENT ACTIVITY (keyword matches):")
     if keyword_matched_events:
@@ -187,9 +272,20 @@ def _build_context_block(
             readable_timestamp = _format_timestamp_as_human_readable(
                 event.get("timestamp", 0)
             )
-            app_name = event.get("app_name") or "unknown"
+            app_name    = event.get("app_name") or "unknown"
             raw_content = (event.get("raw_content") or "").strip()
-            context_lines.append(f"  [{readable_timestamp}] {app_name}: {raw_content}")
+            url         = (event.get("url") or "").strip()
+
+            # For personal queries, surface the actual URL on url-type events
+            # so Claude can include clickable links in its answer.
+            if intent == "personal" and event.get("type") == "url" and url:
+                context_lines.append(
+                    f"  [{readable_timestamp}] {app_name} — \"{raw_content}\" — {url}"
+                )
+            else:
+                context_lines.append(
+                    f"  [{readable_timestamp}] {app_name}: {raw_content}"
+                )
     else:
         context_lines.append("  (no keyword matches found)")
 
@@ -229,6 +325,38 @@ def _build_context_block(
     return "\n".join(context_lines)
 
 
+def _format_fts5_fallback(events: list[dict]) -> str:
+    """
+    Formats local FTS5 results as a plain readable message for the offline
+    fallback path. Used when the Cloudflare Worker is unreachable so the user
+    always gets something from their local data instead of a blank error.
+    """
+    if not events:
+        return (
+            "I can't reach my AI right now — you may be offline. "
+            "I also couldn't find any matching activity in your recent history."
+        )
+
+    lines = [
+        "I can't reach my AI right now (you may be offline), but here's what "
+        "I found in your recent activity:",
+    ]
+    for event in events:
+        readable_timestamp = _format_timestamp_as_human_readable(
+            event.get("timestamp", 0)
+        )
+        app_name    = event.get("app_name") or "System"
+        raw_content = (event.get("raw_content") or "").strip()
+        if raw_content:
+            # Truncate long content so the fallback stays scannable.
+            display_content = raw_content[:80] + ("…" if len(raw_content) > 80 else "")
+            lines.append(f"• [{readable_timestamp}] {app_name} — {display_content}")
+        else:
+            lines.append(f"• [{readable_timestamp}] {app_name}")
+
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # SSE generator
 # ---------------------------------------------------------------------------
@@ -246,9 +374,9 @@ async def _stream_sse_recall(
     4. Each text delta yielded as:  data: {"chunk": "..."}\n\n
     5. Final sentinel yielded as:   data: {"done": true}\n\n
     """
-    logger.info("Recall: running parallel search for query: %.80s", query)
+    logger.info("Recall: running search for query: %.80s", query)
 
-    now_ms = int(datetime.now().timestamp() * 1000)
+    now_ms     = int(datetime.now().timestamp() * 1000)
     time_range = extract_time_range_from_query(query, now_ms)
 
     if time_range:
@@ -257,70 +385,97 @@ async def _stream_sse_recall(
             time_range["label"], time_range["start_ms"], time_range["end_ms"],
         )
 
-    keyword_matched_events, semantic_matched_sessions = await asyncio.gather(
-        search_events_fts(
-            query,
-            limit=15,
-            start_ms=time_range["start_ms"] if time_range else None,
-            end_ms=time_range["end_ms"] if time_range else None,
-        ),
-        search_sessions_semantic(query_text=query, result_limit=8),
+    # Classify the query's intent so we can control filtering and give Claude
+    # the right framing. "work" excludes personal events; "personal" includes
+    # everything and surfaces URLs; "general" includes everything.
+    intent           = classify_query_intent(query)
+    exclude_personal = intent == "work"
+    asks_about_untracked_action = (
+        intent == "personal" and _query_asks_about_untracked_action(query)
     )
 
-    # Filter Qdrant sessions to those that overlap the detected time range.
-    # A session overlaps when it started before the range ends AND ended after
-    # the range starts — the standard interval-overlap check.
-    if time_range:
-        semantic_matched_sessions = [
-            session for session in semantic_matched_sessions
-            if (
-                session.get("start_time", 0) <= time_range["end_ms"]
-                and session.get("end_time", 0) >= time_range["start_ms"]
-            )
-        ]
-
-    # Re-rank sessions by combined score: semantic similarity weighted with
-    # recency. Qdrant returns results ordered by cosine similarity alone;
-    # re-ranking ensures this morning's work beats a 3-week-old session that
-    # happens to match the query vocabulary equally well.
-    semantic_matched_sessions = _rerank_sessions_by_combined_score(
-        semantic_matched_sessions,
-        now_ms=now_ms,
-        time_range_active=time_range is not None,
+    # Fix B: FTS5 runs first — it is purely local and always works offline.
+    keyword_matched_events = await search_events_fts(
+        query,
+        limit=15,
+        start_ms=time_range["start_ms"] if time_range else None,
+        end_ms=time_range["end_ms"] if time_range else None,
+        exclude_personal=exclude_personal,
     )
 
-    logger.info(
-        "Recall: FTS5 returned %d event(s), Qdrant returned %d session(s).",
-        len(keyword_matched_events),
-        len(semantic_matched_sessions),
-    )
+    logger.info("Recall: FTS5 returned %d event(s).", len(keyword_matched_events))
 
-    capture_analytics_event("recall_query_made", {
-        "had_results": bool(keyword_matched_events or semantic_matched_sessions),
-        "result_count": len(keyword_matched_events) + len(semantic_matched_sessions),
-        "time_filtered": bool(time_range),
-    })
-
-    context_block = _build_context_block(
-        keyword_matched_events,
-        semantic_matched_sessions,
-        time_range=time_range,
-    )
-
-    user_prompt = (
-        f"User question: {query}\n\n"
-        f"Context from their activity:\n{context_block}"
-    )
-
+    # The remaining steps (Qdrant semantic search + Claude synthesis) require
+    # the Cloudflare Worker. If the Worker is unreachable we fall back to the
+    # local FTS5 results so the user always gets something useful.
     try:
+        semantic_matched_sessions = await search_sessions_semantic(
+            query_text=query, result_limit=8
+        )
+
+        # Keep only sessions that overlap the detected time range.
+        if time_range:
+            semantic_matched_sessions = [
+                session for session in semantic_matched_sessions
+                if (
+                    session.get("start_time", 0) <= time_range["end_ms"]
+                    and session.get("end_time", 0) >= time_range["start_ms"]
+                )
+            ]
+
+        # Re-rank by combined semantic + recency score.
+        semantic_matched_sessions = _rerank_sessions_by_combined_score(
+            semantic_matched_sessions,
+            now_ms=now_ms,
+            time_range_active=time_range is not None,
+        )
+
+        logger.info(
+            "Recall: Qdrant returned %d session(s) after filtering and re-ranking.",
+            len(semantic_matched_sessions),
+        )
+
+        capture_analytics_event("recall_query_made", {
+            "had_results":  bool(keyword_matched_events or semantic_matched_sessions),
+            "result_count": len(keyword_matched_events) + len(semantic_matched_sessions),
+            "time_filtered": bool(time_range),
+            "intent":        intent,
+        })
+
+        context_block = _build_context_block(
+            keyword_matched_events,
+            semantic_matched_sessions,
+            time_range=time_range,
+            intent=intent,
+            show_action_limitation_note=asks_about_untracked_action,
+        )
+
+        user_prompt = (
+            f"User question: {query}\n\n"
+            f"Context from their activity:\n{context_block}"
+        )
+
         async for text_delta in stream_recall_response(
             system_prompt=RECALL_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             conversation_history=conversation_history,
         ):
             yield f"data: {json.dumps({'chunk': text_delta})}\n\n"
-    except Exception as streaming_error:
-        logger.error("Recall: streaming error: %s", streaming_error)
+
+    except (httpx.ConnectError, httpx.TimeoutException) as offline_error:
+        # Worker is unreachable — stream the local FTS5 results as plain text
+        # so the user can still see their recent activity while offline.
+        logger.warning(
+            "Recall: Worker unreachable (%s). Falling back to local FTS5 results.",
+            type(offline_error).__name__,
+        )
+        capture_analytics_event("recall_offline_fallback", {
+            "fts5_result_count": len(keyword_matched_events),
+        })
+        yield f"data: {json.dumps({'chunk': _format_fts5_fallback(keyword_matched_events)})}\n\n"
+
+    except Exception as unexpected_error:
+        logger.error("Recall: unexpected error during synthesis: %s", unexpected_error)
         yield f"data: {json.dumps({'chunk': 'Sorry, something went wrong retrieving your memory.'})}\n\n"
 
     yield f"data: {json.dumps({'done': True})}\n\n"

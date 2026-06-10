@@ -200,24 +200,30 @@ async def search_events_fts(
     limit: int = 20,
     start_ms: int | None = None,
     end_ms: int | None = None,
+    exclude_personal: bool = True,
 ) -> list[dict]:
     sanitized_query = _sanitize_fts5_query(query)
     if not sanitized_query:
         return []
 
-    # Build optional timestamp bounds. These are appended as plain AND clauses
+    # Build optional filter clauses. These are appended as plain AND clauses
     # rather than using SQLAlchemy helpers because the FTS5 MATCH expression
     # must remain in the same WHERE clause — splitting it breaks the query.
     # The clause strings are constructed from internal values only, not user
     # input, so there is no injection risk.
-    time_clauses = ""
-    time_params: dict = {}
+    extra_clauses = ""
+    extra_params: dict = {}
+
     if start_ms is not None:
-        time_clauses += " AND e.timestamp >= :start_ms"
-        time_params["start_ms"] = start_ms
+        extra_clauses += " AND e.timestamp >= :start_ms"
+        extra_params["start_ms"] = start_ms
     if end_ms is not None:
-        time_clauses += " AND e.timestamp <= :end_ms"
-        time_params["end_ms"] = end_ms
+        extra_clauses += " AND e.timestamp <= :end_ms"
+        extra_params["end_ms"] = end_ms
+    if exclude_personal:
+        # NULL category means the event has not been classified yet — include
+        # it rather than silently hiding unprocessed events from recall.
+        extra_clauses += " AND (e.category IS NULL OR e.category != 'personal')"
 
     async with _async_engine.connect() as connection:
         result = await connection.execute(
@@ -233,12 +239,12 @@ async def search_events_fts(
                 FROM   events e
                 JOIN   events_fts fts ON e.rowid = fts.rowid
                 WHERE  events_fts MATCH :query
-                {time_clauses}
+                {extra_clauses}
                 ORDER  BY rank
                 LIMIT  :limit
                 """
             ),
-            {"query": sanitized_query, "limit": limit, **time_params},
+            {"query": sanitized_query, "limit": limit, **extra_params},
         )
         rows = result.fetchall()
 
