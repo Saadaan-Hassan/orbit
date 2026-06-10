@@ -40,7 +40,9 @@ same experience, AI adapts to what they actually do.
 | **Rust writes SQLite directly** | Clipboard + window events → SQLite directly from Rust. Never through FastAPI. Only the Chrome Extension POSTs to FastAPI. |
 | **No Docker for Qdrant** | `QdrantClient(path="~/.orbit/qdrant_storage")` local file mode. No server, no Docker. |
 | **Secrets redacted at capture, content flows to AI** | Clipboard secrets become `[REDACTED:type]` in `clipboard.rs` BEFORE any DB write. After that, `raw_content` (window titles, URLs, safe clipboard text) IS sent to Gemini and Claude — they need it to write useful summaries. App names alone are meaningless. The redaction layer is what makes this safe. |
-| **Personal events excluded from work recall** | `category = 'personal'` events excluded from Claude context unless user explicitly asks about personal activity. |
+| **Recall uses query intent classification** | `classify_query_intent()` in `recall.py` returns "work", "personal", or "general". Only a "work"-intent query excludes `category = 'personal'` events from FTS5 results. "personal" queries include all events and prompt Claude to surface URLs. "general" (the default when no clear signal is present, or when both signals fire) includes everything. |
+| **Recall has offline FTS5 fallback** | FTS5 keyword search always runs first (local, no network). If the Cloudflare Worker is unreachable (`httpx.ConnectError` / `TimeoutException`), Qdrant + Claude are skipped and FTS5 results are streamed as a plain offline message. |
+| **Recall parses time references** | `time_parser.extract_time_range_from_query()` scans the query for phrases like "yesterday", "this morning", "last week". When matched, FTS5 is timestamp-filtered and Qdrant results are post-filtered to sessions that overlap the window. |
 | **Conversation history is stateful** | Last 4 turns kept in Zustand, passed with every `/recall` request. Claude is NOT stateless per query. Max 4 turns to control token cost. |
 
 ---
@@ -90,20 +92,33 @@ httpx → Worker /embed → Voyage AI
 ```
 User query + conversation_history (last 4 turns from Zustand)
     │
-    ├──► FTS5 keyword search (SQLite, local, no network)
-    │    excludes: category = 'personal', redacted clipboard content
-    │    returns: up to 15 events
+    ▼
+time_parser.extract_time_range_from_query()  →  {start_ms, end_ms, label} or None
+classify_query_intent()  →  "work" | "personal" | "general"
     │
-    ├──► httpx → Worker /embed → Voyage AI → Qdrant semantic search
-    │    returns: up to 8 session summaries, score ≥ 0.3
+    ▼
+FTS5 keyword search (SQLite, local — always runs, even offline)
+    │  if intent == "work": excludes category = 'personal' events
+    │  if time_range: filters by timestamp bounds
+    │  returns: up to 15 events
     │
-    └──► Merge + re-rank: (similarity × 0.7) + (recency × 0.3)
-              │
-              ▼
-         httpx → Worker /chat → Claude Sonnet 4 (user-facing)
-              │  receives: merged context + conversation_history
-              ▼
-         SSE stream ──► React ChatPanel renders token by token
+    ▼ try: Cloudflare Worker reachable?
+    │
+    ├── YES ──► httpx → Worker /embed → Voyage AI → Qdrant semantic search
+    │               returns: up to 8 sessions
+    │               if time_range: keep only sessions overlapping the window
+    │               re-rank: (similarity × 0.7) + (recency × 0.3)
+    │               (when time_range active: 0.9 / 0.1 to avoid double-penalising)
+    │                   │
+    │                   ▼
+    │           httpx → Worker /chat → Claude Sonnet 4.6 (user-facing)
+    │                   receives: time label + intent hint + FTS5 events
+    │                             + re-ranked sessions + conversation_history
+    │                   ▼
+    │           SSE stream ──► React renders token by token
+    │
+    └── NO (ConnectError / TimeoutException)
+            stream FTS5 results as plain offline message — no AI synthesis
 ```
 
 ---
@@ -169,6 +184,7 @@ orbit/
 │   │   ├── gemini_service.py               ← httpx singleton → Worker /classify
 │   │   ├── voyage_service.py               ← httpx singleton → Worker /embed
 │   │   ├── qdrant_service.py               ← QdrantClient local file singleton
+│   │   ├── time_parser.py                  ← extracts time ranges from natural language queries
 │   │   ├── analytics_service.py            ← PostHog Python singleton, fails silently
 │   │   └── sentry_service.py               ← sentry_sdk.init(), only if DSN is set
 │   ├── models/
@@ -337,15 +353,16 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `app/src-tauri/Info.plist` | `LSUIElement = true`. Never remove. Orbit never appears in the dock. |
 | `app/src-tauri/tauri.conf.json` | Two windows: `main` (panel, skipTaskbar, transparent, decorations:false) and `overlay` (Phase 4: fullscreen, alwaysOnTop, focus:false, transparent). |
 | `backend/main.py` | FastAPI with `@asynccontextmanager` lifespan. Inits Sentry, starts `asyncio.create_task(start_session_generation_loop())`. No APScheduler. GET /health endpoint. |
-| `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + sync triggers on startup. |
-| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now` so first run is immediate. `generate_sessions_from_recent_events()`: fetch → classify (Gemini via Worker) → summarise (Claude Haiku via Worker) → Qdrant embed (Voyage via Worker) → mark events processed. Sends redacted `raw_content` to Claude (secrets already stripped at capture). Splits on project change. Force-processes events >2h old with null session_id. |
-| `backend/routes/recall.py` | Parallel FTS5 + Qdrant. Re-ranks by `(similarity × 0.7) + (recency × 0.3)`. Excludes personal events. Parses time references. Accepts `conversation_history`. Falls back to FTS5-only if Worker unreachable (offline). |
+| `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + auto-sync triggers on startup. Base `events` schema includes `session_id` and `category`. Base `sessions` schema includes `last_action` and `key_resources`. `search_events_fts()` accepts `start_ms`, `end_ms`, and `exclude_personal` params. |
+| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now` so first run is immediate. `generate_sessions_from_recent_events()`: fetch → classify (Gemini via Worker) → summarise (Claude Haiku via Worker) → Qdrant embed (Voyage via Worker) → mark events processed. Sends redacted `raw_content` to Claude (secrets already stripped at capture). Splits on project change. Force-processes events >2h old with null session_id. Persists all five Claude-generated fields: `project_name` and `goal` as top-level columns, `ai_summary` as plain text, `last_action` and `key_resources` as dedicated columns (`key_resources` stored as a JSON array string). |
+| `backend/routes/recall.py` | FTS5-first sequential pipeline. (1) Classify intent → "work"/"personal"/"general". (2) Parse time reference via `time_parser`. (3) FTS5 keyword search always runs unconditionally (offline-safe). (4) Try Worker: Qdrant semantic search → time-window filter → re-rank by `(similarity × 0.7) + (recency × 0.3)` (0.9/0.1 when time range is active) → Claude SSE stream. On `ConnectError`/`TimeoutException`: stream FTS5 results as plain offline message. |
 | `backend/routes/capture.py` | POST /capture (extension only — Rust writes direct). Checks pause state + exclude list (cached 30s). GET /events for timeline. GET /health. |
 | `backend/routes/privacy.py` | Excluded apps CRUD, pause/resume, capture status, full data wipe (SQLite + Qdrant). |
 | `backend/routes/feedback.py` | POST /feedback — stores rating + comment in SQLite. |
 | `backend/services/claude_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/chat`. Handles SSE streaming. Uses Claude Haiku for session gen, Claude Sonnet for recall. Accepts `conversation_history` param. |
 | `backend/services/gemini_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/classify`. Builds Gemini REST API body. Extracts text from `candidates[0].content.parts[0].text`. Sends `id, type, app_name, url, raw_content` — raw_content is already redacted at capture, so it's safe and needed for accurate classification. Falls back to `category='work'` if JSON parse fails. |
 | `backend/services/voyage_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/embed`. Body: `{"input": [text], "model": "voyage-3-lite", "input_type": "document"}`. Returns 512-dim float list. |
+| `backend/services/time_parser.py` | Standard-library time reference parser (no third-party deps). `extract_time_range_from_query(query, now_ms)` checks 11 patterns most-specific-first (e.g. "yesterday morning" before "yesterday") and returns `{"start_ms": int, "end_ms": int, "label": str}` or `None`. Used by `recall.py` to filter both FTS5 and Qdrant results to a concrete time window. |
 | `backend/services/qdrant_service.py` | `QdrantClient(path=~/.orbit/qdrant_storage)` singleton. Collection `orbit_sessions`, 512 dims, cosine. Raw vector upsert (no fastembed). `add_session_embedding()` + `search_sessions_semantic()`. |
 | `backend/services/analytics_service.py` | PostHog Python singleton. Device ID in `~/.orbit/device_id`. Strips forbidden property keys. try/except on every call — never crashes the app. |
 | `backend/services/sentry_service.py` | `sentry_sdk.init()` with `enable_logs=True`, `send_default_pii=False`. Only runs if `SENTRY_DSN` is set in env. |
@@ -373,7 +390,8 @@ events(
   id           TEXT PRIMARY KEY,
   timestamp    INTEGER NOT NULL,    -- unix milliseconds
   type         TEXT NOT NULL,       -- 'clipboard' | 'window' | 'url'
-  raw_content  TEXT,                -- [REDACTED:type] for secrets. NEVER sent to AI.
+  raw_content  TEXT,                -- secrets replaced with [REDACTED:type] at capture;
+                                    --  safe redacted content IS forwarded to Gemini + Claude
   app_name     TEXT,
   url          TEXT,
   source       TEXT NOT NULL,       -- 'rust' | 'extension'
@@ -389,13 +407,15 @@ Force-processed after 2h if still null session_id.
 
 ```sql
 sessions(
-  id           TEXT PRIMARY KEY,
-  start_time   INTEGER NOT NULL,
-  end_time     INTEGER NOT NULL,
-  project_name TEXT,
-  goal         TEXT,
-  ai_summary   TEXT NOT NULL,    -- JSON: {project_name, goal, summary, key_resources, last_action}
-  embedding_id TEXT              -- Qdrant point ID
+  id            TEXT PRIMARY KEY,
+  start_time    INTEGER NOT NULL,
+  end_time      INTEGER NOT NULL,
+  project_name  TEXT,
+  goal          TEXT,
+  ai_summary    TEXT,            -- Claude's plain-text 2-3 sentence session summary
+  last_action   TEXT,            -- most recent meaningful thing the user did
+  key_resources TEXT,            -- JSON array of important URLs / file paths
+  embedding_id  TEXT             -- Qdrant point ID
 )
 ```
 
@@ -429,6 +449,8 @@ Rules:
   left off — even if they didn't explicitly ask.
 - Never use developer-specific language. Respond in plain language anyone
   can understand, adapted to the context of what the user was actually doing.
+- When the user asks about things they watched, read, or browsed for leisure,
+  include the actual links (URLs) so they can revisit them.
 
 Format: start with 📌 [time + context anchor], then the specific answer,
 then supporting details only if genuinely useful. Skip any section that
