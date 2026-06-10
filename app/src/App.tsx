@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
+import { BACKEND_BASE_URL } from "@/lib/config";
 import { ActivityTimeline } from "./components/ActivityTimeline";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MemoryViewer } from "./components/MemoryViewer";
@@ -118,7 +119,7 @@ export default function App() {
     if (backendStatus === "ready") return;
 
     if (backendStatus === "unknown") {
-      fetch("http://localhost:8000/health")
+      fetch(`${BACKEND_BASE_URL}/health`)
         .then((res) => {
           if (res.ok) setBackendStatus("ready");
         })
@@ -128,7 +129,7 @@ export default function App() {
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch("http://localhost:8000/health");
+        const res = await fetch(`${BACKEND_BASE_URL}/health`);
         if (res.ok) setBackendStatus("ready");
       } catch {
         // still unavailable — keep polling

@@ -1,6 +1,14 @@
 
 node_modules/
 dist/
+
+# backend/dist/ contains committed dev stubs so `tauri dev` works without a
+# PyInstaller build. The real binaries are built in CI and gitignored.
+# Rule order matters: parent dir must be un-ignored before files inside it.
+!backend/dist/
+!backend/dist/orbit-backend
+!backend/dist/orbit-backend-aarch64-apple-darwin
+!backend/dist/orbit-backend-x86_64-apple-darwin
 .DS_Store
 .env
 .env.local

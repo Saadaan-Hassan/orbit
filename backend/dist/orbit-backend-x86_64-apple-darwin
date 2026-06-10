@@ -1,0 +1,6 @@
+#!/bin/sh
+# Dev stub — the real binary is built by PyInstaller in CI.
+# This file exists only so Tauri's build script can validate the
+# externalBin path during `tauri dev`. It is never executed in dev mode
+# because the sidecar spawn block is wrapped in #[cfg(not(debug_assertions))].
+exit 0

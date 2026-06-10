@@ -6,5 +6,12 @@ dist/
 wheels/
 *.egg-info
 
+# Commit the dev stubs so `tauri dev` works without a PyInstaller build.
+# CI overwrites these with the real binary before bundling.
+!dist/
+!dist/orbit-backend
+!dist/orbit-backend-aarch64-apple-darwin
+!dist/orbit-backend-x86_64-apple-darwin
+
 # Virtual environments
 .venv
