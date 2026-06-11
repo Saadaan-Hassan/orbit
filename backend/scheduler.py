@@ -55,7 +55,10 @@ Event types and their fields:
 - "page_content": title (page headline), page_text (article body), author, site_name, url
 - "search_query": query (what they typed into the search box), search_engine
 - "link_click": link_text (visible anchor text), link_target (destination URL)
+- "file_activity": file_path (full path of the file), action (created/modified/removed)
+- "app_lifecycle": app_name, action (launched/quit)
 
+File edits (file_activity events) are the strongest signal of what the user was building or changing — name specific files in your summary and weight them as primary evidence over window titles.
 Use page_text to understand what was read. Use query to understand what was being looked up.
 Write summaries like "read an article by Jane Doe about vector databases" — not "visited a website."
 
@@ -139,6 +142,12 @@ async def _ensure_sessions_schema_columns_exist() -> None:
             )
             logger.info("Added topics column to sessions table.")
 
+        if "active_minutes" not in existing_column_names:
+            await connection.execute(
+                text("ALTER TABLE sessions ADD COLUMN active_minutes INTEGER")
+            )
+            logger.info("Added active_minutes column to sessions table.")
+
 
 # ---------------------------------------------------------------------------
 # Session generation helper — runs once per project group
@@ -211,8 +220,14 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
                 "link_text":   event.get("raw_content") or "",
                 "link_target": event.get("link_target") or "",
             })
+        elif event_type == "file_activity":
+            events_payload_for_prompt.append({
+                **shared_fields,
+                "file_path": event.get("file_path") or event.get("raw_content") or "",
+                "action":    metadata.get("action", "modified"),
+            })
         else:
-            # window, clipboard, url
+            # window, clipboard, url, app_lifecycle
             events_payload_for_prompt.append({
                 **shared_fields,
                 "raw_content": event.get("raw_content") or "",
@@ -268,28 +283,39 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     key_resources = json.dumps(session_data.get("key_resources", []))
     topics        = json.dumps(session_data.get("topics", []))
 
+    # Each window poll covers a 30-second interval; counting polls where the
+    # user was active gives a lower-bound estimate of actual work time.
+    # is_user_active is set by the idle timer in window.rs — it never captures
+    # keystrokes, only the elapsed-seconds-since-last-input value.
+    active_window_poll_count = sum(
+        1 for event in project_events
+        if event.get("type") == "window" and event.get("is_user_active") == 1
+    )
+    active_minutes = active_window_poll_count * 30 // 60
+
     async with _async_engine.begin() as connection:
         await connection.execute(
             text(
                 """
                 INSERT INTO sessions
                     (id, start_time, end_time, project_name, goal, ai_summary,
-                     last_action, key_resources, topics)
+                     last_action, key_resources, topics, active_minutes)
                 VALUES
                     (:id, :start_time, :end_time, :project_name, :goal, :ai_summary,
-                     :last_action, :key_resources, :topics)
+                     :last_action, :key_resources, :topics, :active_minutes)
                 """
             ),
             {
-                "id":            new_session_id,
-                "start_time":    session_start_timestamp,
-                "end_time":      session_end_timestamp,
-                "project_name":  project_name,
-                "goal":          goal,
-                "ai_summary":    ai_summary,
-                "last_action":   last_action,
-                "key_resources": key_resources,
-                "topics":        topics,
+                "id":             new_session_id,
+                "start_time":     session_start_timestamp,
+                "end_time":       session_end_timestamp,
+                "project_name":   project_name,
+                "goal":           goal,
+                "ai_summary":     ai_summary,
+                "last_action":    last_action,
+                "key_resources":  key_resources,
+                "topics":         topics,
+                "active_minutes": active_minutes,
             },
         )
 
@@ -317,15 +343,16 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     )
 
     embedding_metadata = {
-        "session_id":    new_session_id,
-        "project_name":  project_name,
-        "goal":          goal,
-        "ai_summary":    ai_summary,
-        "last_action":   session_data.get("last_action"),
-        "key_resources": session_data.get("key_resources", []),
-        "topics":        topics_list,
-        "start_time":    session_start_timestamp,
-        "end_time":      session_end_timestamp,
+        "session_id":     new_session_id,
+        "project_name":   project_name,
+        "goal":           goal,
+        "ai_summary":     ai_summary,
+        "last_action":    session_data.get("last_action"),
+        "key_resources":  session_data.get("key_resources", []),
+        "topics":         topics_list,
+        "start_time":     session_start_timestamp,
+        "end_time":       session_end_timestamp,
+        "active_minutes": active_minutes,
     }
 
     try:
@@ -374,6 +401,63 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# System-state boundary helpers
+# ---------------------------------------------------------------------------
+
+def _parse_system_state_from_event(event: dict) -> str:
+    """Extracts the state string from a system_state event's metadata JSON."""
+    metadata_raw = event.get("metadata")
+    if not metadata_raw:
+        return event.get("raw_content") or ""
+    try:
+        metadata = (
+            json.loads(metadata_raw) if isinstance(metadata_raw, str) else metadata_raw
+        )
+        return metadata.get("state") or event.get("raw_content") or ""
+    except Exception:
+        return event.get("raw_content") or ""
+
+
+def _split_events_at_system_boundaries(
+    all_events: list[dict],
+) -> tuple[list[list[dict]], list[str]]:
+    """
+    Walks the chronologically-sorted event list and splits content events at
+    lock/sleep system_state boundaries. Each lock/sleep ends the current batch;
+    content events that follow accumulate into the next batch automatically.
+
+    Returns:
+        content_batches        — one list[dict] per continuous work segment,
+                                 with all system_state events excluded.
+        system_state_event_ids — IDs of all system_state events so the caller
+                                 can mark them with session_id='system_boundary'.
+    """
+    content_batches: list[list[dict]] = []
+    system_state_event_ids: list[str] = []
+    current_batch: list[dict] = []
+
+    for event in all_events:
+        if event.get("type") == "system_state":
+            system_state_event_ids.append(event["id"])
+            state = _parse_system_state_from_event(event)
+            if state in ("lock", "sleep"):
+                # End the current work segment here.
+                if current_batch:
+                    content_batches.append(current_batch)
+                    current_batch = []
+            # unlock/wake: no split — content events that follow naturally
+            # accumulate into the next batch.
+        else:
+            current_batch.append(event)
+
+    # Flush the final (or only) content batch.
+    if current_batch:
+        content_batches.append(current_batch)
+
+    return content_batches, system_state_event_ids
+
+
+# ---------------------------------------------------------------------------
 # Core job
 # ---------------------------------------------------------------------------
 
@@ -406,7 +490,7 @@ async def generate_sessions_from_recent_events() -> None:
             text(
                 """
                 SELECT id, timestamp, type, raw_content, app_name, url, source,
-                       page_text, link_target, metadata
+                       page_text, link_target, metadata, file_path, is_user_active
                 FROM   events
                 WHERE  timestamp >= :cutoff
                 AND    (session_id IS NULL OR session_id = '')
@@ -422,7 +506,7 @@ async def generate_sessions_from_recent_events() -> None:
             text(
                 """
                 SELECT id, timestamp, type, raw_content, app_name, url, source,
-                       page_text, link_target, metadata
+                       page_text, link_target, metadata, file_path, is_user_active
                 FROM   events
                 WHERE  timestamp < :stale_cutoff
                 AND    (session_id IS NULL OR session_id = '')
@@ -459,52 +543,104 @@ async def generate_sessions_from_recent_events() -> None:
         )
         return
 
-    logger.info(
-        "Session generator: classifying %d event(s) with Gemini.",
-        len(unprocessed_events),
+    # ------------------------------------------------------------------
+    # Step 3 — Split at system_state boundaries; mark boundary events done
+    # ------------------------------------------------------------------
+    content_batches, system_state_event_ids = _split_events_at_system_boundaries(
+        unprocessed_events
     )
 
-    # ------------------------------------------------------------------
-    # Step 3 — Classify events with Gemini and persist categories
-    # ------------------------------------------------------------------
-    classified_events = await classify_events_batch(unprocessed_events)
-
-    async with _async_engine.begin() as connection:
-        for event in classified_events:
-            await connection.execute(
-                text("UPDATE events SET category = :category WHERE id = :id"),
-                {"category": event.get("category"), "id": event["id"]},
+    # Mark system_state events as processed immediately so they don't
+    # re-accumulate in the unprocessed queue on the next scheduler run.
+    if system_state_event_ids:
+        async with _async_engine.begin() as connection:
+            ss_placeholders = ", ".join(
+                f":ssid_{i}" for i in range(len(system_state_event_ids))
             )
-
-    # ------------------------------------------------------------------
-    # Step 4 — Group by project and generate one session per group
-    # ------------------------------------------------------------------
-    # Gemini returns a "project" key on each classified event (may be None).
-    # Treating None as its own bucket lets stray events accumulate until
-    # they reach MINIMUM_EVENTS_FOR_SESSION across runs.
-    project_groups: dict[str | None, list[dict]] = defaultdict(list)
-    for event in classified_events:
-        project_groups[event.get("project") or None].append(event)
-
-    if len(project_groups) > 1:
+            ss_bindings = {
+                f"ssid_{i}": eid for i, eid in enumerate(system_state_event_ids)
+            }
+            await connection.execute(
+                text(
+                    f"UPDATE events SET session_id = 'system_boundary' "
+                    f"WHERE id IN ({ss_placeholders})"
+                ),
+                ss_bindings,
+            )
         logger.info(
-            "Session generator: detected %d distinct project(s) — generating separate sessions.",
-            len(project_groups),
+            "Session generator: marked %d system_state event(s) as boundaries.",
+            len(system_state_event_ids),
         )
 
+    if len(content_batches) > 1:
+        logger.info(
+            "Session generator: %d lock/sleep boundary/ies split %d content event(s) "
+            "into %d independent batch(es).",
+            len(system_state_event_ids),
+            sum(len(b) for b in content_batches),
+            len(content_batches),
+        )
+
+    total_content_events = sum(len(batch) for batch in content_batches)
+    if total_content_events < MINIMUM_EVENTS_FOR_SESSION:
+        logger.info(
+            "Session generator: only %d content event(s) after boundary extraction "
+            "(minimum %d). Skipping.",
+            total_content_events,
+            MINIMUM_EVENTS_FOR_SESSION,
+        )
+        return
+
+    # ------------------------------------------------------------------
+    # Step 4 — For each time-bounded batch: classify → group → summarise
+    # ------------------------------------------------------------------
     sessions_generated = 0
-    for project_key, group_events in project_groups.items():
-        if len(group_events) < MINIMUM_EVENTS_FOR_SESSION:
+
+    for batch_index, batch_events in enumerate(content_batches):
+        if len(batch_events) < MINIMUM_EVENTS_FOR_SESSION:
             logger.info(
-                "Session generator: skipping project '%s' — only %d event(s) (minimum %d).",
-                project_key,
-                len(group_events),
-                MINIMUM_EVENTS_FOR_SESSION,
+                "Session generator: batch %d/%d has only %d event(s) — skipping.",
+                batch_index + 1, len(content_batches), len(batch_events),
             )
             continue
 
-        await _generate_session_for_events(group_events)
-        sessions_generated += 1
+        logger.info(
+            "Session generator: classifying batch %d/%d (%d event(s)) with Gemini.",
+            batch_index + 1, len(content_batches), len(batch_events),
+        )
+
+        classified_batch = await classify_events_batch(batch_events)
+
+        async with _async_engine.begin() as connection:
+            for event in classified_batch:
+                await connection.execute(
+                    text("UPDATE events SET category = :category WHERE id = :id"),
+                    {"category": event.get("category"), "id": event["id"]},
+                )
+
+        # Gemini returns a "project" key on each classified event (may be None).
+        project_groups: dict[str | None, list[dict]] = defaultdict(list)
+        for event in classified_batch:
+            project_groups[event.get("project") or None].append(event)
+
+        if len(project_groups) > 1:
+            logger.info(
+                "Session generator: batch %d/%d — %d distinct project(s) detected.",
+                batch_index + 1, len(content_batches), len(project_groups),
+            )
+
+        for project_key, group_events in project_groups.items():
+            if len(group_events) < MINIMUM_EVENTS_FOR_SESSION:
+                logger.info(
+                    "Session generator: skipping project '%s' in batch %d/%d — "
+                    "only %d event(s) (minimum %d).",
+                    project_key, batch_index + 1, len(content_batches),
+                    len(group_events), MINIMUM_EVENTS_FOR_SESSION,
+                )
+                continue
+
+            await _generate_session_for_events(group_events)
+            sessions_generated += 1
 
     if sessions_generated == 0:
         logger.info("Session generator: no project group reached the event minimum. Run complete.")

@@ -15,7 +15,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from database import search_events_fts
+from database import fetch_system_state_events, search_events_fts
 from services.analytics_service import capture_analytics_event
 from services.claude_service import stream_recall_response
 from services.qdrant_service import search_sessions_semantic
@@ -111,6 +111,22 @@ def _query_asks_about_untracked_action(query: str) -> bool:
     """Returns True if the query asks about an in-app action Orbit doesn't capture."""
     query_lower = query.lower()
     return any(signal in query_lower for signal in _UNTRACKED_ACTION_SIGNALS)
+
+
+_BREAK_TIME_INTENT_SIGNALS: frozenset[str] = frozenset({
+    "break", "breaks", "stepped away", "step away",
+    "lunch", "nap", "rest",
+    "how long", "how much time", "time spent", "spent on",
+    "active for", "worked for", "duration", "minutes", "hours",
+    "when did i stop", "when did i start", "did i take a break",
+    "did i step away", "away from",
+})
+
+
+def _query_asks_about_time_or_breaks(query: str) -> bool:
+    """Returns True if the query is about duration, time spent, or break times."""
+    query_lower = query.lower()
+    return any(signal in query_lower for signal in _BREAK_TIME_INTENT_SIGNALS)
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +241,7 @@ def _build_context_block(
     time_range: dict | None = None,
     intent: str = "general",
     show_action_limitation_note: bool = False,
+    system_state_events: list[dict] | None = None,
 ) -> str:
     """
     Formats the parallel search results into a single context string that
@@ -312,6 +329,26 @@ def _build_context_block(
                 context_lines.append(
                     f"  [{readable_timestamp}] Clicked: \"{link_display}\" → {link_target}"
                 )
+            elif event_type == "file_activity":
+                file_path = (event.get("file_path") or "").strip()
+                action = metadata.get("action") or "modified"
+                filename = file_path.split("/")[-1] if file_path else raw_content
+                path_suffix = f" — {file_path}" if file_path else ""
+                context_lines.append(
+                    f"  [{readable_timestamp}] Worked on file: {filename} ({action}){path_suffix}"
+                )
+            elif event_type == "system_state":
+                state = metadata.get("state") or raw_content
+                state_labels = {
+                    "lock":   "stepped away (screen locked)",
+                    "unlock": "returned (screen unlocked)",
+                    "sleep":  "computer went to sleep",
+                    "wake":   "computer woke up",
+                }
+                state_display = state_labels.get(state, state)
+                context_lines.append(
+                    f"  [{readable_timestamp}] {state_display}"
+                )
             elif intent == "personal" and event_type == "url" and url:
                 # For personal queries, surface the actual URL so Claude can
                 # include clickable links in its answer.
@@ -356,6 +393,8 @@ def _build_context_block(
                     raw_topics = []
             topics_text = ", ".join(raw_topics) if raw_topics else ""
 
+            active_minutes = session.get("active_minutes")
+
             context_lines.append(f"  [{readable_timestamp}] Project: {project}")
             context_lines.append(f"    Goal: {goal}")
             context_lines.append(f"    Summary: {summary}")
@@ -365,8 +404,42 @@ def _build_context_block(
                 context_lines.append(f"    Last action: {last_action}")
             if resources_text:
                 context_lines.append(f"    Resources: {resources_text}")
+            if active_minutes is not None and active_minutes > 0:
+                context_lines.append(f"    Active time: {active_minutes} min")
     else:
         context_lines.append("  (no semantic matches found)")
+
+    # --- Break / system events (lock, unlock, sleep, wake) ---
+    # Only added when the query asks about breaks or time, so this section
+    # does not appear in routine recall and does not bloat the context.
+    if system_state_events:
+        context_lines.append("")
+        context_lines.append("BREAK / SYSTEM EVENTS:")
+        for sys_event in system_state_events:
+            readable_timestamp = _format_timestamp_as_human_readable(
+                sys_event.get("timestamp", 0)
+            )
+            sys_metadata_raw = sys_event.get("metadata")
+            sys_metadata: dict = {}
+            if sys_metadata_raw:
+                try:
+                    sys_metadata = (
+                        json.loads(sys_metadata_raw)
+                        if isinstance(sys_metadata_raw, str)
+                        else sys_metadata_raw
+                    )
+                except Exception:
+                    pass
+            state = sys_metadata.get("state") or (sys_event.get("raw_content") or "")
+            state_labels = {
+                "lock":   "stepped away (screen locked)",
+                "unlock": "returned (screen unlocked)",
+                "sleep":  "computer went to sleep",
+                "wake":   "computer woke up",
+            }
+            context_lines.append(
+                f"  [{readable_timestamp}] {state_labels.get(state, state)}"
+            )
 
     return "\n".join(context_lines)
 
@@ -462,6 +535,7 @@ async def _stream_sse_recall(
     asks_about_untracked_action = (
         intent == "personal" and _query_asks_about_untracked_action(query)
     )
+    asks_about_time_or_breaks = _query_asks_about_time_or_breaks(query)
 
     # Fix B: FTS5 runs first — it is purely local and always works offline.
     keyword_matched_events = await search_events_fts(
@@ -473,6 +547,22 @@ async def _stream_sse_recall(
     )
 
     logger.info("Recall: FTS5 returned %d event(s).", len(keyword_matched_events))
+
+    # Fetch system_state events when the query is about breaks or time spent.
+    # These are local DB reads — no Worker required, so we can do this even
+    # before we know whether the Worker is reachable.
+    system_state_events: list[dict] = []
+    if asks_about_time_or_breaks:
+        system_state_events = await fetch_system_state_events(
+            limit=20,
+            start_ms=time_range["start_ms"] if time_range else None,
+            end_ms=time_range["end_ms"] if time_range else None,
+        )
+        if system_state_events:
+            logger.info(
+                "Recall: fetched %d system_state event(s) for break/duration query.",
+                len(system_state_events),
+            )
 
     # The remaining steps (Qdrant semantic search + Claude synthesis) require
     # the Cloudflare Worker. If the Worker is unreachable we fall back to the
@@ -517,6 +607,7 @@ async def _stream_sse_recall(
             time_range=time_range,
             intent=intent,
             show_action_limitation_note=asks_about_untracked_action,
+            system_state_events=system_state_events,
         )
 
         user_prompt = (

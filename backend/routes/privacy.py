@@ -52,6 +52,18 @@ class PauseRequest(BaseModel):
     paused_until_timestamp: Optional[int] = None
 
 
+class SetFileWatchingRequest(BaseModel):
+    enabled: bool
+
+
+class AddWatchedFolderRequest(BaseModel):
+    folder: str
+
+
+class RemoveWatchedFolderRequest(BaseModel):
+    folder: str
+
+
 # ---------------------------------------------------------------------------
 # Excluded apps
 # ---------------------------------------------------------------------------
@@ -143,6 +155,97 @@ async def remove_excluded_domain(domain: str) -> dict:
             text("DELETE FROM excluded_domains WHERE domain = :domain"),
             {"domain": domain},
         )
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# File activity watching
+# ---------------------------------------------------------------------------
+
+
+@router.get("/file-watching")
+async def get_file_watching() -> dict:
+    import json as _json
+
+    async with _async_engine.connect() as connection:
+        result = await connection.execute(
+            text("SELECT enabled, watched_folders FROM file_watch_settings WHERE id = 1")
+        )
+        row = result.fetchone()
+
+    if row is None:
+        # Table or row absent — return safe defaults without erroring.
+        return {"enabled": True, "watched_folders": []}
+
+    try:
+        folders = _json.loads(row.watched_folders) if row.watched_folders else []
+    except Exception:
+        folders = []
+
+    return {"enabled": bool(row.enabled), "watched_folders": folders}
+
+
+@router.post("/file-watching")
+async def set_file_watching(request: SetFileWatchingRequest) -> dict:
+    async with _async_engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE file_watch_settings SET enabled = :enabled WHERE id = 1"),
+            {"enabled": 1 if request.enabled else 0},
+        )
+    return {"enabled": request.enabled}
+
+
+@router.post("/watched-folders")
+async def add_watched_folder(request: AddWatchedFolderRequest) -> dict:
+    import json as _json
+
+    folder = request.folder.strip()
+    if not folder:
+        return {"status": "ok"}
+
+    async with _async_engine.begin() as connection:
+        result = await connection.execute(
+            text("SELECT watched_folders FROM file_watch_settings WHERE id = 1")
+        )
+        row = result.fetchone()
+        try:
+            folders: list[str] = _json.loads(row.watched_folders) if row and row.watched_folders else []
+        except Exception:
+            folders = []
+
+        if folder not in folders:
+            folders.append(folder)
+            await connection.execute(
+                text("UPDATE file_watch_settings SET watched_folders = :folders WHERE id = 1"),
+                {"folders": _json.dumps(folders)},
+            )
+
+    return {"status": "ok", "folder": folder}
+
+
+@router.delete("/watched-folders")
+async def remove_watched_folder(request: RemoveWatchedFolderRequest) -> dict:
+    import json as _json
+
+    folder = request.folder.strip()
+
+    async with _async_engine.begin() as connection:
+        result = await connection.execute(
+            text("SELECT watched_folders FROM file_watch_settings WHERE id = 1")
+        )
+        row = result.fetchone()
+        try:
+            folders: list[str] = _json.loads(row.watched_folders) if row and row.watched_folders else []
+        except Exception:
+            folders = []
+
+        updated = [f for f in folders if f != folder]
+        if len(updated) != len(folders):
+            await connection.execute(
+                text("UPDATE file_watch_settings SET watched_folders = :folders WHERE id = 1"),
+                {"folders": _json.dumps(updated)},
+            )
+
     return {"status": "ok"}
 
 

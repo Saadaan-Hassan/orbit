@@ -158,10 +158,28 @@ async def create_all_tables() -> None:
             VALUES (1, 0, NULL)
         """))
 
+        # Single-row table (id=1 always) that controls whether file activity
+        # is captured and which folders are watched. watched_folders stores a
+        # JSON array of absolute folder paths.
+        await connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS file_watch_settings (
+                id              INTEGER PRIMARY KEY DEFAULT 1,
+                enabled         INTEGER NOT NULL DEFAULT 1,
+                watched_folders TEXT    NOT NULL DEFAULT '[]'
+            )
+        """))
+
+        # Ensure the single file_watch_settings row exists.
+        await connection.execute(text("""
+            INSERT OR IGNORE INTO file_watch_settings (id, enabled, watched_folders)
+            VALUES (1, 1, '[]')
+        """))
+
     # Seed default lists outside the schema transaction so INSERT OR IGNORE
     # checks work against a fully committed table state.
     await _seed_default_excluded_apps()
     await _seed_default_excluded_domains()
+    await _seed_default_file_watch_settings()
 
 
 _DEFAULT_EXCLUDED_APPS: list[str] = [
@@ -240,6 +258,33 @@ async def _seed_default_excluded_domains() -> None:
             )
 
 
+async def _seed_default_file_watch_settings() -> None:
+    # Only seeds when watched_folders is the empty-array placeholder left by
+    # the INSERT OR IGNORE above — i.e. on first run. On subsequent starts
+    # the user's own folder list is left untouched.
+    import json as _json
+
+    home = os.path.expanduser("~")
+    default_folders = _json.dumps([
+        f"{home}/Documents",
+        f"{home}/Desktop",
+        f"{home}/Downloads",
+    ])
+    async with _async_engine.begin() as connection:
+        result = await connection.execute(
+            text("SELECT watched_folders FROM file_watch_settings WHERE id = 1")
+        )
+        row = result.fetchone()
+        if row is not None and row.watched_folders not in ("[]", "", None):
+            return  # Already seeded — user's list takes precedence.
+        await connection.execute(
+            text(
+                "UPDATE file_watch_settings SET watched_folders = :folders WHERE id = 1"
+            ),
+            {"folders": default_folders},
+        )
+
+
 def _sanitize_fts5_query(raw_query: str) -> str:
     # FTS5 treats these characters as syntax operators. Stripping them prevents
     # user input from accidentally forming broken or malicious FTS5 expressions.
@@ -307,6 +352,42 @@ async def search_events_fts(
         rows = result.fetchall()
 
     return [dict(row._mapping) for row in rows]
+
+
+async def fetch_system_state_events(
+    limit: int = 20,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+) -> list[dict]:
+    """
+    Returns system_state events (lock/unlock/sleep/wake) sorted ascending by
+    time. Used by recall to surface break times when the query asks about
+    activity duration or when the user stepped away.
+    """
+    extra_clauses = ""
+    extra_params: dict = {}
+    if start_ms is not None:
+        extra_clauses += " AND timestamp >= :start_ms"
+        extra_params["start_ms"] = start_ms
+    if end_ms is not None:
+        extra_clauses += " AND timestamp <= :end_ms"
+        extra_params["end_ms"] = end_ms
+
+    async with _async_engine.connect() as connection:
+        result = await connection.execute(
+            text(
+                f"""
+                SELECT id, timestamp, type, raw_content, metadata
+                FROM   events
+                WHERE  type = 'system_state'
+                {extra_clauses}
+                ORDER  BY timestamp ASC
+                LIMIT  :limit
+                """
+            ),
+            {"limit": limit, **extra_params},
+        )
+        return [dict(row._mapping) for row in result.fetchall()]
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

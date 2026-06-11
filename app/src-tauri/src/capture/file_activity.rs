@@ -2,7 +2,9 @@ use chrono::Utc;
 use notify::{RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult};
 use sqlx::SqlitePool;
+use std::collections::HashSet;
 use tokio::sync::mpsc;
+use tokio::time::{interval_at, Duration, Instant};
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -31,14 +33,6 @@ const BLOCKED_DIRECTORY_NAMES: &[&str] = &[
 const BLOCKED_FILE_SUFFIXES: &[&str] = &[".tmp", ".swp", ".lock", ".log"];
 
 /// Returns `true` when the event should be silently dropped.
-///
-/// Drops events for:
-/// - Hidden files/directories: any path component starting with '.'
-///   (covers .DS_Store, .gitignore, editor swap files, and hidden dirs like
-///   .git, .next, .cache, .venv — they also appear in BLOCKED_DIRECTORY_NAMES
-///   for clarity but would be caught by this check alone)
-/// - High-noise generated directories: node_modules, target, build, etc.
-/// - Transient file suffixes: .tmp, .swp, .lock, .log
 fn path_should_be_skipped(file_path: &std::path::Path) -> bool {
     for component in file_path.components() {
         if let std::path::Component::Normal(component_name) = component {
@@ -68,9 +62,6 @@ fn path_should_be_skipped(file_path: &std::path::Path) -> bool {
 // Event kind mapping
 // ---------------------------------------------------------------------------
 
-/// Maps a notify `EventKind` to a human-readable action string.
-/// Returns `None` for event kinds we don't record (access reads, metadata-only
-/// changes, and anything else that doesn't represent a meaningful user action).
 fn map_notify_event_kind_to_action_string(event_kind: &notify::EventKind) -> Option<&'static str> {
     match event_kind {
         notify::EventKind::Create(_) => Some("created"),
@@ -81,22 +72,113 @@ fn map_notify_event_kind_to_action_string(event_kind: &notify::EventKind) -> Opt
 }
 
 // ---------------------------------------------------------------------------
+// Settings — read from file_watch_settings (written by FastAPI privacy routes)
+// ---------------------------------------------------------------------------
+
+struct FileWatchSettings {
+    enabled: bool,
+    watched_folders: Vec<String>,
+}
+
+fn default_file_watch_settings() -> FileWatchSettings {
+    let home = std::env::var("HOME").unwrap_or_default();
+    FileWatchSettings {
+        enabled: true,
+        watched_folders: vec![
+            format!("{}/Documents", home),
+            format!("{}/Desktop", home),
+            format!("{}/Downloads", home),
+        ],
+    }
+}
+
+/// Reads current file-watch settings from SQLite.
+///
+/// Falls back to the hardcoded defaults if the table or row is absent (e.g.
+/// FastAPI hasn't run yet and hasn't created the table).
+async fn read_file_watch_settings(pool: &SqlitePool) -> FileWatchSettings {
+    let query_result = sqlx::query_as::<_, (i64, String)>(
+        "SELECT enabled, watched_folders FROM file_watch_settings WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await;
+
+    match query_result {
+        Ok(Some((enabled_flag, folders_json))) => {
+            let folders: Vec<String> =
+                serde_json::from_str(&folders_json).unwrap_or_default();
+            FileWatchSettings {
+                enabled: enabled_flag != 0,
+                watched_folders: folders,
+            }
+        }
+        // Table absent, row absent, or any DB error — use safe defaults.
+        _ => default_file_watch_settings(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Watcher sync — diffs currently-watched paths against desired and adjusts
+// ---------------------------------------------------------------------------
+
+/// Updates the watcher so that `currently_watched` matches the desired set
+/// derived from `new_settings`. Paths no longer desired are unwatched; new
+/// paths are watched. If `enabled` is false the desired set is empty.
+fn sync_watched_folders(
+    watcher: &mut impl Watcher,
+    currently_watched: &mut HashSet<String>,
+    new_settings: &FileWatchSettings,
+) {
+    let desired: HashSet<String> = if new_settings.enabled {
+        new_settings.watched_folders.iter().cloned().collect()
+    } else {
+        HashSet::new()
+    };
+
+    // Unwatch paths that are no longer desired.
+    let to_remove: Vec<String> = currently_watched.difference(&desired).cloned().collect();
+    for path in &to_remove {
+        if let Err(unwatch_error) =
+            watcher.unwatch(std::path::Path::new(path.as_str()))
+        {
+            eprintln!(
+                "File activity monitor: could not unwatch {path}: {unwatch_error}"
+            );
+        } else {
+            currently_watched.remove(path);
+        }
+    }
+
+    // Watch paths that are newly desired.
+    let to_add: Vec<String> = desired.difference(currently_watched).cloned().collect();
+    for path in &to_add {
+        if let Err(watch_error) = watcher.watch(
+            std::path::Path::new(path.as_str()),
+            RecursiveMode::Recursive,
+        ) {
+            eprintln!(
+                "File activity monitor: could not watch {path}: {watch_error}"
+            );
+        } else {
+            currently_watched.insert(path.clone());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Monitor loop
 // ---------------------------------------------------------------------------
 
-/// Watches ~/Documents, ~/Desktop, and ~/Downloads for file system events and
-/// writes a `file_activity` event row to SQLite for each non-trivial change.
+/// Watches user-configured folders for file system events, writing a
+/// `file_activity` event row to SQLite for each non-trivial change.
 ///
-/// A 2-second debounce collapses rapid bursts (e.g. editor auto-saves) into a
-/// single event rather than flooding the database. Only the file *path* is
-/// stored — file *contents* are never read.
+/// Settings are refreshed from the `file_watch_settings` table every 30
+/// seconds. Disabling file watching or changing the folder list takes effect
+/// within the next refresh cycle. File *contents* are never read.
 pub async fn start_file_activity_monitor(
     sqlx_connection_pool: SqlitePool,
     sqlite_database_path: String,
 ) {
-    // Bridge between the debouncer's internal sync callback thread and this
-    // async tokio task. UnboundedSender is Send so it is safe to call from any
-    // thread, including the debouncer's background thread.
     let (debounced_event_sender, mut debounced_event_receiver) =
         mpsc::unbounded_channel::<DebounceEventResult>();
 
@@ -106,8 +188,6 @@ pub async fn start_file_activity_monitor(
         debounce_duration,
         None,
         move |debounce_result: DebounceEventResult| {
-            // Ignore send errors — they only occur when the receiver has been
-            // dropped, which means the monitor task is shutting down.
             let _ = debounced_event_sender.send(debounce_result);
         },
     ) {
@@ -121,90 +201,96 @@ pub async fn start_file_activity_monitor(
         }
     };
 
-    // Register the three user-facing data directories for recursive watching.
-    // If a directory does not exist, log the error and continue — we watch
-    // whatever directories are available rather than aborting entirely.
-    let home_directory = std::env::var("HOME").unwrap_or_default();
-    let directories_to_watch = ["Documents", "Desktop", "Downloads"];
+    // Load initial settings and apply them to the watcher.
+    let initial_settings = read_file_watch_settings(&sqlx_connection_pool).await;
+    let mut currently_watched: HashSet<String> = HashSet::new();
+    sync_watched_folders(
+        file_system_debouncer.watcher(),
+        &mut currently_watched,
+        &initial_settings,
+    );
 
-    for directory_name in &directories_to_watch {
-        let directory_path = format!("{}/{}", home_directory, directory_name);
-        if let Err(watch_error) = file_system_debouncer
-            .watcher()
-            .watch(std::path::Path::new(&directory_path), RecursiveMode::Recursive)
-        {
-            eprintln!(
-                "File activity monitor: could not watch {directory_path}: {watch_error}"
-            );
-        }
-    }
+    // Refresh settings every 30 s. Start the first tick 30 s from now so we
+    // don't immediately re-read what we just loaded on startup.
+    let mut settings_refresh_interval = interval_at(
+        Instant::now() + Duration::from_secs(30),
+        Duration::from_secs(30),
+    );
 
-    // file_system_debouncer must remain alive for the duration of this loop.
-    // Dropping it would close the debounced_event_sender inside its callback,
-    // which would cause debounced_event_receiver.recv() to return None and
-    // silently end the monitor. The variable stays in scope until the function
-    // returns (which should never happen under normal operation).
-    while let Some(debounce_result) = debounced_event_receiver.recv().await {
-        let debounced_events = match debounce_result {
-            Ok(events) => events,
-            Err(watch_errors) => {
-                for watch_error in watch_errors {
-                    eprintln!("File activity monitor watch error: {watch_error}");
-                }
-                continue;
-            }
-        };
-
-        for debounced_event in debounced_events {
-            let action = match map_notify_event_kind_to_action_string(&debounced_event.event.kind)
-            {
-                Some(action_string) => action_string,
-                None => continue,
-            };
-
-            for file_path in &debounced_event.event.paths {
-                if path_should_be_skipped(file_path) {
-                    continue;
-                }
-
-                let file_name = match file_path.file_name() {
-                    Some(name) => name.to_string_lossy().to_string(),
-                    None => continue, // No file name component means a bare directory path — skip.
+    // file_system_debouncer must stay in scope for the entire loop — dropping
+    // it closes the sender inside the callback, causing recv() to return None.
+    loop {
+        tokio::select! {
+            event_result = debounced_event_receiver.recv() => {
+                let debounced_events = match event_result {
+                    Some(Ok(events)) => events,
+                    Some(Err(watch_errors)) => {
+                        for watch_error in watch_errors {
+                            eprintln!("File activity monitor watch error: {watch_error}");
+                        }
+                        continue;
+                    }
+                    None => break, // channel closed — debouncer was dropped
                 };
 
-                if file_name.is_empty() {
-                    continue;
+                for debounced_event in debounced_events {
+                    let action = match map_notify_event_kind_to_action_string(
+                        &debounced_event.event.kind,
+                    ) {
+                        Some(action_string) => action_string,
+                        None => continue,
+                    };
+
+                    for file_path in &debounced_event.event.paths {
+                        if path_should_be_skipped(file_path) {
+                            continue;
+                        }
+
+                        let file_name = match file_path.file_name() {
+                            Some(name) => name.to_string_lossy().to_string(),
+                            None => continue,
+                        };
+                        if file_name.is_empty() {
+                            continue;
+                        }
+
+                        let file_path_string = file_path.to_string_lossy().to_string();
+                        let metadata_json = format!(r#"{{"action":"{}"}}"#, action);
+                        let new_event_id = Uuid::new_v4().to_string();
+                        let event_timestamp_milliseconds = Utc::now().timestamp_millis();
+
+                        let insert_result = sqlx::query(
+                            "INSERT INTO events \
+                                 (id, timestamp, type, raw_content, app_name, url, source, \
+                                  file_path, metadata) \
+                             VALUES (?, ?, 'file_activity', ?, NULL, NULL, 'rust', ?, ?)",
+                        )
+                        .bind(&new_event_id)
+                        .bind(event_timestamp_milliseconds)
+                        .bind(&file_name)
+                        .bind(&file_path_string)
+                        .bind(&metadata_json)
+                        .execute(&sqlx_connection_pool)
+                        .await;
+
+                        if let Err(database_error) = insert_result {
+                            eprintln!(
+                                "Failed to write file activity event to SQLite \
+                                 (path: {sqlite_database_path}): {database_error}"
+                            );
+                        }
+                    }
                 }
+            }
 
-                let file_path_string = file_path.to_string_lossy().to_string();
-
-                // action is always a static ASCII string ("created" / "modified" /
-                // "removed") so inline JSON construction is safe without escaping.
-                let metadata_json = format!(r#"{{"action":"{}"}}"#, action);
-
-                let new_event_id = Uuid::new_v4().to_string();
-                let event_timestamp_milliseconds = Utc::now().timestamp_millis();
-
-                let insert_result = sqlx::query(
-                    "INSERT INTO events \
-                         (id, timestamp, type, raw_content, app_name, url, source, \
-                          file_path, metadata) \
-                     VALUES (?, ?, 'file_activity', ?, NULL, NULL, 'rust', ?, ?)",
-                )
-                .bind(&new_event_id)
-                .bind(event_timestamp_milliseconds)
-                .bind(&file_name)
-                .bind(&file_path_string)
-                .bind(&metadata_json)
-                .execute(&sqlx_connection_pool)
-                .await;
-
-                if let Err(database_error) = insert_result {
-                    eprintln!(
-                        "Failed to write file activity event to SQLite \
-                         (path: {sqlite_database_path}): {database_error}"
-                    );
-                }
+            _ = settings_refresh_interval.tick() => {
+                let new_settings =
+                    read_file_watch_settings(&sqlx_connection_pool).await;
+                sync_watched_folders(
+                    file_system_debouncer.watcher(),
+                    &mut currently_watched,
+                    &new_settings,
+                );
             }
         }
     }

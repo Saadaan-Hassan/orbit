@@ -20,6 +20,10 @@ export interface PrivacySettings {
   excludedApps: string[];
   // Ordered list of domains excluded from browser capture.
   excludedDomains: string[];
+  // Whether file activity capture is enabled.
+  fileWatchEnabled: boolean;
+  // Absolute folder paths being watched for file activity.
+  watchedFolders: string[];
   // True while DELETE /privacy/all-data is in flight.
   isWiping: boolean;
   // True while the initial load is in flight.
@@ -31,6 +35,9 @@ export interface PrivacySettings {
   removeExcludedApp: (appName: string) => Promise<void>;
   addExcludedDomain: (domain: string) => Promise<void>;
   removeExcludedDomain: (domain: string) => Promise<void>;
+  setFileWatchEnabled: (enabled: boolean) => Promise<void>;
+  addWatchedFolder: (folder: string) => Promise<void>;
+  removeWatchedFolder: (folder: string) => Promise<void>;
   pauseCapture: (durationMinutes: number | null) => Promise<void>;
   resumeCapture: () => Promise<void>;
   wipeAllMemory: () => Promise<void>;
@@ -66,25 +73,33 @@ export function usePrivacySettings(): PrivacySettings {
   const [pausedUntil, setPausedUntil] = useState<number | null>(null);
   const [excludedApps, setExcludedApps] = useState<string[]>([]);
   const [excludedDomains, setExcludedDomains] = useState<string[]>([]);
+  const [fileWatchEnabled, setFileWatchEnabledState] = useState(true);
+  const [watchedFolders, setWatchedFolders] = useState<string[]>([]);
   const [isWiping, setIsWiping] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load all three endpoints in parallel on mount so the panel has data immediately.
+  // Load all endpoints in parallel on mount so the panel has data immediately.
   useEffect(() => {
     async function loadInitialState(): Promise<void> {
       try {
-        const [statusResponse, excludedAppsResponse, excludedDomainsResponse] =
-          await Promise.all([
-            fetch(`${BACKEND_BASE_URL}/privacy/capture-status`),
-            fetch(`${BACKEND_BASE_URL}/privacy/excluded-apps`),
-            fetch(`${BACKEND_BASE_URL}/privacy/excluded-domains`),
-          ]);
+        const [
+          statusResponse,
+          excludedAppsResponse,
+          excludedDomainsResponse,
+          fileWatchResponse,
+        ] = await Promise.all([
+          fetch(`${BACKEND_BASE_URL}/privacy/capture-status`),
+          fetch(`${BACKEND_BASE_URL}/privacy/excluded-apps`),
+          fetch(`${BACKEND_BASE_URL}/privacy/excluded-domains`),
+          fetch(`${BACKEND_BASE_URL}/privacy/file-watching`),
+        ]);
 
         if (
           !statusResponse.ok ||
           !excludedAppsResponse.ok ||
-          !excludedDomainsResponse.ok
+          !excludedDomainsResponse.ok ||
+          !fileWatchResponse.ok
         ) {
           throw new Error("Failed to load privacy settings from backend.");
         }
@@ -94,11 +109,15 @@ export function usePrivacySettings(): PrivacySettings {
           await excludedAppsResponse.json();
         const excludedDomainsData: { excluded_domains: string[] } =
           await excludedDomainsResponse.json();
+        const fileWatchData: { enabled: boolean; watched_folders: string[] } =
+          await fileWatchResponse.json();
 
         setIsCapturing(!statusData.is_paused);
         setPausedUntil(statusData.paused_until);
         setExcludedApps(excludedAppsData.excluded_apps);
         setExcludedDomains(excludedDomainsData.excluded_domains);
+        setFileWatchEnabledState(fileWatchData.enabled);
+        setWatchedFolders(fileWatchData.watched_folders);
         setError(null);
       } catch {
         setError("Could not reach Orbit backend.");
@@ -187,6 +206,49 @@ export function usePrivacySettings(): PrivacySettings {
     []
   );
 
+  const setFileWatchEnabled = useCallback(
+    async (enabled: boolean): Promise<void> => {
+      const response = await fetch(`${BACKEND_BASE_URL}/privacy/file-watching`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!response.ok) throw new Error("Failed to update file watching setting.");
+      setFileWatchEnabledState(enabled);
+    },
+    []
+  );
+
+  const addWatchedFolder = useCallback(
+    async (folder: string): Promise<void> => {
+      const response = await fetch(`${BACKEND_BASE_URL}/privacy/watched-folders`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder }),
+      });
+      if (!response.ok) throw new Error("Failed to add watched folder.");
+      setWatchedFolders((previous) =>
+        previous.includes(folder) ? previous : [...previous, folder]
+      );
+    },
+    []
+  );
+
+  const removeWatchedFolder = useCallback(
+    async (folder: string): Promise<void> => {
+      const response = await fetch(`${BACKEND_BASE_URL}/privacy/watched-folders`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder }),
+      });
+      if (!response.ok) throw new Error("Failed to remove watched folder.");
+      setWatchedFolders((previous) =>
+        previous.filter((existingFolder) => existingFolder !== folder)
+      );
+    },
+    []
+  );
+
   // durationMinutes: how long to pause. null = pause indefinitely.
   const pauseCapture = useCallback(
     async (durationMinutes: number | null): Promise<void> => {
@@ -238,6 +300,8 @@ export function usePrivacySettings(): PrivacySettings {
     pausedUntil,
     excludedApps,
     excludedDomains,
+    fileWatchEnabled,
+    watchedFolders,
     isWiping,
     isLoading,
     error,
@@ -245,6 +309,9 @@ export function usePrivacySettings(): PrivacySettings {
     removeExcludedApp,
     addExcludedDomain,
     removeExcludedDomain,
+    setFileWatchEnabled,
+    addWatchedFolder,
+    removeWatchedFolder,
     pauseCapture,
     resumeCapture,
     wipeAllMemory,
