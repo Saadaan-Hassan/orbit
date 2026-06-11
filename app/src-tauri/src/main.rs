@@ -143,6 +143,10 @@ fn main() {
         orbit_database_file_path,
     ));
 
+    tokio_runtime.spawn(capture::app_lifecycle::start_app_lifecycle_monitor(
+        sqlx_connection_pool.clone(),
+    ));
+
     tokio_runtime.spawn(capture::system_state::start_system_state_monitor(
         sqlx_connection_pool.clone(),
     ));

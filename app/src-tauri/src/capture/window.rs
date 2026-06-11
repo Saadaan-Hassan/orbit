@@ -7,6 +7,33 @@ use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
+// Idle detection (macOS only)
+//
+// IDLE TIMER ONLY — CGEventSourceSecondsSinceLastEventType returns the number
+// of seconds elapsed since the last input event (keyboard or mouse). It does
+// NOT capture what was typed or clicked: no keystrokes, no key codes, no mouse
+// coordinates, no click targets. This is purely a duration measurement used
+// to set the is_user_active flag on each window event.
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
+}
+
+/// Returns the number of seconds since any keyboard or mouse input was last
+/// received from the HID system. Never captures content — only a duration.
+#[cfg(target_os = "macos")]
+fn seconds_since_last_user_input() -> f64 {
+    // kCGEventSourceStateHIDSystemState = 1: query the global HID system state.
+    // kCGAnyInputEventType = 0xFFFFFFFF: consider any keyboard or mouse event.
+    const HID_SYSTEM_STATE: i32 = 1;
+    const ANY_INPUT_EVENT_TYPE: u32 = 0xFFFF_FFFF;
+    unsafe { CGEventSourceSecondsSinceLastEventType(HID_SYSTEM_STATE, ANY_INPUT_EVENT_TYPE) }
+}
+
+// ---------------------------------------------------------------------------
 // Capture filter cache
 //
 // The window tracker polls every 30 seconds, so we can afford to refresh the
@@ -119,6 +146,14 @@ pub async fn start_window_tracker(sqlx_connection_pool: SqlitePool) {
             continue;
         }
 
+        // Idle timer — computed once per poll and attached to the window event
+        // if one fires. 1 = active (input within the last 60 s), 0 = idle.
+        // On non-macOS this always defaults to 1 (active).
+        #[cfg(target_os = "macos")]
+        let is_user_active: i64 = if seconds_since_last_user_input() < 60.0 { 1 } else { 0 };
+        #[cfg(not(target_os = "macos"))]
+        let is_user_active: i64 = 1;
+
         // Get the active app name first — this requires no permissions.
         // Only attempt the window title (which needs Accessibility) if that succeeds.
         if let Some(active_app_name) = get_frontmost_app_name() {
@@ -145,13 +180,15 @@ pub async fn start_window_tracker(sqlx_connection_pool: SqlitePool) {
                 let event_timestamp_milliseconds = Utc::now().timestamp_millis();
 
                 let insert_result = sqlx::query(
-                    "INSERT INTO events (id, timestamp, type, raw_content, app_name, url, source)
-                     VALUES (?, ?, 'window', ?, ?, NULL, 'rust')",
+                    "INSERT INTO events \
+                         (id, timestamp, type, raw_content, app_name, url, source, is_user_active) \
+                     VALUES (?, ?, 'window', ?, ?, NULL, 'rust', ?)",
                 )
                 .bind(&new_event_id)
                 .bind(event_timestamp_milliseconds)
                 .bind(&effective_window_title)
                 .bind(&active_app_name)
+                .bind(is_user_active)
                 .execute(&sqlx_connection_pool)
                 .await;
 
