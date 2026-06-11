@@ -152,6 +152,10 @@ fn main() {
     ));
 
     tokio_runtime.spawn(capture::window::start_window_tracker(
+        sqlx_connection_pool.clone(),
+    ));
+
+    tokio_runtime.spawn(capture::browser_url::start_native_browser_url_monitor(
         sqlx_connection_pool,
     ));
 

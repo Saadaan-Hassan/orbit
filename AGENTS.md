@@ -81,6 +81,7 @@ same experience, AI adapts to what they actually do.
 [Rust: file_activity.rs]   ──► SQLite events (direct write, no HTTP)  [watched folders read from file_watch_settings every 30 s]
 [Rust: system_state.rs]    ──► SQLite events (direct write, no HTTP)
 [Rust: app_lifecycle.rs]   ──► SQLite events (direct write, no HTTP)
+[Rust: browser_url.rs]     ──► SQLite events (direct write, no HTTP)  [5 s poll; source='native_browser']
 
 [content.ts — @mozilla/readability]
     │  5-second visibility filter; sends on tab departure
@@ -210,6 +211,7 @@ orbit/
 │       │   │   ├── file_activity.rs        ← FSEvents via notify + 2 s debounce; reads file_watch_settings every 30 s; stores path only, never content
 │       │   │   ├── system_state.rs         ← Darwin notify API; lock/unlock/sleep/wake → SQLite; macOS only
 │       │   │   ├── app_lifecycle.rs        ← 10s osascript diff; launched/quit → SQLite
+│       │   │   ├── browser_url.rs          ← 5s osascript poll; active tab URL → SQLite; no extension needed
 │       │   │   └── window.rs               ← 30s poll via osascript; idle timer writes is_user_active on each event
 │       │   ├── hotkey.rs                   ← global hotkey (global-hotkey crate)
 │       │   ├── db.rs                       ← SQLite pool (sqlx) — single pool, never recreate
@@ -401,6 +403,7 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `app/src-tauri/src/capture/file_activity.rs` | FSEvents file activity monitor using `notify` + `notify-debouncer-full`. 2-second debounce. Reads `file_watch_settings` from SQLite on startup and every 30 s via `tokio::select!`; syncs the watcher using a `currently_watched: HashSet<String>` diff. Skips hidden files/dirs, blocked high-noise directories (node_modules, target, build, etc.), and transient file suffixes (.tmp, .swp, .lock, .log). Writes `file_activity` events with `file_path` and `metadata={"action":"created|modified|removed"}`. NEVER reads file contents. |
 | `app/src-tauri/src/capture/system_state.rs` | macOS system state monitor. Uses `notify_register_file_descriptor` (Darwin C API in libSystem — no new crates). Registers 4 Darwin notifications: `com.apple.screenIsLocked` → "lock", `com.apple.screenIsUnlocked` → "unlock", `com.apple.system.willsleep` → "sleep", `com.apple.system.didwake` → "wake". Each fd gets a dedicated blocking OS thread; events bridge to tokio via `mpsc::unbounded_channel`. Writes `type='system_state'` events with `raw_content=<state>` and `metadata={"state":"..."}`. No-op on non-macOS. |
 | `app/src-tauri/src/capture/app_lifecycle.rs` | App launch/quit monitor. Polls running process names every 10 s via `osascript` (`System Events`), diffs against the previous snapshot. Writes `type='app_lifecycle'` events with `app_name` and `metadata={"action":"launched"|"quit"}`. Initial snapshot taken before the first sleep so apps already running at startup are not emitted as launches. |
+| `app/src-tauri/src/capture/browser_url.rs` | Native browser URL monitor. Polls the active tab of the frontmost browser every 5 s via osascript. Supports Chrome, Safari, Arc, Brave Browser, Microsoft Edge. Applies pause-state + excluded-domains checks; skips internal URLs. Deduplicates on URL change. Sets `pub static BROWSER_AUTOMATION_DENIED: AtomicBool` on first `-1743` error (clears on success). Writes `type='url', source='native_browser'`. |
 | `app/src-tauri/src/db.rs` | sqlx SQLite pool. **Single pool shared everywhere. Never open new connections.** |
 | `app/src-tauri/src/commands.rs` | All `#[tauri::command]` functions — thin wrappers only. Logic lives in modules. |
 | `app/src-tauri/Info.plist` | `LSUIElement = true`. Never remove. Orbit never appears in the dock. |
@@ -454,7 +457,7 @@ events(
                                     --  for link_click: visible anchor text.
   app_name     TEXT,
   url          TEXT,
-  source       TEXT NOT NULL,       -- 'rust' | 'extension'
+  source       TEXT NOT NULL,       -- 'rust' | 'extension' | 'native_browser'
   session_id   TEXT,                -- null until processed by scheduler
   category     TEXT,                -- Gemini output: work/research/personal/system/communication
   page_text    TEXT,                -- readable article body (page_content events);
