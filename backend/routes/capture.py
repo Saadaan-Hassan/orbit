@@ -21,6 +21,7 @@ from sqlalchemy import text
 
 from models.event import CaptureEvent
 from database import get_db, _async_engine
+from services.redaction_service import redact_sensitive_content
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -137,6 +138,18 @@ async def capture_event(
         if domain and domain in _filter_cache.excluded_domains:
             return {"status": "excluded"}
 
+    # page_text carries extracted article body — redact secrets before storing.
+    # raw_content for search_query events is the typed search term, which could
+    # contain a pasted secret. Both fields are sourced from the browser and have
+    # not passed through the Rust clipboard redactor.
+    page_text_to_store = event.page_text
+    if event.type == "page_content" and page_text_to_store:
+        page_text_to_store = redact_sensitive_content(page_text_to_store)
+
+    raw_content_to_store = event.raw_content
+    if event.type == "search_query" and raw_content_to_store:
+        raw_content_to_store = redact_sensitive_content(raw_content_to_store)
+
     await db.execute(
         text("""
             INSERT INTO events
@@ -150,11 +163,11 @@ async def capture_event(
             "id":          event.id,
             "timestamp":   event.timestamp,
             "type":        event.type,
-            "raw_content": event.raw_content,
+            "raw_content": raw_content_to_store,
             "app_name":    event.app_name,
             "url":         event.url,
             "source":      event.source,
-            "page_text":   event.page_text,
+            "page_text":   page_text_to_store,
             "link_target": event.link_target,
             "metadata":    json.dumps(event.metadata) if event.metadata is not None else None,
         },
