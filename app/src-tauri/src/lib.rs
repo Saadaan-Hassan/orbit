@@ -86,6 +86,99 @@ fn mark_onboarding_completed() {
     let _ = std::fs::write(format!("{}/onboarding_done", orbit_dir), "1");
 }
 
+// ---------------------------------------------------------------------------
+// Browser Automation permission commands
+//
+// macOS requires explicit Automation permission (System Settings → Privacy &
+// Security → Automation) before any app can send Apple Events to a browser.
+// These three commands let the frontend probe for that permission, trigger the
+// macOS permission dialog during onboarding, and deep-link to the settings pane.
+// ---------------------------------------------------------------------------
+
+/// App names to probe when checking/triggering Automation permission.
+/// Matches the KNOWN_BROWSER_APP_NAMES list in capture/browser_url.rs.
+const BROWSER_NAMES_FOR_AUTOMATION_PROBE: &[&str] = &[
+    "Google Chrome",
+    "Safari",
+    "Arc",
+    "Brave Browser",
+    "Microsoft Edge",
+];
+
+/// Checks whether the Automation permission has been granted for at least one
+/// known browser.
+///
+/// Probes each browser in turn with a minimal harmless AppleScript. Returns
+/// false on the first -1743 (errAEEventNotPermitted) error — which means the
+/// OS has denied Automation access. Returns true as soon as one probe succeeds.
+/// Returns true when no known browser is running (can't test; permission will
+/// surface naturally when the user first opens a browser).
+#[tauri::command]
+fn check_browser_automation_permission() -> bool {
+    for browser_name in BROWSER_NAMES_FOR_AUTOMATION_PROBE {
+        let script = format!("tell application \"{}\" to return name", browser_name);
+
+        let output_result = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output();
+
+        let output = match output_result {
+            Ok(output) => output,
+            Err(_) => continue,
+        };
+
+        let stderr_text = String::from_utf8_lossy(&output.stderr);
+        let automation_was_denied = stderr_text.contains("Not authorized to send Apple events")
+            || stderr_text.contains("-1743");
+
+        if automation_was_denied {
+            // At least one running browser has denied Automation access.
+            return false;
+        }
+
+        if output.status.success() {
+            // At least one browser responded — permission is granted.
+            return true;
+        }
+
+        // Non-zero exit without -1743 means the browser is not running.
+        // Try the next one.
+    }
+
+    // No known browser is running — we cannot probe. Return true so onboarding
+    // does not block the user; the macOS dialog will appear naturally when a
+    // browser is first opened and Orbit tries to read its active tab.
+    true
+}
+
+/// Triggers the macOS Automation permission dialog(s) for all known browsers.
+///
+/// Runs a benign AppleScript (`return name`) against each browser. For any
+/// browser that is currently running and has not yet been approved, macOS shows
+/// "Allow Orbit to control <Browser>?" This is called during onboarding so the
+/// user grants access up front rather than encountering the prompt mid-use.
+/// Results are ignored — the only purpose is surfacing the permission dialogs.
+#[tauri::command]
+fn trigger_browser_automation_prompt() {
+    for browser_name in BROWSER_NAMES_FOR_AUTOMATION_PROBE {
+        let script = format!("tell application \"{}\" to return name", browser_name);
+        let _ = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output();
+    }
+}
+
+/// Opens System Settings directly to the Automation privacy pane.
+#[tauri::command]
+fn open_automation_system_settings() {
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
+        .spawn()
+        .ok();
+}
+
 /// Entry point used by main.rs when no exit hook is needed (mobile / tests).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -350,6 +443,9 @@ where
             mark_onboarding_completed,
             restart_app,
             position_window,
+            check_browser_automation_permission,
+            trigger_browser_automation_prompt,
+            open_automation_system_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
