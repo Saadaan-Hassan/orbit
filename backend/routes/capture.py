@@ -133,6 +133,14 @@ async def capture_event(
     if event.app_name and event.app_name in _filter_cache.excluded_app_names:
         return {"status": "excluded"}
 
+    # file_activity events carry the responsible app in metadata.app_name rather
+    # than (or in addition to) the top-level app_name field. Check it separately
+    # so files written by excluded apps (e.g. 1Password) are not recorded.
+    if event.type == "file_activity" and event.metadata:
+        file_event_app = event.metadata.get("app_name")
+        if file_event_app and file_event_app in _filter_cache.excluded_app_names:
+            return {"status": "excluded"}
+
     if event.url:
         domain = _extract_domain(event.url)
         if domain and domain in _filter_cache.excluded_domains:
@@ -154,22 +162,25 @@ async def capture_event(
         text("""
             INSERT INTO events
                 (id, timestamp, type, raw_content, app_name, url, source,
-                 page_text, link_target, metadata)
+                 page_text, link_target, metadata, file_path, is_user_active)
             VALUES
                 (:id, :timestamp, :type, :raw_content, :app_name, :url, :source,
-                 :page_text, :link_target, :metadata)
+                 :page_text, :link_target, :metadata, :file_path, :is_user_active)
         """),
         {
-            "id":          event.id,
-            "timestamp":   event.timestamp,
-            "type":        event.type,
-            "raw_content": raw_content_to_store,
-            "app_name":    event.app_name,
-            "url":         event.url,
-            "source":      event.source,
-            "page_text":   page_text_to_store,
-            "link_target": event.link_target,
-            "metadata":    json.dumps(event.metadata) if event.metadata is not None else None,
+            "id":             event.id,
+            "timestamp":      event.timestamp,
+            "type":           event.type,
+            "raw_content":    raw_content_to_store,
+            "app_name":       event.app_name,
+            "url":            event.url,
+            "source":         event.source,
+            "page_text":      page_text_to_store,
+            "link_target":    event.link_target,
+            "metadata":       json.dumps(event.metadata) if event.metadata is not None else None,
+            "file_path":      event.file_path,
+            # Pydantic delivers bool | None; SQLite stores INTEGER 1/0/NULL.
+            "is_user_active": int(event.is_user_active) if event.is_user_active is not None else None,
         },
     )
     await db.commit()

@@ -12,3 +12,5 @@ class CaptureEvent(BaseModel):
     page_text: str | None = None
     link_target: str | None = None
     metadata: dict | None = None
+    file_path: str | None = None
+    is_user_active: bool | None = None

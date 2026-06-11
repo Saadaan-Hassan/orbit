@@ -20,18 +20,20 @@ async def create_all_tables() -> None:
     async with _async_engine.begin() as connection:
         await connection.execute(text("""
             CREATE TABLE IF NOT EXISTS events (
-                id          TEXT PRIMARY KEY,
-                timestamp   INTEGER NOT NULL,
-                type        TEXT NOT NULL,
-                raw_content TEXT,
-                app_name    TEXT,
-                url         TEXT,
-                source      TEXT NOT NULL,
-                session_id  TEXT,
-                category    TEXT,
-                page_text   TEXT,
-                link_target TEXT,
-                metadata    TEXT
+                id             TEXT PRIMARY KEY,
+                timestamp      INTEGER NOT NULL,
+                type           TEXT NOT NULL,
+                raw_content    TEXT,
+                app_name       TEXT,
+                url            TEXT,
+                source         TEXT NOT NULL,
+                session_id     TEXT,
+                category       TEXT,
+                page_text      TEXT,
+                link_target    TEXT,
+                metadata       TEXT,
+                file_path      TEXT,
+                is_user_active INTEGER
             )
         """))
         # FTS5 virtual table mirrors the key text columns. page_text is included

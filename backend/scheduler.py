@@ -114,6 +114,18 @@ async def _ensure_events_schema_columns_exist() -> None:
             )
             logger.info("Added metadata column to events table.")
 
+        if "file_path" not in existing_column_names:
+            await connection.execute(
+                text("ALTER TABLE events ADD COLUMN file_path TEXT")
+            )
+            logger.info("Added file_path column to events table.")
+
+        if "is_user_active" not in existing_column_names:
+            await connection.execute(
+                text("ALTER TABLE events ADD COLUMN is_user_active INTEGER")
+            )
+            logger.info("Added is_user_active column to events table.")
+
 
 async def _ensure_sessions_schema_columns_exist() -> None:
     """Adds topics column to sessions when absent (existing databases)."""
