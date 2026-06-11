@@ -64,6 +64,10 @@ class RemoveWatchedFolderRequest(BaseModel):
     folder: str
 
 
+class SetBrowserCaptureRequest(BaseModel):
+    native_enabled: bool
+
+
 # ---------------------------------------------------------------------------
 # Excluded apps
 # ---------------------------------------------------------------------------
@@ -156,6 +160,47 @@ async def remove_excluded_domain(domain: str) -> dict:
             {"domain": domain},
         )
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Native browser capture (osascript — no extension required)
+# ---------------------------------------------------------------------------
+
+# These are the exact application names Rust's browser_url.rs polls via
+# osascript. Returned to the frontend so the UI can list them statically.
+_SUPPORTED_NATIVE_BROWSERS: list[str] = [
+    "Google Chrome",
+    "Safari",
+    "Arc",
+    "Brave Browser",
+    "Microsoft Edge",
+]
+
+
+@router.get("/browser-capture")
+async def get_browser_capture() -> dict:
+    async with _async_engine.connect() as connection:
+        result = await connection.execute(
+            text("SELECT native_enabled FROM browser_capture_settings WHERE id = 1")
+        )
+        row = result.fetchone()
+
+    return {
+        "native_enabled": bool(row.native_enabled) if row else True,
+        "browsers": _SUPPORTED_NATIVE_BROWSERS,
+    }
+
+
+@router.post("/browser-capture")
+async def set_browser_capture(request: SetBrowserCaptureRequest) -> dict:
+    async with _async_engine.begin() as connection:
+        await connection.execute(
+            text(
+                "UPDATE browser_capture_settings SET native_enabled = :enabled WHERE id = 1"
+            ),
+            {"enabled": 1 if request.native_enabled else 0},
+        )
+    return {"native_enabled": request.native_enabled}
 
 
 # ---------------------------------------------------------------------------

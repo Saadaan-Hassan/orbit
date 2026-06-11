@@ -55,6 +55,7 @@ struct BrowserUrlCaptureCache {
     is_paused: bool,
     paused_until_ms: Option<i64>,
     excluded_domains: HashSet<String>,
+    native_browser_enabled: bool,
     last_refreshed_at: Instant,
 }
 
@@ -64,6 +65,9 @@ impl BrowserUrlCaptureCache {
             is_paused: false,
             paused_until_ms: None,
             excluded_domains: HashSet::new(),
+            // Default true so capture works from the very first tick even
+            // before the browser_capture_settings row has been seeded by FastAPI.
+            native_browser_enabled: true,
             // Far in the past so the very first iteration always refreshes.
             last_refreshed_at: Instant::now()
                 .checked_sub(std::time::Duration::from_secs(60))
@@ -129,6 +133,24 @@ async fn refresh_browser_url_capture_cache(
         }
     }
 
+    // --- Native browser capture enabled flag ---
+    let browser_capture_result = sqlx::query_as::<_, (i64,)>(
+        "SELECT native_enabled FROM browser_capture_settings WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await;
+
+    match browser_capture_result {
+        Ok(Some((native_enabled_value,))) => {
+            cache.native_browser_enabled = native_enabled_value != 0;
+        }
+        Ok(None) | Err(_) => {
+            // Table not yet seeded by FastAPI — default to enabled so capture
+            // works from the first launch before the backend has initialised.
+            cache.native_browser_enabled = true;
+        }
+    }
+
     cache.last_refreshed_at = Instant::now();
 }
 
@@ -153,6 +175,11 @@ pub async fn start_native_browser_url_monitor(sqlx_connection_pool: SqlitePool) 
         refresh_browser_url_capture_cache(&sqlx_connection_pool, &mut capture_cache).await;
 
         if capture_cache.capture_is_paused_right_now() {
+            continue;
+        }
+
+        // Skip the entire poll when the user has disabled native browser capture.
+        if !capture_cache.native_browser_enabled {
             continue;
         }
 

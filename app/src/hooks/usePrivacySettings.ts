@@ -20,6 +20,8 @@ export interface PrivacySettings {
   excludedApps: string[];
   // Ordered list of domains excluded from browser capture.
   excludedDomains: string[];
+  // Whether native browser URL capture (osascript, no extension) is enabled.
+  nativeBrowserEnabled: boolean;
   // Whether file activity capture is enabled.
   fileWatchEnabled: boolean;
   // Absolute folder paths being watched for file activity.
@@ -35,6 +37,7 @@ export interface PrivacySettings {
   removeExcludedApp: (appName: string) => Promise<void>;
   addExcludedDomain: (domain: string) => Promise<void>;
   removeExcludedDomain: (domain: string) => Promise<void>;
+  setNativeBrowserEnabled: (enabled: boolean) => Promise<void>;
   setFileWatchEnabled: (enabled: boolean) => Promise<void>;
   addWatchedFolder: (folder: string) => Promise<void>;
   removeWatchedFolder: (folder: string) => Promise<void>;
@@ -73,6 +76,7 @@ export function usePrivacySettings(): PrivacySettings {
   const [pausedUntil, setPausedUntil] = useState<number | null>(null);
   const [excludedApps, setExcludedApps] = useState<string[]>([]);
   const [excludedDomains, setExcludedDomains] = useState<string[]>([]);
+  const [nativeBrowserEnabled, setNativeBrowserEnabledState] = useState(true);
   const [fileWatchEnabled, setFileWatchEnabledState] = useState(true);
   const [watchedFolders, setWatchedFolders] = useState<string[]>([]);
   const [isWiping, setIsWiping] = useState(false);
@@ -87,11 +91,13 @@ export function usePrivacySettings(): PrivacySettings {
           statusResponse,
           excludedAppsResponse,
           excludedDomainsResponse,
+          browserCaptureResponse,
           fileWatchResponse,
         ] = await Promise.all([
           fetch(`${BACKEND_BASE_URL}/privacy/capture-status`),
           fetch(`${BACKEND_BASE_URL}/privacy/excluded-apps`),
           fetch(`${BACKEND_BASE_URL}/privacy/excluded-domains`),
+          fetch(`${BACKEND_BASE_URL}/privacy/browser-capture`),
           fetch(`${BACKEND_BASE_URL}/privacy/file-watching`),
         ]);
 
@@ -99,6 +105,7 @@ export function usePrivacySettings(): PrivacySettings {
           !statusResponse.ok ||
           !excludedAppsResponse.ok ||
           !excludedDomainsResponse.ok ||
+          !browserCaptureResponse.ok ||
           !fileWatchResponse.ok
         ) {
           throw new Error("Failed to load privacy settings from backend.");
@@ -109,6 +116,8 @@ export function usePrivacySettings(): PrivacySettings {
           await excludedAppsResponse.json();
         const excludedDomainsData: { excluded_domains: string[] } =
           await excludedDomainsResponse.json();
+        const browserCaptureData: { native_enabled: boolean } =
+          await browserCaptureResponse.json();
         const fileWatchData: { enabled: boolean; watched_folders: string[] } =
           await fileWatchResponse.json();
 
@@ -116,6 +125,7 @@ export function usePrivacySettings(): PrivacySettings {
         setPausedUntil(statusData.paused_until);
         setExcludedApps(excludedAppsData.excluded_apps);
         setExcludedDomains(excludedDomainsData.excluded_domains);
+        setNativeBrowserEnabledState(browserCaptureData.native_enabled);
         setFileWatchEnabledState(fileWatchData.enabled);
         setWatchedFolders(fileWatchData.watched_folders);
         setError(null);
@@ -202,6 +212,19 @@ export function usePrivacySettings(): PrivacySettings {
       setExcludedDomains((previous) =>
         previous.filter((existingDomain) => existingDomain !== domain)
       );
+    },
+    []
+  );
+
+  const setNativeBrowserEnabled = useCallback(
+    async (enabled: boolean): Promise<void> => {
+      const response = await fetch(`${BACKEND_BASE_URL}/privacy/browser-capture`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ native_enabled: enabled }),
+      });
+      if (!response.ok) throw new Error("Failed to update native browser capture setting.");
+      setNativeBrowserEnabledState(enabled);
     },
     []
   );
@@ -300,6 +323,7 @@ export function usePrivacySettings(): PrivacySettings {
     pausedUntil,
     excludedApps,
     excludedDomains,
+    nativeBrowserEnabled,
     fileWatchEnabled,
     watchedFolders,
     isWiping,
@@ -309,6 +333,7 @@ export function usePrivacySettings(): PrivacySettings {
     removeExcludedApp,
     addExcludedDomain,
     removeExcludedDomain,
+    setNativeBrowserEnabled,
     setFileWatchEnabled,
     addWatchedFolder,
     removeWatchedFolder,

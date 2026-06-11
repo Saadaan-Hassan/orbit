@@ -182,6 +182,22 @@ async def create_all_tables() -> None:
             VALUES (1, 1, '[]')
         """))
 
+        # Single-row table (id=1 always) that controls whether native browser
+        # URL capture (via osascript — no extension required) is active.
+        # Users can turn this off independently from the Chrome extension.
+        await connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS browser_capture_settings (
+                id             INTEGER PRIMARY KEY DEFAULT 1,
+                native_enabled INTEGER NOT NULL DEFAULT 1
+            )
+        """))
+
+        # Ensure the single browser_capture_settings row exists.
+        await connection.execute(text("""
+            INSERT OR IGNORE INTO browser_capture_settings (id, native_enabled)
+            VALUES (1, 1)
+        """))
+
     # Seed default lists outside the schema transaction so INSERT OR IGNORE
     # checks work against a fully committed table state.
     await _seed_default_excluded_apps()

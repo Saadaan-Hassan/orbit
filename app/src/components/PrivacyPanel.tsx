@@ -378,7 +378,86 @@ function ExcludedWebsitesSection({
   );
 }
 
-// ─── Section 4 — File Activity ───────────────────────────────────────────────
+// ─── Section 4 — Browser Tracking ────────────────────────────────────────────
+interface BrowserTrackingSectionProps {
+  enabled: boolean;
+  onToggle: (enabled: boolean) => Promise<void>;
+}
+
+function BrowserTrackingSection({
+  enabled,
+  onToggle,
+}: BrowserTrackingSectionProps) {
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function handleToggle(): Promise<void> {
+    setActionError(null);
+    try {
+      await onToggle(!enabled);
+    } catch {
+      setActionError("Could not update browser tracking setting.");
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <SectionHeading>Browser Tracking</SectionHeading>
+      <p className="text-xs text-zinc-400 dark:text-zinc-500 font-light leading-relaxed mb-1">
+        Captures the page address and title from Chrome, Safari, Arc, Brave,
+        and Edge — no extension needed. Add the extension for deeper memory
+        (article content and search queries).
+      </p>
+
+      {/* Enable / disable toggle */}
+      <div className="flex items-center justify-between px-3.5 py-2.5 bg-zinc-50/20 dark:bg-zinc-900/10 rounded-2xl">
+        <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
+          Track browser tabs (native)
+        </span>
+        <button
+          onClick={handleToggle}
+          aria-pressed={enabled}
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-500 ${
+            enabled ? "bg-zinc-900 dark:bg-white" : "bg-zinc-200 dark:bg-zinc-700"
+          }`}
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white dark:bg-zinc-950 shadow transition-transform ${
+              enabled ? "translate-x-4" : "translate-x-0.5"
+            }`}
+          />
+        </button>
+      </div>
+
+      {/* Supported browser pills */}
+      {enabled && (
+        <div className="flex flex-wrap gap-1.5 px-1">
+          {["Chrome", "Safari", "Arc", "Brave", "Edge"].map((browser) => (
+            <span
+              key={browser}
+              className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-zinc-100 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400"
+            >
+              {browser}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <p className="text-[11px] text-zinc-400 dark:text-zinc-500 leading-relaxed px-1">
+        To block specific sites, add them to{" "}
+        <span className="font-semibold text-zinc-500 dark:text-zinc-400">
+          Excluded Websites
+        </span>{" "}
+        above.
+      </p>
+
+      {actionError && (
+        <p className="text-xs text-red-500 font-medium px-1 mt-1">{actionError}</p>
+      )}
+    </div>
+  );
+}
+
+// ─── Section 5 — File Activity ───────────────────────────────────────────────
 interface FileActivitySectionProps {
   enabled: boolean;
   watchedFolders: string[];
@@ -509,7 +588,7 @@ function FileActivitySection({
   );
 }
 
-// ─── Section 5 — Danger Zone ─────────────────────────────────────────────────
+// ─── Section 6 — Danger Zone ─────────────────────────────────────────────────
 interface DangerZoneSectionProps {
   isWiping: boolean;
   onWipe: () => Promise<void>;
@@ -585,6 +664,7 @@ export function PrivacyPanel() {
     pausedUntil,
     excludedApps,
     excludedDomains,
+    nativeBrowserEnabled,
     fileWatchEnabled,
     watchedFolders,
     isWiping,
@@ -594,6 +674,7 @@ export function PrivacyPanel() {
     removeExcludedApp,
     addExcludedDomain,
     removeExcludedDomain,
+    setNativeBrowserEnabled,
     setFileWatchEnabled,
     addWatchedFolder,
     removeWatchedFolder,
@@ -639,6 +720,13 @@ export function PrivacyPanel() {
         excludedDomains={excludedDomains}
         onAdd={addExcludedDomain}
         onRemove={removeExcludedDomain}
+      />
+
+      <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
+
+      <BrowserTrackingSection
+        enabled={nativeBrowserEnabled}
+        onToggle={setNativeBrowserEnabled}
       />
 
       <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
