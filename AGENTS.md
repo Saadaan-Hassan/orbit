@@ -393,6 +393,7 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `app/src/hooks/useRecall.ts` | POST /recall. Sends `conversation_history`. Appends each turn to Zustand store. Max 4 turns enforced here. |
 | `app/src/hooks/useAnalytics.ts` | Wraps `usePostHog()`. All components call this — never import posthog-js directly. Strips forbidden property keys before capture. |
 | `app/src/hooks/useOnboarding.ts` | Checks accessibility permission on mount. Polls every 3s while onboarding screen is open. Persists completion state. |
+| `app/src/hooks/usePrivacySettings.ts` | Loads privacy settings in parallel on mount (capture status, excluded apps, excluded domains, file-watch settings). Exposes `setFileWatchEnabled`, `addWatchedFolder`, `removeWatchedFolder` alongside existing app/domain CRUD. `normalizeDomain()` strips URL to bare hostname before any API call. |
 | `app/src/store/orbitStore.ts` | Zustand global state. Key: `conversationHistory: ConversationMessage[]` — reset on new topic, preserved within session. |
 | `app/src-tauri/src/main.rs` | Entry point. Sets LSUIElement, system tray, spawns FastAPI subprocess, creates SQLite pool, starts clipboard + window capture as tokio tasks. Health-checks FastAPI on startup (10 retries, 1s each). |
 | `app/src-tauri/src/capture/clipboard.rs` | 500ms poll. Runs `detect_sensitive_content_type()` before writing. Stores `[REDACTED:type]` for matches. Deduplicates same content within 5 minutes. |
@@ -446,6 +447,7 @@ events(
   timestamp    INTEGER NOT NULL,    -- unix milliseconds
   type         TEXT NOT NULL,       -- 'clipboard' | 'window' | 'url'
                                     --   | 'page_content' | 'search_query' | 'link_click'
+                                    --   | 'file_activity' | 'system_state' | 'app_lifecycle'
   raw_content  TEXT,                -- secrets replaced with [REDACTED:type] at capture;
                                     --  safe redacted content IS forwarded to Gemini + Claude.
                                     --  for page_content: page title. for search_query: query text.
@@ -458,9 +460,15 @@ events(
   page_text    TEXT,                -- readable article body (page_content events);
                                     --  capped at 2 000 chars; redacted by redaction_service before storage
   link_target  TEXT,                -- destination URL (link_click events)
+  file_path    TEXT,                -- absolute path (file_activity events only; contents never read)
+  is_user_active INTEGER,           -- 1 = user input within last 60 s at capture time (window events);
+                                    --   0 = idle; NULL for all other event types
   metadata     TEXT                 -- JSON: {author, site_name, excerpt, time_on_page} for page_content;
                                     --       {search_engine, time_on_page} for search_query;
-                                    --       {link_text} for link_click
+                                    --       {link_text} for link_click;
+                                    --       {action: 'created'|'modified'|'removed'} for file_activity;
+                                    --       {state: 'lock'|'unlock'|'sleep'|'wake'} for system_state;
+                                    --       {action: 'launched'|'quit'} for app_lifecycle
 )
 ```
 
@@ -481,12 +489,13 @@ sessions(
   key_resources TEXT,            -- JSON array of important URLs / file paths
   topics        TEXT,            -- JSON array of subject areas ("vector databases", "tax filing" …)
                                  --  included in Qdrant embedding text for subject-based recall
+  active_minutes INTEGER,        -- lower-bound estimate: count of is_user_active=1 window events × 30 s ÷ 60
+                                 --  lower-bound because window tracker only fires on title change
   embedding_id  TEXT             -- Qdrant point ID
 )
 ```
 
-Session boundaries break on: (a) 30-min time window OR (b) project change detected
-mid-batch by Gemini. Large timestamp gaps (>30 min between events) also break sessions.
+Session boundaries break on: (a) `system_state` lock/sleep events (primary — scheduler splits here first), (b) 30-min time window, or (c) project change detected mid-batch by Gemini. System_state boundary events are marked `session_id='system_boundary'` immediately so they are never re-classified on the next scheduler run.
 
 ### Tier 3 — Memory Objects (Phase 3)
 
@@ -627,6 +636,22 @@ first run. Users manage their own list via PrivacyPanel ("Excluded Websites" sec
 via the API. The domain check in `capture.py` uses the same 30-second in-memory cache as the
 app exclude list — any browser event (`url`, `page_content`, `link_click`, `search_query`) whose
 URL hostname matches a listed domain is silently dropped before any data is written.
+
+### File Watching Privacy Controls
+
+`file_watch_settings` table (single row, id=1) in SQLite:
+
+| Column | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | INTEGER | 1 | 0 = all file activity monitoring stopped |
+| `watched_folders` | TEXT (JSON array) | `[]` → seeded to Documents/Desktop/Downloads on first run | Absolute paths watched by FSEvents |
+
+`file_activity.rs` reads this table on startup and re-reads it every 30 seconds via `tokio::select!`. If `enabled = 0` the desired folder set is empty and all active watches are unwatched. If the folder list changes, only the delta is acted on (`unwatch` removed paths, `watch` added paths) — the debouncer is never recreated.
+
+User controls via `PrivacyPanel.tsx → FileActivitySection`:
+- Toggle switch — calls `POST /privacy/file-watching`
+- Watched folder list with remove buttons — calls `DELETE /privacy/watched-folders` (JSON body)
+- "Add folder" button — calls Tauri's `open({ directory: true })` plugin dialog, then `POST /privacy/watched-folders`
 
 ### Other Rules
 - All data local by default. Cloud sync opt-in, Phase 5 only.
@@ -862,6 +887,10 @@ and auto-advances when granted.
 - Call posthog-js directly in components — use `useAnalytics()`.
 - Use developer-specific language in any user-facing copy.
 - Run `xcodebuild` from the terminal — invalidates TCC permissions.
+- Log, store, or transmit keystroke content, key codes, mouse coordinates, or click targets. `CGEventSourceSecondsSinceLastEventType` is an IDLE TIMER ONLY — it returns seconds since last event, never what the event was.
+- Capture audio or microphone input before Phase 4. Phase 4 requires explicit user permission at the macOS prompt.
+- Capture screen contents or take screenshots before Phase 3. Phase 3 requires explicit Screen Recording permission.
+- Capture network connections, DNS queries, HTTP request bodies, or OS audit logs — these are never part of Orbit's data model.
 
 ---
 
