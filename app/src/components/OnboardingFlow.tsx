@@ -1,14 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useOnboarding } from "../hooks/useOnboarding";
 
 // Step indices
 const STEP_WELCOME = 0;
 const STEP_ACCESSIBILITY = 1;
-const STEP_EXTENSION = 2;
-const STEP_WHAT_TO_EXPECT = 3;
-const TOTAL_STEPS = 4;
+const STEP_BROWSER_AUTOMATION = 2;
+const STEP_EXTENSION = 3;
+const STEP_WHAT_TO_EXPECT = 4;
+const TOTAL_STEPS = 5;
 
-// ─── Progress Bar ─────────────────────────────────────────────────────────────
+// ─── Progress Dots ────────────────────────────────────────────────────────────
 function ProgressDots({ currentStep }: { currentStep: number }) {
   return (
     <div className="flex items-center gap-1.5">
@@ -114,9 +115,7 @@ function AccessibilityStep({
 
       <div
         className={`rounded-2xl p-4 flex items-center gap-4 transition-colors ${
-          hasPermission
-            ? "bg-emerald-500/10"
-            : "bg-amber-500/10"
+          hasPermission ? "bg-emerald-500/10" : "bg-amber-500/10"
         }`}
       >
         <div
@@ -206,17 +205,171 @@ function AccessibilityStep({
   );
 }
 
-// ─── Step 2 — Chrome Extension ───────────────────────────────────────────────
+// ─── Step 2 — Browser Automation Permission ───────────────────────────────────
+function BrowserAutomationStep({
+  isGranted,
+  onRequestAccess,
+  onOpenSettings,
+  onNext,
+}: {
+  isGranted: boolean;
+  onRequestAccess: () => Promise<void>;
+  onOpenSettings: () => Promise<void>;
+  onNext: () => void;
+}) {
+  const [isWaiting, setIsWaiting] = useState(false);
+
+  // Prevents onNext() being called twice if the polling resolves while the user
+  // has already clicked Skip.
+  const hasAdvanced = useRef(false);
+
+  async function handleAllowAccess(): Promise<void> {
+    setIsWaiting(true);
+    await onRequestAccess(); // polls internally until granted
+    if (!hasAdvanced.current) {
+      hasAdvanced.current = true;
+      onNext();
+    }
+  }
+
+  function handleSkip(): void {
+    if (!hasAdvanced.current) {
+      hasAdvanced.current = true;
+      onNext();
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-5 px-2">
+      <div className="flex flex-col gap-1.5">
+        <div className="text-2xl mb-0.5">🌐</div>
+        <h2 className="text-lg font-bold text-zinc-900 dark:text-white tracking-tight">
+          Connect your browser
+        </h2>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed font-light">
+          Orbit can see which web pages you visit so it can remember your
+          research and reading. This works with Chrome, Safari, Arc, Brave, and
+          Edge — across all your profiles, with no extension needed.
+        </p>
+      </div>
+
+      {/* Status indicator */}
+      <div
+        className={`rounded-2xl p-4 flex items-center gap-4 transition-colors ${
+          isGranted ? "bg-emerald-500/10" : "bg-zinc-100 dark:bg-zinc-900/50"
+        }`}
+      >
+        <div
+          className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-sm ${
+            isGranted ? "bg-emerald-500/20" : "bg-zinc-200 dark:bg-zinc-800"
+          }`}
+        >
+          {isGranted ? (
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+              <path d="M3 8l3.5 3.5L13 5" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          ) : (
+            <span>🔴</span>
+          )}
+        </div>
+        <div>
+          <p
+            className={`text-xs font-bold ${
+              isGranted
+                ? "text-emerald-600 dark:text-emerald-400"
+                : "text-zinc-600 dark:text-zinc-400"
+            }`}
+          >
+            {isGranted ? "Connected!" : "Not connected"}
+          </p>
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-relaxed">
+            {isGranted
+              ? "Orbit can see your active browser tabs."
+              : isWaiting
+              ? "Waiting for your approval in the system prompt…"
+              : "Tap below to connect your browser."}
+          </p>
+        </div>
+      </div>
+
+      {/* Buttons */}
+      <div className="flex flex-col gap-2 mt-1">
+        {isGranted ? (
+          <button
+            onClick={onNext}
+            className="w-full py-3 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-sm font-semibold hover:opacity-90 transition-all cursor-pointer"
+          >
+            Continue →
+          </button>
+        ) : (
+          <>
+            <button
+              onClick={handleAllowAccess}
+              disabled={isWaiting}
+              className="w-full py-3 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-sm font-semibold hover:opacity-90 transition-all cursor-pointer disabled:opacity-60 flex items-center justify-center gap-2"
+            >
+              {isWaiting ? (
+                <>
+                  <svg
+                    className="animate-spin h-4 w-4"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 3 12 3 12h1z"
+                    />
+                  </svg>
+                  Waiting…
+                </>
+              ) : (
+                "Allow Browser Access"
+              )}
+            </button>
+
+            {/* Always available so the user isn't blocked if they click
+                "Don't Allow" in the macOS dialog */}
+            <button
+              onClick={handleSkip}
+              className="w-full py-2 text-xs text-zinc-400 dark:text-zinc-600 hover:text-zinc-600 dark:hover:text-zinc-400 transition-colors cursor-pointer"
+            >
+              Skip for now
+            </button>
+          </>
+        )}
+      </div>
+
+      <p className="text-[11px] text-zinc-400 dark:text-zinc-500 text-center leading-relaxed -mt-1">
+        Orbit only sees the page address and title — not your passwords or what
+        you type.
+      </p>
+    </div>
+  );
+}
+
+// ─── Step 3 — Chrome Extension (optional) ────────────────────────────────────
 function ChromeExtensionStep({ onNext }: { onNext: () => void }) {
   return (
     <div className="flex flex-col gap-5 px-2">
       <div className="flex flex-col gap-1.5">
         <h2 className="text-lg font-bold text-zinc-900 dark:text-white tracking-tight">
-          Install the Chrome Extension
+          Want deeper memory?{" "}
+          <span className="font-normal text-zinc-400 dark:text-zinc-500">(optional)</span>
         </h2>
         <p className="text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed font-light">
-          Recommended for the best Orbit experience. The extension lets Orbit
-          remember the websites you visited, making context recovery more accurate.
+          The browser extension lets Orbit remember the actual content of
+          articles you read and what you search for — not just the page address.
+          It's optional. You can always add it later.
         </p>
       </div>
 
@@ -236,21 +389,26 @@ function ChromeExtensionStep({ onNext }: { onNext: () => void }) {
         ))}
       </div>
 
-      <p className="text-[11px] text-zinc-400 dark:text-zinc-500 text-center leading-relaxed">
-        You can install the extension later at any time.
-      </p>
-
-      <button
-        onClick={onNext}
-        className="w-full py-3 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-sm font-semibold hover:opacity-90 transition-all cursor-pointer"
-      >
-        Continue
-      </button>
+      <div className="flex flex-col gap-2 mt-1">
+        {/* Skip is the prominent CTA — the extension is optional */}
+        <button
+          onClick={onNext}
+          className="w-full py-3 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-sm font-semibold hover:opacity-90 transition-all cursor-pointer"
+        >
+          Skip for now
+        </button>
+        <button
+          onClick={onNext}
+          className="w-full py-2.5 rounded-xl text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-all cursor-pointer"
+        >
+          Get Extension →
+        </button>
+      </div>
     </div>
   );
 }
 
-// ─── Step 3 — What to Expect ──────────────────────────────────────────────────
+// ─── Step 4 — What to Expect ──────────────────────────────────────────────────
 function WhatToExpectStep({ onFinish }: { onFinish: () => void }) {
   return (
     <div className="flex flex-col gap-5 px-2">
@@ -323,12 +481,16 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
   const [currentStep, setCurrentStep] = useState(STEP_WELCOME);
   const {
     hasAccessibilityPermission,
+    browserAutomationGranted,
     checkAccessibilityPermission,
     openAccessibilitySettings,
+    requestBrowserAutomation,
+    openAutomationSettings,
     completeOnboarding,
   } = useOnboarding();
 
-  // Poll for accessibility permission while on that step
+  // Poll for accessibility permission while on that step — updates the granted
+  // state so the step card flips to green without the user clicking "Check again".
   useEffect(() => {
     if (currentStep !== STEP_ACCESSIBILITY) return;
     const interval = setInterval(async () => {
@@ -364,6 +526,14 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
               hasPermission={hasAccessibilityPermission}
               onCheckPermission={checkAccessibilityPermission}
               onOpenSettings={openAccessibilitySettings}
+              onNext={goToNextStep}
+            />
+          )}
+          {currentStep === STEP_BROWSER_AUTOMATION && (
+            <BrowserAutomationStep
+              isGranted={browserAutomationGranted}
+              onRequestAccess={requestBrowserAutomation}
+              onOpenSettings={openAutomationSettings}
               onNext={goToNextStep}
             />
           )}
