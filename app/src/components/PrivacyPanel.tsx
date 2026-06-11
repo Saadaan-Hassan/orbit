@@ -281,7 +281,103 @@ function ExcludedAppsSection({
   );
 }
 
-// ─── Section 3 — Danger Zone ─────────────────────────────────────────────────
+// ─── Section 3 — Excluded Websites ───────────────────────────────────────────
+interface ExcludedWebsitesSectionProps {
+  excludedDomains: string[];
+  onAdd: (domain: string) => Promise<void>;
+  onRemove: (domain: string) => Promise<void>;
+}
+
+function ExcludedWebsitesSection({
+  excludedDomains,
+  onAdd,
+  onRemove,
+}: ExcludedWebsitesSectionProps) {
+  const [inputValue, setInputValue] = useState("");
+  const [isAdding, setIsAdding] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function handleAddDomain(): Promise<void> {
+    const trimmedInput = inputValue.trim();
+    if (!trimmedInput) return;
+
+    setIsAdding(true);
+    setActionError(null);
+    try {
+      await onAdd(trimmedInput);
+      setInputValue("");
+    } catch {
+      setActionError("Could not exclude site.");
+    } finally {
+      setIsAdding(false);
+    }
+  }
+
+  function handleInputKeyDown(
+    event: React.KeyboardEvent<HTMLInputElement>
+  ): void {
+    if (event.key === "Enter") handleAddDomain();
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <SectionHeading>Excluded Websites</SectionHeading>
+      <p className="text-xs text-zinc-400 dark:text-zinc-500 font-light leading-relaxed mb-1">
+        Content from these sites is never captured.
+      </p>
+
+      {/* List of excluded domains */}
+      <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto mb-2">
+        {excludedDomains.length === 0 && (
+          <p className="text-xs text-zinc-400 dark:text-zinc-500 italic py-2 px-1">No websites excluded.</p>
+        )}
+        {excludedDomains.map((domain) => (
+          <div
+            key={domain}
+            className="flex items-center justify-between px-3.5 py-2 bg-zinc-50/50 dark:bg-zinc-900/10 rounded-xl"
+          >
+            <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">{domain}</span>
+            <button
+              onClick={() => onRemove(domain)}
+              aria-label={`Remove ${domain}`}
+              className="text-zinc-400 hover:text-red-500 transition-colors p-1 hover:bg-red-500/10 rounded-lg cursor-pointer"
+            >
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Form adder */}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          onKeyDown={handleInputKeyDown}
+          placeholder="e.g. mail.google.com"
+          className="flex-1 text-xs bg-zinc-100 dark:bg-zinc-900 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-zinc-400/20 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 border-0"
+        />
+        <button
+          onClick={handleAddDomain}
+          disabled={!inputValue.trim() || isAdding}
+          className="px-3.5 py-2 text-xs font-semibold rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer whitespace-nowrap"
+        >
+          Exclude
+        </button>
+      </div>
+
+      {actionError && (
+        <p className="text-xs text-red-500 font-medium px-1 mt-1">{actionError}</p>
+      )}
+    </div>
+  );
+}
+
+// ─── Section 4 — Danger Zone ─────────────────────────────────────────────────
 interface DangerZoneSectionProps {
   isWiping: boolean;
   onWipe: () => Promise<void>;
@@ -356,11 +452,14 @@ export function PrivacyPanel() {
     isCapturing,
     pausedUntil,
     excludedApps,
+    excludedDomains,
     isWiping,
     isLoading,
     error,
     addExcludedApp,
     removeExcludedApp,
+    addExcludedDomain,
+    removeExcludedDomain,
     pauseCapture,
     resumeCapture,
     wipeAllMemory,
@@ -395,6 +494,14 @@ export function PrivacyPanel() {
         excludedApps={excludedApps}
         onAdd={addExcludedApp}
         onRemove={removeExcludedApp}
+      />
+
+      <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
+
+      <ExcludedWebsitesSection
+        excludedDomains={excludedDomains}
+        onAdd={addExcludedDomain}
+        onRemove={removeExcludedDomain}
       />
 
       <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />

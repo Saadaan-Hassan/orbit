@@ -127,6 +127,17 @@ async def create_all_tables() -> None:
             )
         """))
 
+        # Browser domains whose page_content / link_click / url events are
+        # silently dropped at capture time. Checked by the extension capture
+        # path in routes/capture.py via a 30-second in-memory cache.
+        await connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS excluded_domains (
+                id       TEXT PRIMARY KEY,
+                domain   TEXT NOT NULL UNIQUE,
+                added_at INTEGER NOT NULL
+            )
+        """))
+
         # Single-row table (id=1 always) that tracks whether the user has
         # temporarily paused all activity capture.
         await connection.execute(text("""
@@ -144,9 +155,10 @@ async def create_all_tables() -> None:
             VALUES (1, 0, NULL)
         """))
 
-    # Seed the default excluded apps outside the schema transaction so the
-    # INSERT OR IGNORE check works against a fully committed table state.
+    # Seed default lists outside the schema transaction so INSERT OR IGNORE
+    # checks work against a fully committed table state.
     await _seed_default_excluded_apps()
+    await _seed_default_excluded_domains()
 
 
 _DEFAULT_EXCLUDED_APPS: list[str] = [
@@ -184,6 +196,42 @@ async def _seed_default_excluded_apps() -> None:
                 {
                     "id": str(uuid.uuid4()),
                     "app_name": app_name,
+                    "added_at": added_at_ms,
+                },
+            )
+
+
+# Login and webmail pages are good default examples — they contain personal
+# credentials / private communication and users almost never want them in memory.
+# Kept minimal so users' own lists aren't drowned out at first glance.
+_DEFAULT_EXCLUDED_DOMAINS: list[str] = [
+    "mail.google.com",
+    "accounts.google.com",
+]
+
+
+async def _seed_default_excluded_domains() -> None:
+    # Only seeds when the table is completely empty — i.e. first run.
+    async with _async_engine.begin() as connection:
+        result = await connection.execute(
+            text("SELECT COUNT(*) AS total FROM excluded_domains")
+        )
+        row = result.fetchone()
+        if row is not None and row.total > 0:
+            return  # Already seeded — nothing to do.
+
+        added_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        for domain in _DEFAULT_EXCLUDED_DOMAINS:
+            await connection.execute(
+                text(
+                    """
+                    INSERT OR IGNORE INTO excluded_domains (id, domain, added_at)
+                    VALUES (:id, :domain, :added_at)
+                    """
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "domain": domain,
                     "added_at": added_at_ms,
                 },
             )

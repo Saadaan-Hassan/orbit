@@ -18,6 +18,8 @@ export interface PrivacySettings {
   pausedUntil: number | null;
   // Ordered list of app names excluded from capture.
   excludedApps: string[];
+  // Ordered list of domains excluded from browser capture.
+  excludedDomains: string[];
   // True while DELETE /privacy/all-data is in flight.
   isWiping: boolean;
   // True while the initial load is in flight.
@@ -27,9 +29,32 @@ export interface PrivacySettings {
   // Actions
   addExcludedApp: (appName: string) => Promise<void>;
   removeExcludedApp: (appName: string) => Promise<void>;
+  addExcludedDomain: (domain: string) => Promise<void>;
+  removeExcludedDomain: (domain: string) => Promise<void>;
   pauseCapture: (durationMinutes: number | null) => Promise<void>;
   resumeCapture: () => Promise<void>;
   wipeAllMemory: () => Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// Accepts a bare hostname ("mail.google.com") or a full URL
+// ("https://mail.google.com/u/0") and returns just the hostname.
+// The backend stores and compares bare hostnames, so this normalises
+// whatever the user typed before it reaches the API.
+function normalizeDomain(input: string): string {
+  const trimmed = input.trim().toLowerCase();
+  try {
+    if (trimmed.includes("://")) {
+      return new URL(trimmed).hostname;
+    }
+    // Strip any leading slashes and drop the path/query.
+    return trimmed.replace(/^\/+/, "").split("/")[0];
+  } catch {
+    return trimmed;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -40,30 +65,40 @@ export function usePrivacySettings(): PrivacySettings {
   const [isCapturing, setIsCapturing] = useState(true);
   const [pausedUntil, setPausedUntil] = useState<number | null>(null);
   const [excludedApps, setExcludedApps] = useState<string[]>([]);
+  const [excludedDomains, setExcludedDomains] = useState<string[]>([]);
   const [isWiping, setIsWiping] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load both endpoints in parallel on mount so the panel has data immediately.
+  // Load all three endpoints in parallel on mount so the panel has data immediately.
   useEffect(() => {
     async function loadInitialState(): Promise<void> {
       try {
-        const [statusResponse, excludedResponse] = await Promise.all([
-          fetch(`${BACKEND_BASE_URL}/privacy/capture-status`),
-          fetch(`${BACKEND_BASE_URL}/privacy/excluded-apps`),
-        ]);
+        const [statusResponse, excludedAppsResponse, excludedDomainsResponse] =
+          await Promise.all([
+            fetch(`${BACKEND_BASE_URL}/privacy/capture-status`),
+            fetch(`${BACKEND_BASE_URL}/privacy/excluded-apps`),
+            fetch(`${BACKEND_BASE_URL}/privacy/excluded-domains`),
+          ]);
 
-        if (!statusResponse.ok || !excludedResponse.ok) {
+        if (
+          !statusResponse.ok ||
+          !excludedAppsResponse.ok ||
+          !excludedDomainsResponse.ok
+        ) {
           throw new Error("Failed to load privacy settings from backend.");
         }
 
         const statusData: CaptureStatus = await statusResponse.json();
-        const excludedData: { excluded_apps: string[] } =
-          await excludedResponse.json();
+        const excludedAppsData: { excluded_apps: string[] } =
+          await excludedAppsResponse.json();
+        const excludedDomainsData: { excluded_domains: string[] } =
+          await excludedDomainsResponse.json();
 
         setIsCapturing(!statusData.is_paused);
         setPausedUntil(statusData.paused_until);
-        setExcludedApps(excludedData.excluded_apps);
+        setExcludedApps(excludedAppsData.excluded_apps);
+        setExcludedDomains(excludedDomainsData.excluded_domains);
         setError(null);
       } catch {
         setError("Could not reach Orbit backend.");
@@ -105,6 +140,48 @@ export function usePrivacySettings(): PrivacySettings {
 
       setExcludedApps((previous) =>
         previous.filter((existingName) => existingName !== appName)
+      );
+    },
+    []
+  );
+
+  const addExcludedDomain = useCallback(
+    async (domain: string): Promise<void> => {
+      const normalizedDomain = normalizeDomain(domain);
+      if (!normalizedDomain) return;
+
+      const response = await fetch(
+        `${BACKEND_BASE_URL}/privacy/excluded-domains`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ domain: normalizedDomain }),
+        }
+      );
+
+      if (!response.ok) throw new Error("Failed to add excluded domain.");
+
+      setExcludedDomains((previous) =>
+        previous.includes(normalizedDomain)
+          ? previous
+          : [...previous, normalizedDomain].sort()
+      );
+    },
+    []
+  );
+
+  const removeExcludedDomain = useCallback(
+    async (domain: string): Promise<void> => {
+      const encodedDomain = encodeURIComponent(domain);
+      const response = await fetch(
+        `${BACKEND_BASE_URL}/privacy/excluded-domains/${encodedDomain}`,
+        { method: "DELETE" }
+      );
+
+      if (!response.ok) throw new Error("Failed to remove excluded domain.");
+
+      setExcludedDomains((previous) =>
+        previous.filter((existingDomain) => existingDomain !== domain)
       );
     },
     []
@@ -160,11 +237,14 @@ export function usePrivacySettings(): PrivacySettings {
     isCapturing,
     pausedUntil,
     excludedApps,
+    excludedDomains,
     isWiping,
     isLoading,
     error,
     addExcludedApp,
     removeExcludedApp,
+    addExcludedDomain,
+    removeExcludedDomain,
     pauseCapture,
     resumeCapture,
     wipeAllMemory,

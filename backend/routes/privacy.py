@@ -43,6 +43,10 @@ class AddExcludedAppRequest(BaseModel):
     app_name: str
 
 
+class AddExcludedDomainRequest(BaseModel):
+    domain: str
+
+
 class PauseRequest(BaseModel):
     # Unix milliseconds. None means pause indefinitely.
     paused_until_timestamp: Optional[int] = None
@@ -91,6 +95,53 @@ async def remove_excluded_app(app_name: str) -> dict:
         await connection.execute(
             text("DELETE FROM excluded_apps WHERE app_name = :app_name"),
             {"app_name": app_name},
+        )
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Excluded domains
+# ---------------------------------------------------------------------------
+
+
+@router.get("/excluded-domains")
+async def get_excluded_domains() -> dict:
+    async with _async_engine.connect() as connection:
+        result = await connection.execute(
+            text("SELECT domain FROM excluded_domains ORDER BY domain ASC")
+        )
+        domains = [row.domain for row in result.fetchall()]
+    return {"excluded_domains": domains}
+
+
+@router.post("/excluded-domains")
+async def add_excluded_domain(request: AddExcludedDomainRequest) -> dict:
+    import uuid
+    from datetime import datetime, timezone
+
+    new_id = str(uuid.uuid4())
+    added_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    async with _async_engine.begin() as connection:
+        # INSERT OR IGNORE so a duplicate domain is a no-op, not an error.
+        await connection.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO excluded_domains (id, domain, added_at)
+                VALUES (:id, :domain, :added_at)
+                """
+            ),
+            {"id": new_id, "domain": request.domain, "added_at": added_at_ms},
+        )
+    return {"status": "ok", "domain": request.domain}
+
+
+@router.delete("/excluded-domains/{domain}")
+async def remove_excluded_domain(domain: str) -> dict:
+    async with _async_engine.begin() as connection:
+        await connection.execute(
+            text("DELETE FROM excluded_domains WHERE domain = :domain"),
+            {"domain": domain},
         )
     return {"status": "ok"}
 
