@@ -50,6 +50,11 @@ same experience, AI adapts to what they actually do.
 | **Sessions store topics** | Claude now returns a `topics` JSON array ("vector databases", "React hooks", …) alongside the existing session fields. Stored in `sessions.topics` (TEXT, JSON array string). Included in the Qdrant embedding text so "what was I researching about X" queries match on subject vocabulary. |
 | **File activity monitor (Rust)** | `file_activity.rs` watches ~/Documents, ~/Desktop, ~/Downloads via macOS FSEvents (the `notify` crate). Events are debounced by 2 seconds (`notify-debouncer-full`). Only the file *path* is stored in `events.file_path`; `raw_content` holds the bare file name; `metadata` holds `{"action":"created|modified|removed"}`. File *contents* are never read. Hidden files/dirs, high-noise directories, and transient suffixes are filtered before any DB write. |
 | **System state monitor (Rust)** | `system_state.rs` subscribes to macOS Darwin notifications for screen lock/unlock and sleep/wake via `notify_register_file_descriptor` (C API in libSystem — no new crates). Each notification gets a dedicated blocking OS thread; events bridge to tokio via `mpsc`. Writes `type='system_state'` events with `raw_content=<state>` and `metadata={"state":"lock|unlock|sleep|wake"}`. No-op on non-macOS. |
+| **App lifecycle monitor (Rust)** | `app_lifecycle.rs` polls the running application list every 10 seconds via osascript (`System Events` process names), diffs against the previous snapshot, and writes `type='app_lifecycle'` events with `app_name` and `metadata={"action":"launched"|"quit"}`. Baseline snapshot is taken before the first sleep so apps already running at startup are not emitted as launches. |
+| **Idle detection — timer only, never keystroke content** | `window.rs` calls `CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateHIDSystemState, kCGAnyInputEventType)` via a CoreGraphics `extern "C"` link. This returns **only** a float count of seconds since the last input event — it never captures what was typed or where the mouse moved. If seconds < 60 → `is_user_active = 1`; else `0`. Attached to each window event INSERT. macOS-only; non-macOS always writes `1`. |
+| **Session boundaries split on lock/sleep** | `_split_events_at_system_boundaries()` in `scheduler.py` walks the chronologically-sorted unprocessed event list. Each `system_state` event with state `"lock"` or `"sleep"` ends the current content batch; content events after an `"unlock"`/`"wake"` start a new batch. Boundary events are immediately marked `session_id='system_boundary'` so they are never re-classified. Each content batch then goes through the full classify → group → summarise pipeline independently. |
+| **active_minutes on sessions** | `sessions.active_minutes` (INTEGER) counts `window` events where `is_user_active = 1` in a session's event list, multiplied by the 30-second poll interval, divided by 60. Represents a lower-bound estimate of keyboard/mouse-active time (lower bound because the window tracker only fires on title changes, not every 30 s unconditionally). Included in the Qdrant payload metadata for "how long did I work on X?" recall. |
+| **File watch settings (privacy control)** | `file_watch_settings` table in SQLite (single row, id=1): `enabled` INTEGER + `watched_folders` JSON TEXT array of absolute paths. Seeded on first run with `~/Documents`, `~/Desktop`, `~/Downloads`. `file_activity.rs` reads this table on startup and every 30 s via a `tokio::select!` refresh tick, then syncs the `notify` watcher using a `currently_watched: HashSet<String>` diff (unwatch removed paths, watch added paths). Disabling sets the desired set to empty, unwatching everything. Managed via `GET/POST /privacy/file-watching` and `POST/DELETE /privacy/watched-folders`; surfaced in PrivacyPanel under "File Activity". |
 
 ---
 
@@ -72,9 +77,10 @@ same experience, AI adapts to what they actually do.
 ### Data Flow — Capture
 ```
 [Rust: clipboard.rs]       ──► SQLite events (direct write, no HTTP)
-[Rust: window.rs]          ──► SQLite events (direct write, no HTTP)
-[Rust: file_activity.rs]   ──► SQLite events (direct write, no HTTP)
+[Rust: window.rs]          ──► SQLite events (direct write, no HTTP)  [+ is_user_active from idle timer]
+[Rust: file_activity.rs]   ──► SQLite events (direct write, no HTTP)  [watched folders read from file_watch_settings every 30 s]
 [Rust: system_state.rs]    ──► SQLite events (direct write, no HTTP)
+[Rust: app_lifecycle.rs]   ──► SQLite events (direct write, no HTTP)
 
 [content.ts — @mozilla/readability]
     │  5-second visibility filter; sends on tab departure
@@ -96,20 +102,29 @@ SQLite events
 
 ### Data Flow — Background Processing (every 30 min, asyncio loop)
 ```
-SQLite (events WHERE session_id IS NULL, last 60 min)
+SQLite (events WHERE session_id IS NULL, last 60 min  +  stale >2 h)
     │
+    ▼
+_split_events_at_system_boundaries()
+    │  system_state lock/sleep  →  end current batch; mark session_id='system_boundary'
+    │  system_state unlock/wake →  recorded but no split (next content starts new batch)
+    │  result: N contiguous content-only batches  (often just 1 if no lock/sleep today)
+    │
+    │  (per batch — repeated for each content batch:)
     ▼
 httpx → Worker /classify → Gemini Flash API
     │  classifies: work / research / personal / system / communication
     │  updates events.category in SQLite
     ▼
 httpx → Worker /chat → Claude Haiku 4.5
-    │  generates: {project_name, goal, summary, key_resources, last_action}
-    │  INSERT INTO sessions
+    │  generates: {project_name, goal, summary, key_resources, last_action, topics}
+    │  file_activity events included in payload: "file_path, action"
+    │  active_minutes = (window events with is_user_active=1) × 30 s ÷ 60
+    │  INSERT INTO sessions  (includes active_minutes, topics)
     ▼
 httpx → Worker /embed → Voyage AI
-    │  512-dim vector of session summary text
-    └► Qdrant local upsert
+    │  512-dim vector of session summary text (includes topics)
+    └► Qdrant local upsert  (payload includes active_minutes)
 ```
 
 ### Data Flow — Recall (on user query)
@@ -141,6 +156,11 @@ FTS5 keyword search (SQLite, local — always runs, even offline)
     │                   ▼
     │           SSE stream ──► React renders token by token
     │
+    │
+    │   if _query_asks_about_time_or_breaks():
+    │       fetch system_state events (local SQLite, time-filtered if range active)
+    │       append "BREAK / SYSTEM EVENTS:" section to context block
+    │
     └── NO (ConnectError / TimeoutException)
             stream FTS5 results as plain offline message — no AI synthesis
 ```
@@ -170,7 +190,7 @@ orbit/
 │   │   │   ├── ChatPanel.tsx               ← recall UI, reads conversationHistory from Zustand
 │   │   │   ├── Timeline.tsx                ← scrollable activity log
 │   │   │   ├── MemoryViewer.tsx            ← view + delete events/sessions (two-tab UI)
-│   │   │   ├── PrivacyPanel.tsx            ← capture toggle, excluded apps, excluded websites (domains), wipe button
+│   │   │   ├── PrivacyPanel.tsx            ← capture toggle, excluded apps, excluded websites, file activity watching, wipe button
 │   │   │   └── OrbWidget.tsx               ← floating companion orb (Phase 4)
 │   │   ├── store/
 │   │   │   └── orbitStore.ts               ← Zustand: includes conversationHistory: Message[]
@@ -178,7 +198,7 @@ orbit/
 │   │   │   ├── useRecall.ts                ← POST /recall, appends to conversationHistory
 │   │   │   ├── useAnalytics.ts             ← PostHog wrapper — never call posthog directly
 │   │   │   ├── useOnboarding.ts            ← onboarding state, polls accessibility every 3s
-│   │   │   ├── usePrivacySettings.ts       ← privacy API calls; includes excluded domains CRUD + normalizeDomain()
+│   │   │   ├── usePrivacySettings.ts       ← privacy API calls; excluded domains + normalizeDomain(); file watching CRUD
 │   │   │   └── useMemoryData.ts            ← memory viewer: events, sessions, pagination
 │   │   └── types/                          ← all TypeScript types
 │   └── src-tauri/
@@ -187,9 +207,10 @@ orbit/
 │       │   ├── capture/
 │       │   │   ├── mod.rs
 │       │   │   ├── clipboard.rs            ← 500ms poll, redacts secrets before SQLite write
-│       │   │   ├── file_activity.rs        ← FSEvents via notify + 2 s debounce; stores path only, never content
+│       │   │   ├── file_activity.rs        ← FSEvents via notify + 2 s debounce; reads file_watch_settings every 30 s; stores path only, never content
 │       │   │   ├── system_state.rs         ← Darwin notify API; lock/unlock/sleep/wake → SQLite; macOS only
-│       │   │   └── window.rs               ← 30s poll via osascript (planned: reduce to 10s)
+│       │   │   ├── app_lifecycle.rs        ← 10s osascript diff; launched/quit → SQLite
+│       │   │   └── window.rs               ← 30s poll via osascript; idle timer writes is_user_active on each event
 │       │   ├── hotkey.rs                   ← global hotkey (global-hotkey crate)
 │       │   ├── db.rs                       ← SQLite pool (sqlx) — single pool, never recreate
 │       │   └── commands.rs                 ← all #[tauri::command] — thin wrappers only
@@ -375,19 +396,20 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `app/src/store/orbitStore.ts` | Zustand global state. Key: `conversationHistory: ConversationMessage[]` — reset on new topic, preserved within session. |
 | `app/src-tauri/src/main.rs` | Entry point. Sets LSUIElement, system tray, spawns FastAPI subprocess, creates SQLite pool, starts clipboard + window capture as tokio tasks. Health-checks FastAPI on startup (10 retries, 1s each). |
 | `app/src-tauri/src/capture/clipboard.rs` | 500ms poll. Runs `detect_sensitive_content_type()` before writing. Stores `[REDACTED:type]` for matches. Deduplicates same content within 5 minutes. |
-| `app/src-tauri/src/capture/window.rs` | 30s poll via osascript. Only writes when title changes. Fails silently on permission errors. |
-| `app/src-tauri/src/capture/file_activity.rs` | FSEvents file activity monitor using `notify` + `notify-debouncer-full`. 2-second debounce. Watches ~/Documents, ~/Desktop, ~/Downloads recursively. Skips hidden files/dirs, blocked high-noise directories (node_modules, target, build, etc.), and transient file suffixes (.tmp, .swp, .lock, .log). Writes `file_activity` events with `file_path` and `metadata={"action":"created|modified|removed"}`. NEVER reads file contents. |
+| `app/src-tauri/src/capture/window.rs` | 30s poll via osascript. Only writes when title changes. On each poll calls `CGEventSourceSecondsSinceLastEventType` (macOS CoreGraphics — IDLE TIMER ONLY, never keystroke content) to set `is_user_active` (1 = input within last 60 s, 0 = idle). Fails silently on permission errors. |
+| `app/src-tauri/src/capture/file_activity.rs` | FSEvents file activity monitor using `notify` + `notify-debouncer-full`. 2-second debounce. Reads `file_watch_settings` from SQLite on startup and every 30 s via `tokio::select!`; syncs the watcher using a `currently_watched: HashSet<String>` diff. Skips hidden files/dirs, blocked high-noise directories (node_modules, target, build, etc.), and transient file suffixes (.tmp, .swp, .lock, .log). Writes `file_activity` events with `file_path` and `metadata={"action":"created|modified|removed"}`. NEVER reads file contents. |
 | `app/src-tauri/src/capture/system_state.rs` | macOS system state monitor. Uses `notify_register_file_descriptor` (Darwin C API in libSystem — no new crates). Registers 4 Darwin notifications: `com.apple.screenIsLocked` → "lock", `com.apple.screenIsUnlocked` → "unlock", `com.apple.system.willsleep` → "sleep", `com.apple.system.didwake` → "wake". Each fd gets a dedicated blocking OS thread; events bridge to tokio via `mpsc::unbounded_channel`. Writes `type='system_state'` events with `raw_content=<state>` and `metadata={"state":"..."}`. No-op on non-macOS. |
+| `app/src-tauri/src/capture/app_lifecycle.rs` | App launch/quit monitor. Polls running process names every 10 s via `osascript` (`System Events`), diffs against the previous snapshot. Writes `type='app_lifecycle'` events with `app_name` and `metadata={"action":"launched"|"quit"}`. Initial snapshot taken before the first sleep so apps already running at startup are not emitted as launches. |
 | `app/src-tauri/src/db.rs` | sqlx SQLite pool. **Single pool shared everywhere. Never open new connections.** |
 | `app/src-tauri/src/commands.rs` | All `#[tauri::command]` functions — thin wrappers only. Logic lives in modules. |
 | `app/src-tauri/Info.plist` | `LSUIElement = true`. Never remove. Orbit never appears in the dock. |
 | `app/src-tauri/tauri.conf.json` | Two windows: `main` (panel, skipTaskbar, transparent, decorations:false) and `overlay` (Phase 4: fullscreen, alwaysOnTop, focus:false, transparent). |
 | `backend/main.py` | FastAPI with `@asynccontextmanager` lifespan. Inits Sentry, starts `asyncio.create_task(start_session_generation_loop())`. No APScheduler. GET /health endpoint. |
-| `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + auto-sync triggers on startup. Events schema includes `page_text`, `link_target`, `metadata` (Phase 2.5). FTS5 indexes 4 columns: `raw_content, app_name, url, page_text`. Sessions schema includes `last_action`, `key_resources`, `topics`. Excluded-domains table seeded with `mail.google.com` and `accounts.google.com`. `search_events_fts()` accepts `start_ms`, `end_ms`, `exclude_personal` and returns all new columns. |
-| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now` so first run is immediate. `generate_sessions_from_recent_events()`: fetch → classify (Gemini via Worker) → summarise (Claude Haiku via Worker) → Qdrant embed (Voyage via Worker) → mark events processed. Splits on project change. Force-processes events >2h old with null session_id. SQL SELECTs now include `page_text, link_target, metadata`. Event payload to Claude is type-aware: `page_content` sends `title, page_text[:500], author, site_name`; `search_query` sends `query, search_engine`; `link_click` sends `link_text, link_target`. Claude now returns a `topics` array; stored in `sessions.topics` and included in Qdrant embedding text. `_ensure_sessions_schema_columns_exist()` adds `topics` column to existing databases on startup. |
-| `backend/routes/recall.py` | FTS5-first sequential pipeline. (1) Classify intent → "work"/"personal"/"general". (2) Parse time reference via `time_parser`. (3) FTS5 keyword search always runs unconditionally (offline-safe). (4) Try Worker: Qdrant semantic search → time-window filter → re-rank by `(similarity × 0.7) + (recency × 0.3)` (0.9/0.1 when time range is active) → Claude SSE stream. On `ConnectError`/`TimeoutException`: stream FTS5 results as plain offline message. Context block formats events by type: `page_content` → `Read: "Title" by Author (Site) — excerpt`; `search_query` → `Searched: "query" on Google`; `link_click` → `Clicked: "text" → url`. Session block includes `Topics:` line when present. Offline fallback also uses type-aware formatting. |
+| `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + auto-sync triggers on startup. Events schema includes `page_text`, `link_target`, `metadata`, `file_path`, `is_user_active` (Phase 2.6). FTS5 indexes 4 columns: `raw_content, app_name, url, page_text`. Sessions schema includes `last_action`, `key_resources`, `topics`, `active_minutes`. `file_watch_settings` table (single row) seeded with enabled=true and default folders. `excluded_domains` seeded with `mail.google.com`, `accounts.google.com`. `fetch_system_state_events()` for break/duration recall queries. `search_events_fts()` accepts `start_ms`, `end_ms`, `exclude_personal`. |
+| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now` so first run is immediate. `generate_sessions_from_recent_events()`: fetch → `_split_events_at_system_boundaries()` (splits on lock/sleep, marks boundary events `session_id='system_boundary'`) → per batch: classify (Gemini) → summarise (Claude Haiku) → embed (Voyage) → mark processed. Event payload to Claude is type-aware; `file_activity` sends `file_path, action`. `active_minutes` computed from `is_user_active` window events. SQL SELECTs include `file_path, is_user_active`. `_ensure_sessions_schema_columns_exist()` adds `topics`, `active_minutes` columns to existing databases on startup. |
+| `backend/routes/recall.py` | FTS5-first sequential pipeline. (1) Classify intent → "work"/"personal"/"general". (2) Parse time reference via `time_parser`. (3) `_query_asks_about_time_or_breaks()` — if true, fetches `system_state` events from DB and adds BREAK/SYSTEM section to context. (4) FTS5 keyword search always runs (offline-safe). (5) Try Worker: Qdrant semantic search → time-window filter → re-rank → Claude SSE stream. Context block formats events by type: `file_activity` → `Worked on file: <name> (<action>) — <path>`; `system_state` → human-readable break label; `active_minutes` shown in session block. Session block also shows `Topics:`, `Active time:`. |
 | `backend/routes/capture.py` | POST /capture (extension only — Rust writes direct). Checks pause state, excluded app names, and excluded domains (all cached 30s). Domain extracted via `urlparse().netloc` before every browser event. `page_text` for `page_content` events and `raw_content` for `search_query` events are passed through `redact_sensitive_content()` before INSERT. GET /events for timeline. |
-| `backend/routes/privacy.py` | Excluded apps CRUD, pause/resume, capture status, full data wipe (SQLite + Qdrant). Also `GET/POST/DELETE /privacy/excluded-domains` — domain exclusion CRUD (Phase 2.5). |
+| `backend/routes/privacy.py` | Excluded apps CRUD, pause/resume, capture status, full data wipe (SQLite + Qdrant). `GET/POST/DELETE /privacy/excluded-domains` — domain exclusion CRUD. `GET/POST /privacy/file-watching` — enable/disable file activity capture. `POST/DELETE /privacy/watched-folders` — add/remove watched folder paths (JSON body). |
 | `backend/routes/feedback.py` | POST /feedback — stores rating + comment in SQLite. |
 | `backend/services/claude_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/chat`. Handles SSE streaming. Uses Claude Haiku for session gen, Claude Sonnet for recall. Accepts `conversation_history` param. |
 | `backend/services/gemini_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/classify`. Builds Gemini REST API body. Extracts text from `candidates[0].content.parts[0].text`. Sends `id, type, app_name, url, raw_content` — raw_content is already redacted at capture, so it's safe and needed for accurate classification. Falls back to `category='work'` if JSON parse fails. |
