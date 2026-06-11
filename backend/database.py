@@ -88,6 +88,7 @@ async def create_all_tables() -> None:
                 ai_summary    TEXT,
                 last_action   TEXT,
                 key_resources TEXT,
+                topics        TEXT,
                 embedding_id  TEXT
             )
         """))
@@ -287,7 +288,10 @@ async def search_events_fts(
                        e.raw_content,
                        e.app_name,
                        e.url,
-                       e.source
+                       e.source,
+                       e.page_text,
+                       e.link_target,
+                       e.metadata
                 FROM   events e
                 JOIN   events_fts fts ON e.rowid = fts.rowid
                 WHERE  events_fts MATCH :query

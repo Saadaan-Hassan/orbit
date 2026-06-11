@@ -50,13 +50,23 @@ SESSION_SUMMARY_USER_PROMPT_TEMPLATE = """\
 Here are the user's captured activities for the last 30-60 minutes:
 {events_json}
 
+Event types and their fields:
+- "window" / "clipboard" / "url": raw_content, app_name, url
+- "page_content": title (page headline), page_text (article body), author, site_name, url
+- "search_query": query (what they typed into the search box), search_engine
+- "link_click": link_text (visible anchor text), link_target (destination URL)
+
+Use page_text to understand what was read. Use query to understand what was being looked up.
+Write summaries like "read an article by Jane Doe about vector databases" — not "visited a website."
+
 Respond with this exact JSON structure:
 {{
   "project_name": "detected project name or null",
   "goal": "one sentence: what the user was trying to accomplish",
-  "summary": "2-3 sentences describing what happened",
-  "key_resources": ["list of important URLs or files mentioned"],
-  "last_action": "the most recent meaningful thing the user did"
+  "summary": "2-3 sentences describing what happened — name specific articles, searches, or resources",
+  "key_resources": ["important URLs or file paths"],
+  "last_action": "the most recent meaningful thing the user did",
+  "topics": ["subjects the user engaged with, e.g. 'vector databases', 'React hooks', 'tax filing'"]
 }}"""
 
 # ---------------------------------------------------------------------------
@@ -105,6 +115,19 @@ async def _ensure_events_schema_columns_exist() -> None:
             logger.info("Added metadata column to events table.")
 
 
+async def _ensure_sessions_schema_columns_exist() -> None:
+    """Adds topics column to sessions when absent (existing databases)."""
+    async with _async_engine.begin() as connection:
+        pragma_rows = await connection.execute(text("PRAGMA table_info(sessions)"))
+        existing_column_names = {row[1] for row in pragma_rows.fetchall()}
+
+        if "topics" not in existing_column_names:
+            await connection.execute(
+                text("ALTER TABLE sessions ADD COLUMN topics TEXT")
+            )
+            logger.info("Added topics column to sessions table.")
+
+
 # ---------------------------------------------------------------------------
 # Session generation helper — runs once per project group
 # ---------------------------------------------------------------------------
@@ -125,20 +148,63 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     useful summaries; app names alone are not enough.
     """
     # ------------------------------------------------------------------
-    # Build Claude prompt — include all fields, all event types.
+    # Build Claude prompt — type-aware payload so Claude sees the richest
+    # available representation for each event type.
     # raw_content is already safe at this point (redacted at capture).
     # ------------------------------------------------------------------
-    events_payload_for_prompt = [
-        {
-            "id":          event.get("id"),
-            "type":        event.get("type"),
-            "raw_content": event.get("raw_content") or "",
-            "app_name":    event.get("app_name") or "",
-            "url":         event.get("url") or "",
-            "category":    event.get("category") or "",
+    events_payload_for_prompt = []
+    for event in project_events:
+        event_type = event.get("type", "")
+
+        # Parse the metadata JSON blob once per event — it carries author,
+        # site_name, search_engine etc. depending on the event type.
+        metadata_raw = event.get("metadata")
+        metadata: dict = {}
+        if metadata_raw:
+            try:
+                metadata = (
+                    json.loads(metadata_raw)
+                    if isinstance(metadata_raw, str)
+                    else metadata_raw
+                )
+            except Exception:
+                pass
+
+        shared_fields = {
+            "id":       event.get("id"),
+            "type":     event_type,
+            "app_name": event.get("app_name") or "",
+            "url":      event.get("url") or "",
+            "category": event.get("category") or "",
         }
-        for event in project_events
-    ]
+
+        if event_type == "page_content":
+            page_text = (event.get("page_text") or "").strip()
+            events_payload_for_prompt.append({
+                **shared_fields,
+                "title":     event.get("raw_content") or "",
+                "page_text": page_text[:500],
+                "author":    metadata.get("author"),
+                "site_name": metadata.get("site_name"),
+            })
+        elif event_type == "search_query":
+            events_payload_for_prompt.append({
+                **shared_fields,
+                "query":         event.get("raw_content") or "",
+                "search_engine": metadata.get("search_engine"),
+            })
+        elif event_type == "link_click":
+            events_payload_for_prompt.append({
+                **shared_fields,
+                "link_text":   event.get("raw_content") or "",
+                "link_target": event.get("link_target") or "",
+            })
+        else:
+            # window, clipboard, url
+            events_payload_for_prompt.append({
+                **shared_fields,
+                "raw_content": event.get("raw_content") or "",
+            })
 
     user_prompt = SESSION_SUMMARY_USER_PROMPT_TEMPLATE.format(
         events_json=json.dumps(events_payload_for_prompt, ensure_ascii=False, indent=2)
@@ -188,6 +254,7 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     ai_summary    = session_data.get("summary", "")
     last_action   = session_data.get("last_action")
     key_resources = json.dumps(session_data.get("key_resources", []))
+    topics        = json.dumps(session_data.get("topics", []))
 
     async with _async_engine.begin() as connection:
         await connection.execute(
@@ -195,10 +262,10 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
                 """
                 INSERT INTO sessions
                     (id, start_time, end_time, project_name, goal, ai_summary,
-                     last_action, key_resources)
+                     last_action, key_resources, topics)
                 VALUES
                     (:id, :start_time, :end_time, :project_name, :goal, :ai_summary,
-                     :last_action, :key_resources)
+                     :last_action, :key_resources, :topics)
                 """
             ),
             {
@@ -210,6 +277,7 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
                 "ai_summary":    ai_summary,
                 "last_action":   last_action,
                 "key_resources": key_resources,
+                "topics":        topics,
             },
         )
 
@@ -221,6 +289,8 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     # ------------------------------------------------------------------
     # Embed the session summary in Qdrant
     # ------------------------------------------------------------------
+    topics_list = session_data.get("topics", [])
+
     embedding_text = " | ".join(
         filter(None, [
             project_name,
@@ -228,6 +298,9 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
             ai_summary,
             session_data.get("last_action"),
             " ".join(session_data.get("key_resources", [])),
+            # Topics give the vector the subject vocabulary the user engaged with —
+            # critical for "what was I researching about X" queries.
+            " ".join(topics_list),
         ])
     )
 
@@ -238,6 +311,7 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
         "ai_summary":    ai_summary,
         "last_action":   session_data.get("last_action"),
         "key_resources": session_data.get("key_resources", []),
+        "topics":        topics_list,
         "start_time":    session_start_timestamp,
         "end_time":      session_end_timestamp,
     }
@@ -304,6 +378,7 @@ async def generate_sessions_from_recent_events() -> None:
     logger.info("Session generator: starting run.")
 
     await _ensure_events_schema_columns_exist()
+    await _ensure_sessions_schema_columns_exist()
     await initialize_qdrant_collection()
 
     # ------------------------------------------------------------------
@@ -318,7 +393,8 @@ async def generate_sessions_from_recent_events() -> None:
         recent_rows = await connection.execute(
             text(
                 """
-                SELECT id, timestamp, type, raw_content, app_name, url, source
+                SELECT id, timestamp, type, raw_content, app_name, url, source,
+                       page_text, link_target, metadata
                 FROM   events
                 WHERE  timestamp >= :cutoff
                 AND    (session_id IS NULL OR session_id = '')
@@ -333,7 +409,8 @@ async def generate_sessions_from_recent_events() -> None:
         stale_rows = await connection.execute(
             text(
                 """
-                SELECT id, timestamp, type, raw_content, app_name, url, source
+                SELECT id, timestamp, type, raw_content, app_name, url, source,
+                       page_text, link_target, metadata
                 FROM   events
                 WHERE  timestamp < :stale_cutoff
                 AND    (session_id IS NULL OR session_id = '')

@@ -272,13 +272,49 @@ def _build_context_block(
             readable_timestamp = _format_timestamp_as_human_readable(
                 event.get("timestamp", 0)
             )
+            event_type  = event.get("type", "")
             app_name    = event.get("app_name") or "unknown"
             raw_content = (event.get("raw_content") or "").strip()
             url         = (event.get("url") or "").strip()
+            page_text   = (event.get("page_text") or "").strip()
+            link_target = (event.get("link_target") or "").strip()
 
-            # For personal queries, surface the actual URL on url-type events
-            # so Claude can include clickable links in its answer.
-            if intent == "personal" and event.get("type") == "url" and url:
+            # Parse the metadata JSON blob — carries author, site_name,
+            # search_engine etc. Falls back to an empty dict on any error.
+            metadata_raw = event.get("metadata")
+            metadata: dict = {}
+            if metadata_raw:
+                try:
+                    metadata = (
+                        json.loads(metadata_raw)
+                        if isinstance(metadata_raw, str)
+                        else metadata_raw
+                    )
+                except Exception:
+                    pass
+
+            if event_type == "page_content":
+                author    = metadata.get("author") or ""
+                site_name = metadata.get("site_name") or ""
+                author_part   = f" by {author}" if author else ""
+                site_part     = f" ({site_name})" if site_name else ""
+                excerpt_part  = f" — {page_text[:200]}" if page_text else ""
+                context_lines.append(
+                    f"  [{readable_timestamp}] Read: \"{raw_content}\"{author_part}{site_part}{excerpt_part}"
+                )
+            elif event_type == "search_query":
+                engine = metadata.get("search_engine") or "Search"
+                context_lines.append(
+                    f"  [{readable_timestamp}] Searched: \"{raw_content}\" on {engine}"
+                )
+            elif event_type == "link_click":
+                link_display = raw_content[:80] if raw_content else "link"
+                context_lines.append(
+                    f"  [{readable_timestamp}] Clicked: \"{link_display}\" → {link_target}"
+                )
+            elif intent == "personal" and event_type == "url" and url:
+                # For personal queries, surface the actual URL so Claude can
+                # include clickable links in its answer.
                 context_lines.append(
                     f"  [{readable_timestamp}] {app_name} — \"{raw_content}\" — {url}"
                 )
@@ -312,9 +348,19 @@ def _build_context_block(
                     raw_resources = []
             resources_text = ", ".join(raw_resources) if raw_resources else ""
 
+            raw_topics = session.get("topics") or []
+            if isinstance(raw_topics, str):
+                try:
+                    raw_topics = json.loads(raw_topics)
+                except Exception:
+                    raw_topics = []
+            topics_text = ", ".join(raw_topics) if raw_topics else ""
+
             context_lines.append(f"  [{readable_timestamp}] Project: {project}")
             context_lines.append(f"    Goal: {goal}")
             context_lines.append(f"    Summary: {summary}")
+            if topics_text:
+                context_lines.append(f"    Topics: {topics_text}")
             if last_action:
                 context_lines.append(f"    Last action: {last_action}")
             if resources_text:
@@ -345,10 +391,33 @@ def _format_fts5_fallback(events: list[dict]) -> str:
         readable_timestamp = _format_timestamp_as_human_readable(
             event.get("timestamp", 0)
         )
+        event_type  = event.get("type", "")
         app_name    = event.get("app_name") or "System"
         raw_content = (event.get("raw_content") or "").strip()
-        if raw_content:
-            # Truncate long content so the fallback stays scannable.
+        link_target = (event.get("link_target") or "").strip()
+
+        metadata_raw = event.get("metadata")
+        metadata: dict = {}
+        if metadata_raw:
+            try:
+                metadata = (
+                    json.loads(metadata_raw)
+                    if isinstance(metadata_raw, str)
+                    else metadata_raw
+                )
+            except Exception:
+                pass
+
+        if event_type == "page_content":
+            title_display = raw_content[:80] + ("…" if len(raw_content) > 80 else "")
+            lines.append(f"• [{readable_timestamp}] Read: \"{title_display}\"")
+        elif event_type == "search_query":
+            engine = metadata.get("search_engine") or "Search"
+            lines.append(f"• [{readable_timestamp}] Searched: \"{raw_content}\" on {engine}")
+        elif event_type == "link_click":
+            link_display = raw_content[:60] + ("…" if len(raw_content) > 60 else "")
+            lines.append(f"• [{readable_timestamp}] Clicked: \"{link_display}\" → {link_target}")
+        elif raw_content:
             display_content = raw_content[:80] + ("…" if len(raw_content) > 80 else "")
             lines.append(f"• [{readable_timestamp}] {app_name} — {display_content}")
         else:
