@@ -23,7 +23,7 @@ same experience, AI adapts to what they actually do.
 
 **App behaviour:** No dock icon. No Cmd+Tab. Menu bar only (`LSUIElement = true`).
 
-**Completed phases:** Phase 0 ✅ Phase 1 ✅ Phase 2 ✅ Pre-beta hardening ✅
+**Completed phases:** Phase 0 ✅ Phase 1 ✅ Phase 2 ✅ Pre-beta hardening ✅ Phase 2.5 ✅
 
 ---
 
@@ -44,6 +44,10 @@ same experience, AI adapts to what they actually do.
 | **Recall has offline FTS5 fallback** | FTS5 keyword search always runs first (local, no network). If the Cloudflare Worker is unreachable (`httpx.ConnectError` / `TimeoutException`), Qdrant + Claude are skipped and FTS5 results are streamed as a plain offline message. |
 | **Recall parses time references** | `time_parser.extract_time_range_from_query()` scans the query for phrases like "yesterday", "this morning", "last week". When matched, FTS5 is timestamp-filtered and Qdrant results are post-filtered to sessions that overlap the window. |
 | **Conversation history is stateful** | Last 4 turns kept in Zustand, passed with every `/recall` request. Claude is NOT stateless per query. Max 4 turns to control token cost. |
+| **Three richer browser event types** | In addition to `url`, the extension now emits `page_content` (Readability article body, author, site_name — capped at 2 000 chars), `search_query` (typed query + search engine), and `link_click` (anchor text + destination URL). All three POST to FastAPI `/capture`; background.ts also continues to emit bare `url` events on tab navigation. |
+| **Python inline redaction for browser content** | `redaction_service.py` ports the Rust clipboard patterns as inline `re.sub()` — it replaces only matched substrings rather than the whole value, preserving surrounding article context. Applied to `page_text` (page_content events) and `raw_content` (search_query events) in `capture.py` before the DB write. All patterns run (not just the first match). |
+| **Domain exclude list** | `excluded_domains` table in SQLite. Browser events whose URL hostname matches an excluded domain are silently dropped in `capture.py` (same 30-second in-memory cache as the app exclude list). Managed via `GET/POST/DELETE /privacy/excluded-domains`. Default seeds: `mail.google.com`, `accounts.google.com`. |
+| **Sessions store topics** | Claude now returns a `topics` JSON array ("vector databases", "React hooks", …) alongside the existing session fields. Stored in `sessions.topics` (TEXT, JSON array string). Included in the Qdrant embedding text so "what was I researching about X" queries match on subject vocabulary. |
 
 ---
 
@@ -67,7 +71,23 @@ same experience, AI adapts to what they actually do.
 ```
 [Rust: clipboard.rs]  ──► SQLite events (direct write, no HTTP)
 [Rust: window.rs]     ──► SQLite events (direct write, no HTTP)
-[Chrome Extension]    ──► POST /capture ──► FastAPI ──► SQLite events
+
+[content.ts — @mozilla/readability]
+    │  5-second visibility filter; sends on tab departure
+    │  page_content  → raw_content=title, page_text (≤2 000 chars), author, site_name
+    │  search_query  → raw_content=query, search_engine
+    │  link_click    → raw_content=link_text, link_target
+    ▼
+[background.ts — service worker]
+    │  url           → raw_content=page title (on every tab navigate / activate)
+    │  relays content.ts messages to backend
+    ▼
+POST /capture ──► FastAPI
+    │  domain check (excluded_domains — 30 s cache) — drop if excluded
+    │  page_content page_text → redact_sensitive_content()
+    │  search_query raw_content → redact_sensitive_content()
+    ▼
+SQLite events
 ```
 
 ### Data Flow — Background Processing (every 30 min, asyncio loop)
@@ -146,7 +166,7 @@ orbit/
 │   │   │   ├── ChatPanel.tsx               ← recall UI, reads conversationHistory from Zustand
 │   │   │   ├── Timeline.tsx                ← scrollable activity log
 │   │   │   ├── MemoryViewer.tsx            ← view + delete events/sessions (two-tab UI)
-│   │   │   ├── PrivacyPanel.tsx            ← capture toggle, exclude list, wipe button
+│   │   │   ├── PrivacyPanel.tsx            ← capture toggle, excluded apps, excluded websites (domains), wipe button
 │   │   │   └── OrbWidget.tsx               ← floating companion orb (Phase 4)
 │   │   ├── store/
 │   │   │   └── orbitStore.ts               ← Zustand: includes conversationHistory: Message[]
@@ -154,7 +174,7 @@ orbit/
 │   │   │   ├── useRecall.ts                ← POST /recall, appends to conversationHistory
 │   │   │   ├── useAnalytics.ts             ← PostHog wrapper — never call posthog directly
 │   │   │   ├── useOnboarding.ts            ← onboarding state, polls accessibility every 3s
-│   │   │   ├── usePrivacySettings.ts       ← privacy API calls
+│   │   │   ├── usePrivacySettings.ts       ← privacy API calls; includes excluded domains CRUD + normalizeDomain()
 │   │   │   └── useMemoryData.ts            ← memory viewer: events, sessions, pagination
 │   │   └── types/                          ← all TypeScript types
 │   └── src-tauri/
@@ -185,6 +205,7 @@ orbit/
 │   │   ├── voyage_service.py               ← httpx singleton → Worker /embed
 │   │   ├── qdrant_service.py               ← QdrantClient local file singleton
 │   │   ├── time_parser.py                  ← extracts time ranges from natural language queries
+│   │   ├── redaction_service.py            ← inline redaction for browser-captured text (page_text, search queries)
 │   │   ├── analytics_service.py            ← PostHog Python singleton, fails silently
 │   │   └── sentry_service.py               ← sentry_sdk.init(), only if DSN is set
 │   ├── models/
@@ -196,8 +217,8 @@ orbit/
 ├── extension/
 │   ├── manifest.json                       ← Manifest V3
 │   ├── src/
-│   │   ├── background.ts                   ← service worker, chrome.storage.session state
-│   │   └── content.ts                      ← stub (selected text — Phase 3)
+│   │   ├── background.ts                   ← service worker, chrome.storage.session state; relays content.ts messages + url events
+│   │   └── content.ts                      ← Readability extraction, search detection, link click capture
 │   └── vite.config.ts
 ├── worker/
 │   ├── src/index.ts                        ← /chat /classify /embed /tts /stt-token
@@ -302,7 +323,7 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | Layer | Tool | Notes |
 |---|---|---|
 | Structured events | SQLite `~/.orbit/orbit.db` | All events, sessions, memory objects |
-| Keyword search | SQLite FTS5 (built-in) | BM25, porter tokenizer, zero extra deps |
+| Keyword search | SQLite FTS5 (built-in) | BM25, porter tokenizer. Indexes `raw_content, app_name, url, page_text` — article body is searchable. |
 | Semantic search | Qdrant `~/.orbit/qdrant_storage/` | `QdrantClient(path=...)`, no Docker |
 
 ### Landing Page
@@ -353,20 +374,23 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `app/src-tauri/Info.plist` | `LSUIElement = true`. Never remove. Orbit never appears in the dock. |
 | `app/src-tauri/tauri.conf.json` | Two windows: `main` (panel, skipTaskbar, transparent, decorations:false) and `overlay` (Phase 4: fullscreen, alwaysOnTop, focus:false, transparent). |
 | `backend/main.py` | FastAPI with `@asynccontextmanager` lifespan. Inits Sentry, starts `asyncio.create_task(start_session_generation_loop())`. No APScheduler. GET /health endpoint. |
-| `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + auto-sync triggers on startup. Base `events` schema includes `session_id` and `category`. Base `sessions` schema includes `last_action` and `key_resources`. `search_events_fts()` accepts `start_ms`, `end_ms`, and `exclude_personal` params. |
-| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now` so first run is immediate. `generate_sessions_from_recent_events()`: fetch → classify (Gemini via Worker) → summarise (Claude Haiku via Worker) → Qdrant embed (Voyage via Worker) → mark events processed. Sends redacted `raw_content` to Claude (secrets already stripped at capture). Splits on project change. Force-processes events >2h old with null session_id. Persists all five Claude-generated fields: `project_name` and `goal` as top-level columns, `ai_summary` as plain text, `last_action` and `key_resources` as dedicated columns (`key_resources` stored as a JSON array string). |
-| `backend/routes/recall.py` | FTS5-first sequential pipeline. (1) Classify intent → "work"/"personal"/"general". (2) Parse time reference via `time_parser`. (3) FTS5 keyword search always runs unconditionally (offline-safe). (4) Try Worker: Qdrant semantic search → time-window filter → re-rank by `(similarity × 0.7) + (recency × 0.3)` (0.9/0.1 when time range is active) → Claude SSE stream. On `ConnectError`/`TimeoutException`: stream FTS5 results as plain offline message. |
-| `backend/routes/capture.py` | POST /capture (extension only — Rust writes direct). Checks pause state + exclude list (cached 30s). GET /events for timeline. GET /health. |
-| `backend/routes/privacy.py` | Excluded apps CRUD, pause/resume, capture status, full data wipe (SQLite + Qdrant). |
+| `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + auto-sync triggers on startup. Events schema includes `page_text`, `link_target`, `metadata` (Phase 2.5). FTS5 indexes 4 columns: `raw_content, app_name, url, page_text`. Sessions schema includes `last_action`, `key_resources`, `topics`. Excluded-domains table seeded with `mail.google.com` and `accounts.google.com`. `search_events_fts()` accepts `start_ms`, `end_ms`, `exclude_personal` and returns all new columns. |
+| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now` so first run is immediate. `generate_sessions_from_recent_events()`: fetch → classify (Gemini via Worker) → summarise (Claude Haiku via Worker) → Qdrant embed (Voyage via Worker) → mark events processed. Splits on project change. Force-processes events >2h old with null session_id. SQL SELECTs now include `page_text, link_target, metadata`. Event payload to Claude is type-aware: `page_content` sends `title, page_text[:500], author, site_name`; `search_query` sends `query, search_engine`; `link_click` sends `link_text, link_target`. Claude now returns a `topics` array; stored in `sessions.topics` and included in Qdrant embedding text. `_ensure_sessions_schema_columns_exist()` adds `topics` column to existing databases on startup. |
+| `backend/routes/recall.py` | FTS5-first sequential pipeline. (1) Classify intent → "work"/"personal"/"general". (2) Parse time reference via `time_parser`. (3) FTS5 keyword search always runs unconditionally (offline-safe). (4) Try Worker: Qdrant semantic search → time-window filter → re-rank by `(similarity × 0.7) + (recency × 0.3)` (0.9/0.1 when time range is active) → Claude SSE stream. On `ConnectError`/`TimeoutException`: stream FTS5 results as plain offline message. Context block formats events by type: `page_content` → `Read: "Title" by Author (Site) — excerpt`; `search_query` → `Searched: "query" on Google`; `link_click` → `Clicked: "text" → url`. Session block includes `Topics:` line when present. Offline fallback also uses type-aware formatting. |
+| `backend/routes/capture.py` | POST /capture (extension only — Rust writes direct). Checks pause state, excluded app names, and excluded domains (all cached 30s). Domain extracted via `urlparse().netloc` before every browser event. `page_text` for `page_content` events and `raw_content` for `search_query` events are passed through `redact_sensitive_content()` before INSERT. GET /events for timeline. |
+| `backend/routes/privacy.py` | Excluded apps CRUD, pause/resume, capture status, full data wipe (SQLite + Qdrant). Also `GET/POST/DELETE /privacy/excluded-domains` — domain exclusion CRUD (Phase 2.5). |
 | `backend/routes/feedback.py` | POST /feedback — stores rating + comment in SQLite. |
 | `backend/services/claude_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/chat`. Handles SSE streaming. Uses Claude Haiku for session gen, Claude Sonnet for recall. Accepts `conversation_history` param. |
 | `backend/services/gemini_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/classify`. Builds Gemini REST API body. Extracts text from `candidates[0].content.parts[0].text`. Sends `id, type, app_name, url, raw_content` — raw_content is already redacted at capture, so it's safe and needed for accurate classification. Falls back to `category='work'` if JSON parse fails. |
 | `backend/services/voyage_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/embed`. Body: `{"input": [text], "model": "voyage-3-lite", "input_type": "document"}`. Returns 512-dim float list. |
 | `backend/services/time_parser.py` | Standard-library time reference parser (no third-party deps). `extract_time_range_from_query(query, now_ms)` checks 11 patterns most-specific-first (e.g. "yesterday morning" before "yesterday") and returns `{"start_ms": int, "end_ms": int, "label": str}` or `None`. Used by `recall.py` to filter both FTS5 and Qdrant results to a concrete time window. |
+| `backend/services/redaction_service.py` | Inline sensitive-content redaction for browser-captured text. Ports Rust clipboard patterns as `re.sub()` — replaces only matched substrings (preserves article context). All 7 pattern steps run on every call. JWT uses `eyJ` anchor to avoid false positives in long text. API key pattern uses negative lookbehind + 8-char minimum body. Called by `capture.py` for `page_text` and search `raw_content` before DB write. |
 | `backend/services/qdrant_service.py` | `QdrantClient(path=~/.orbit/qdrant_storage)` singleton. Collection `orbit_sessions`, 512 dims, cosine. Raw vector upsert (no fastembed). `add_session_embedding()` + `search_sessions_semantic()`. |
 | `backend/services/analytics_service.py` | PostHog Python singleton. Device ID in `~/.orbit/device_id`. Strips forbidden property keys. try/except on every call — never crashes the app. |
 | `backend/services/sentry_service.py` | `sentry_sdk.init()` with `enable_logs=True`, `send_default_pii=False`. Only runs if `SENTRY_DSN` is set in env. |
-| `extension/src/background.ts` | MV3 service worker. All state in `chrome.storage.session` (never global vars). Fails silently when backend unreachable. |
+| `extension/src/background.ts` | MV3 service worker. All state in `chrome.storage.session` (never global vars). Emits bare `url` events on tab navigation (deduped by `lastSentUrl`). Handles three content-script message types: `page_content`, `search_query`, `link_click` — relays them to POST /capture. `onMessage` callback is synchronous (fire-and-forget) to keep the MV3 message channel intact. Fails silently when backend unreachable. |
+| `extension/src/content.ts` | Runs in every page context. 5-second visibility filter — pages the user bounced off are discarded. On threshold: detects search queries first (Google, YouTube, Bing, DuckDuckGo); otherwise runs `@mozilla/readability` on a DOM clone to extract article body (≤2 000 chars), author, site_name, excerpt. Sends `page_content` or `search_query` to the background worker on tab departure (`visibilitychange` + `pagehide`). Left-click listener captures `link_click` events with 500 ms debounce. |
+| `extension/package.json` | Runtime dep: `@mozilla/readability@^0.6.0` — ships own `index.d.ts`; do **NOT** install `@types/mozilla-readability` (conflicts). DevDeps: `@crxjs/vite-plugin`, `@types/chrome`, `typescript`, `vite`. |
 | `worker/src/index.ts` | Five routes: `/chat` → Claude, `/classify` → Gemini REST, `/embed` → Voyage AI, `/tts` → stub, `/stt-token` → stub. All secrets in Cloudflare env. CORS headers on every response. |
 | `landing/src/app/page.tsx` | Landing page — Server Component. Uses header, footer, background-orbit, waitlist-form. |
 | `landing/src/app/privacy/page.tsx` | Privacy policy — Server Component. What's captured, what's sent to cloud, user controls. |
@@ -390,13 +414,22 @@ events(
   id           TEXT PRIMARY KEY,
   timestamp    INTEGER NOT NULL,    -- unix milliseconds
   type         TEXT NOT NULL,       -- 'clipboard' | 'window' | 'url'
+                                    --   | 'page_content' | 'search_query' | 'link_click'
   raw_content  TEXT,                -- secrets replaced with [REDACTED:type] at capture;
-                                    --  safe redacted content IS forwarded to Gemini + Claude
+                                    --  safe redacted content IS forwarded to Gemini + Claude.
+                                    --  for page_content: page title. for search_query: query text.
+                                    --  for link_click: visible anchor text.
   app_name     TEXT,
   url          TEXT,
   source       TEXT NOT NULL,       -- 'rust' | 'extension'
   session_id   TEXT,                -- null until processed by scheduler
-  category     TEXT                 -- Gemini output: work/research/personal/system/communication
+  category     TEXT,                -- Gemini output: work/research/personal/system/communication
+  page_text    TEXT,                -- readable article body (page_content events);
+                                    --  capped at 2 000 chars; redacted by redaction_service before storage
+  link_target  TEXT,                -- destination URL (link_click events)
+  metadata     TEXT                 -- JSON: {author, site_name, excerpt, time_on_page} for page_content;
+                                    --       {search_engine, time_on_page} for search_query;
+                                    --       {link_text} for link_click
 )
 ```
 
@@ -415,6 +448,8 @@ sessions(
   ai_summary    TEXT,            -- Claude's plain-text 2-3 sentence session summary
   last_action   TEXT,            -- most recent meaningful thing the user did
   key_resources TEXT,            -- JSON array of important URLs / file paths
+  topics        TEXT,            -- JSON array of subject areas ("vector databases", "tax filing" …)
+                                 --  included in Qdrant embedding text for subject-based recall
   embedding_id  TEXT             -- Qdrant point ID
 )
 ```
@@ -534,9 +569,33 @@ only content that has already passed through redaction.
 - Raw secret values (they don't exist past the redaction layer).
 - Personal-category events in response to work queries.
 
+### Python Redaction (Browser Content — before any DB write)
+
+`backend/services/redaction_service.py` applies the same pattern set as Rust's `clipboard.rs`
+but uses inline `re.sub()` — replaces only the matched substring so surrounding article context
+is preserved. Applied in `capture.py` before INSERT for two event types:
+
+| Event type | Field redacted |
+|---|---|
+| `page_content` | `page_text` |
+| `search_query` | `raw_content` (the typed query) |
+
+All patterns run on every call (unlike Rust which returns on the first match, since it replaces
+the whole clipboard value anyway). The JWT pattern uses an `eyJ` anchor to avoid false positives
+in long-form text. API key pattern uses a negative lookbehind `(?<![A-Za-z0-9_])` + 8-char
+minimum body to avoid mid-word false matches.
+
 ### App Exclude List
 
 Default: `1Password, Bitwarden, Keychain Access, LastPass, Dashlane, System Settings`
+
+### Domain Exclude List
+
+`excluded_domains` table in SQLite. Seeded with `mail.google.com`, `accounts.google.com` on
+first run. Users manage their own list via PrivacyPanel ("Excluded Websites" section) or directly
+via the API. The domain check in `capture.py` uses the same 30-second in-memory cache as the
+app exclude list — any browser event (`url`, `page_content`, `link_click`, `search_query`) whose
+URL hostname matches a listed domain is silently dropped before any data is written.
 
 ### Other Rules
 - All data local by default. Cloud sync opt-in, Phase 5 only.
