@@ -153,6 +153,38 @@ async def _ensure_sessions_schema_columns_exist() -> None:
 # Session generation helper — runs once per project group
 # ---------------------------------------------------------------------------
 
+def _dedup_events_by_url_for_prompt(events: list[dict]) -> list[dict]:
+    """
+    Returns a deduplicated copy of `events` for building the Claude prompt
+    payload. When the same URL appears more than once (both native_browser and
+    extension captured it), only the richest entry is included in the prompt.
+    page_text present wins; among equal entries the first occurrence is kept.
+
+    The original list is not modified — every event's session_id is still
+    marked correctly because session marking uses the original `project_events`.
+    """
+    best_by_url: dict[str, dict] = {}
+    for event in events:
+        url = (event.get("url") or "").strip()
+        if not url:
+            continue
+        if url not in best_by_url:
+            best_by_url[url] = event
+        elif event.get("page_text") and not best_by_url[url].get("page_text"):
+            best_by_url[url] = event
+
+    seen_urls: set[str] = set()
+    result: list[dict] = []
+    for event in events:
+        url = (event.get("url") or "").strip()
+        if not url:
+            result.append(event)
+        elif url not in seen_urls:
+            result.append(best_by_url[url])
+            seen_urls.add(url)
+    return result
+
+
 async def _generate_session_for_events(project_events: list[dict]) -> None:
     """
     Summarises one project's classified events with Claude, persists the
@@ -172,9 +204,12 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     # Build Claude prompt — type-aware payload so Claude sees the richest
     # available representation for each event type.
     # raw_content is already safe at this point (redacted at capture).
+    # Deduplicate by URL before building the payload so that the same page
+    # is not described twice when both native_browser and the extension
+    # captured it. project_events is left unchanged for session marking.
     # ------------------------------------------------------------------
     events_payload_for_prompt = []
-    for event in project_events:
+    for event in _dedup_events_by_url_for_prompt(project_events):
         event_type = event.get("type", "")
 
         # Parse the metadata JSON blob once per event — it carries author,

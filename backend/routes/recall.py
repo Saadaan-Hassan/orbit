@@ -235,6 +235,35 @@ def _rerank_sessions_by_combined_score(
     return sorted(sessions, key=_combined, reverse=True)
 
 
+def _dedup_events_by_url(events: list[dict]) -> list[dict]:
+    """
+    Safety-net dedup for FTS5 results: if the same URL appears more than once
+    (e.g. from both native_browser and extension sources), keep the richest
+    entry. page_text present wins; among equal entries, the first occurrence
+    (highest BM25 rank) is kept. Events without a URL are never touched.
+    """
+    best_by_url: dict[str, dict] = {}
+    for event in events:
+        url = (event.get("url") or "").strip()
+        if not url:
+            continue
+        if url not in best_by_url:
+            best_by_url[url] = event
+        elif event.get("page_text") and not best_by_url[url].get("page_text"):
+            best_by_url[url] = event
+
+    seen_urls: set[str] = set()
+    result: list[dict] = []
+    for event in events:
+        url = (event.get("url") or "").strip()
+        if not url:
+            result.append(event)
+        elif url not in seen_urls:
+            result.append(best_by_url[url])
+            seen_urls.add(url)
+    return result
+
+
 def _build_context_block(
     keyword_matched_events: list[dict],
     semantic_matched_sessions: list[dict],
@@ -253,6 +282,11 @@ def _build_context_block(
     # either innocuous plaintext or a [REDACTED:<type>] placeholder.
     # Sending the actual clipboard content is essential for meaningful recall
     # — without it Claude cannot tell the user what they copied or worked with.
+
+    # Safety-net dedup: if the same URL slipped through as both a
+    # native_browser and an extension event, keep the richer one.
+    keyword_matched_events = _dedup_events_by_url(keyword_matched_events)
+
     context_lines: list[str] = []
 
     # --- Time range context (when the query contained a time reference) ---

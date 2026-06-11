@@ -80,6 +80,13 @@ async def create_all_tables() -> None:
             END
         """))
 
+        # Supports the capture-time URL dedup check (url + 10-second window
+        # query) and URL-filtered recall queries.
+        await connection.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_events_url_timestamp
+            ON events(url, timestamp)
+        """))
+
         await connection.execute(text("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id            TEXT PRIMARY KEY,

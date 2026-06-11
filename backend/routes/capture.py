@@ -36,6 +36,12 @@ logger = logging.getLogger(__name__)
 
 _CACHE_TTL_SECONDS = 30.0
 
+# When both native_browser capture and the Chrome extension are active, the
+# same URL can be recorded within seconds of each other. We deduplicate by
+# keeping the extension event (richer — may be followed by page_content) and
+# dropping or replacing the native_browser one.
+_URL_DEDUP_WINDOW_MS = 10_000  # 10 seconds
+
 
 @dataclass
 class _CaptureFilterCache:
@@ -102,6 +108,38 @@ def _extract_domain(url: str) -> str | None:
         return None
 
 
+async def _find_recent_url_event(
+    db: AsyncSession,
+    url: str,
+    current_timestamp_ms: int,
+) -> dict | None:
+    """
+    Returns the id and source of the most recent url-type event with the same
+    URL within _URL_DEDUP_WINDOW_MS, or None if no such event exists.
+    Uses the idx_events_url_timestamp index for efficiency.
+    """
+    result = await db.execute(
+        text("""
+            SELECT id, source
+            FROM   events
+            WHERE  type      = 'url'
+              AND  url       = :url
+              AND  timestamp >= :window_start
+            ORDER  BY timestamp DESC
+            LIMIT  1
+        """),
+        {
+            "url":          url,
+            "window_start": current_timestamp_ms - _URL_DEDUP_WINDOW_MS,
+        },
+    )
+    row = result.fetchone()
+    if row is None:
+        return None
+    mapping = row._mapping
+    return {"id": mapping["id"], "source": mapping["source"]}
+
+
 def _capture_is_currently_paused() -> bool:
     """
     Returns True if capture is paused right now, taking paused_until into account.
@@ -145,6 +183,24 @@ async def capture_event(
         domain = _extract_domain(event.url)
         if domain and domain in _filter_cache.excluded_domains:
             return {"status": "excluded"}
+
+    # Deduplicate url-type events: when both native_browser capture and the
+    # Chrome extension fire for the same URL within 10 seconds, the extension
+    # event is richer (it is followed by a page_content event with article
+    # body). We keep the extension source and drop or replace the native one.
+    if event.type == "url" and event.url:
+        existing = await _find_recent_url_event(db, event.url, event.timestamp)
+        if existing is not None:
+            if existing["source"] == "extension" and event.source == "native_browser":
+                # Extension event already in DB — drop the native duplicate.
+                return {"status": "deduplicated"}
+            elif existing["source"] == "native_browser" and event.source == "extension":
+                # Extension event arrived slightly later but is richer — remove
+                # the native event and let this one proceed to the INSERT below.
+                await db.execute(
+                    text("DELETE FROM events WHERE id = :id"),
+                    {"id": existing["id"]},
+                )
 
     # page_text carries extracted article body — redact secrets before storing.
     # raw_content for search_query events is the typed search term, which could
