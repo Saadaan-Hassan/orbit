@@ -134,8 +134,13 @@ fn main() {
         .expect("Failed to create events table in SQLite");
 
     tokio_runtime.spawn(capture::clipboard::start_clipboard_monitor(
-        orbit_database_file_path,
+        orbit_database_file_path.clone(),
         sqlx_connection_pool.clone(),
+    ));
+
+    tokio_runtime.spawn(capture::file_activity::start_file_activity_monitor(
+        sqlx_connection_pool.clone(),
+        orbit_database_file_path,
     ));
 
     tokio_runtime.spawn(capture::window::start_window_tracker(

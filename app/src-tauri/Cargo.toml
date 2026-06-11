@@ -29,6 +29,8 @@ chrono = "0.4"
 regex = "1"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json"] }
+notify = "6"
+notify-debouncer-full = "0.3"
 tauri-plugin-global-shortcut = "2.3.2"
 # Shell plugin — used in production (release) builds to spawn the bundled
 # orbit-backend sidecar binary without requiring uv on the user's machine.

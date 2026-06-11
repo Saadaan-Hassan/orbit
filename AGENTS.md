@@ -23,7 +23,7 @@ same experience, AI adapts to what they actually do.
 
 **App behaviour:** No dock icon. No Cmd+Tab. Menu bar only (`LSUIElement = true`).
 
-**Completed phases:** Phase 0 ✅ Phase 1 ✅ Phase 2 ✅ Pre-beta hardening ✅ Phase 2.5 ✅
+**Completed phases:** Phase 0 ✅ Phase 1 ✅ Phase 2 ✅ Pre-beta hardening ✅ Phase 2.5 ✅ Phase 2.6 ✅
 
 ---
 
@@ -37,7 +37,7 @@ same experience, AI adapts to what they actually do.
 | **No AI API keys in backend/.env** | `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `VOYAGE_API_KEY` live in Cloudflare Worker secrets ONLY. `backend/.env` has no AI provider keys. |
 | **google-genai SDK not installed** | Gemini is called via `httpx` → Worker `/classify`. The `google-genai` package is not a dependency. |
 | **APScheduler v3.x (stable)** | Session generation uses `AsyncIOScheduler` from `apscheduler.schedulers.asyncio` — this is v3.x stable. Import path: `from apscheduler.schedulers.asyncio import AsyncIOScheduler`. Never use APScheduler v4 (`from apscheduler import AsyncScheduler`) — that is explicitly pre-release and unstable. |
-| **Rust writes SQLite directly** | Clipboard + window events → SQLite directly from Rust. Never through FastAPI. Only the Chrome Extension POSTs to FastAPI. |
+| **Rust writes SQLite directly** | Clipboard + window + file_activity events → SQLite directly from Rust. Never through FastAPI. Only the Chrome Extension POSTs to FastAPI. |
 | **No Docker for Qdrant** | `QdrantClient(path="~/.orbit/qdrant_storage")` local file mode. No server, no Docker. |
 | **Secrets redacted at capture, content flows to AI** | Clipboard secrets become `[REDACTED:type]` in `clipboard.rs` BEFORE any DB write. After that, `raw_content` (window titles, URLs, safe clipboard text) IS sent to Gemini and Claude — they need it to write useful summaries. App names alone are meaningless. The redaction layer is what makes this safe. |
 | **Recall uses query intent classification** | `classify_query_intent()` in `recall.py` returns "work", "personal", or "general". Only a "work"-intent query excludes `category = 'personal'` events from FTS5 results. "personal" queries include all events and prompt Claude to surface URLs. "general" (the default when no clear signal is present, or when both signals fire) includes everything. |
@@ -48,6 +48,7 @@ same experience, AI adapts to what they actually do.
 | **Python inline redaction for browser content** | `redaction_service.py` ports the Rust clipboard patterns as inline `re.sub()` — it replaces only matched substrings rather than the whole value, preserving surrounding article context. Applied to `page_text` (page_content events) and `raw_content` (search_query events) in `capture.py` before the DB write. All patterns run (not just the first match). |
 | **Domain exclude list** | `excluded_domains` table in SQLite. Browser events whose URL hostname matches an excluded domain are silently dropped in `capture.py` (same 30-second in-memory cache as the app exclude list). Managed via `GET/POST/DELETE /privacy/excluded-domains`. Default seeds: `mail.google.com`, `accounts.google.com`. |
 | **Sessions store topics** | Claude now returns a `topics` JSON array ("vector databases", "React hooks", …) alongside the existing session fields. Stored in `sessions.topics` (TEXT, JSON array string). Included in the Qdrant embedding text so "what was I researching about X" queries match on subject vocabulary. |
+| **File activity monitor (Rust)** | `file_activity.rs` watches ~/Documents, ~/Desktop, ~/Downloads via macOS FSEvents (the `notify` crate). Events are debounced by 2 seconds (`notify-debouncer-full`). Only the file *path* is stored in `events.file_path`; `raw_content` holds the bare file name; `metadata` holds `{"action":"created|modified|removed"}`. File *contents* are never read. Hidden files/dirs, high-noise directories, and transient suffixes are filtered before any DB write. |
 
 ---
 
@@ -69,8 +70,9 @@ same experience, AI adapts to what they actually do.
 
 ### Data Flow — Capture
 ```
-[Rust: clipboard.rs]  ──► SQLite events (direct write, no HTTP)
-[Rust: window.rs]     ──► SQLite events (direct write, no HTTP)
+[Rust: clipboard.rs]       ──► SQLite events (direct write, no HTTP)
+[Rust: window.rs]          ──► SQLite events (direct write, no HTTP)
+[Rust: file_activity.rs]   ──► SQLite events (direct write, no HTTP)
 
 [content.ts — @mozilla/readability]
     │  5-second visibility filter; sends on tab departure
@@ -183,6 +185,7 @@ orbit/
 │       │   ├── capture/
 │       │   │   ├── mod.rs
 │       │   │   ├── clipboard.rs            ← 500ms poll, redacts secrets before SQLite write
+│       │   │   ├── file_activity.rs        ← FSEvents via notify + 2 s debounce; stores path only, never content
 │       │   │   └── window.rs               ← 30s poll via osascript (planned: reduce to 10s)
 │       │   ├── hotkey.rs                   ← global hotkey (global-hotkey crate)
 │       │   ├── db.rs                       ← SQLite pool (sqlx) — single pool, never recreate
@@ -278,6 +281,7 @@ orbit/
 | `global-hotkey` | System-wide hotkey for push-to-talk (Phase 4) |
 | `xcap` | Screenshots (Phase 3) |
 | `reqwest` | HTTP client singleton — never create per request |
+| `notify` + `notify-debouncer-full` | FSEvents file activity watcher — 2 s debounce, watches ~/Documents ~/Desktop ~/Downloads recursively |
 | `uuid` | Event ID generation |
 | `chrono` | Timestamps |
 | `regex` | Sensitive pattern detection before SQLite write |
@@ -369,6 +373,7 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `app/src-tauri/src/main.rs` | Entry point. Sets LSUIElement, system tray, spawns FastAPI subprocess, creates SQLite pool, starts clipboard + window capture as tokio tasks. Health-checks FastAPI on startup (10 retries, 1s each). |
 | `app/src-tauri/src/capture/clipboard.rs` | 500ms poll. Runs `detect_sensitive_content_type()` before writing. Stores `[REDACTED:type]` for matches. Deduplicates same content within 5 minutes. |
 | `app/src-tauri/src/capture/window.rs` | 30s poll via osascript. Only writes when title changes. Fails silently on permission errors. |
+| `app/src-tauri/src/capture/file_activity.rs` | FSEvents file activity monitor using `notify` + `notify-debouncer-full`. 2-second debounce. Watches ~/Documents, ~/Desktop, ~/Downloads recursively. Skips hidden files/dirs, blocked high-noise directories (node_modules, target, build, etc.), and transient file suffixes (.tmp, .swp, .lock, .log). Writes `file_activity` events with `file_path` and `metadata={"action":"created|modified|removed"}`. NEVER reads file contents. |
 | `app/src-tauri/src/db.rs` | sqlx SQLite pool. **Single pool shared everywhere. Never open new connections.** |
 | `app/src-tauri/src/commands.rs` | All `#[tauri::command]` functions — thin wrappers only. Logic lives in modules. |
 | `app/src-tauri/Info.plist` | `LSUIElement = true`. Never remove. Orbit never appears in the dock. |
