@@ -86,6 +86,24 @@ async def _ensure_events_schema_columns_exist() -> None:
             )
             logger.info("Added category column to events table.")
 
+        if "page_text" not in existing_column_names:
+            await connection.execute(
+                text("ALTER TABLE events ADD COLUMN page_text TEXT")
+            )
+            logger.info("Added page_text column to events table.")
+
+        if "link_target" not in existing_column_names:
+            await connection.execute(
+                text("ALTER TABLE events ADD COLUMN link_target TEXT")
+            )
+            logger.info("Added link_target column to events table.")
+
+        if "metadata" not in existing_column_names:
+            await connection.execute(
+                text("ALTER TABLE events ADD COLUMN metadata TEXT")
+            )
+            logger.info("Added metadata column to events table.")
+
 
 # ---------------------------------------------------------------------------
 # Session generation helper — runs once per project group

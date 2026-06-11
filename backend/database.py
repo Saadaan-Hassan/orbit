@@ -28,20 +28,23 @@ async def create_all_tables() -> None:
                 url         TEXT,
                 source      TEXT NOT NULL,
                 session_id  TEXT,
-                category    TEXT
+                category    TEXT,
+                page_text   TEXT,
+                link_target TEXT,
+                metadata    TEXT
             )
         """))
-        # FTS5 virtual table mirrors the three text columns users are most
-        # likely to search. content='events' tells FTS5 to read from the
-        # events table for snippet/highlight queries rather than duplicating
-        # the data; content_rowid links it back to the events primary key.
-        # porter tokenizer enables stemming so "debugging" matches "debug".
+        # FTS5 virtual table mirrors the key text columns. page_text is included
+        # so that extracted page body content is keyword-searchable alongside
+        # titles and URLs. content='events' avoids duplicating data; the porter
+        # tokenizer enables stemming so "debugging" matches "debug".
         await connection.execute(text("""
             CREATE VIRTUAL TABLE IF NOT EXISTS events_fts
             USING fts5(
                 raw_content,
                 app_name,
                 url,
+                page_text,
                 content='events',
                 content_rowid='rowid',
                 tokenize='porter unicode61'
@@ -53,8 +56,8 @@ async def create_all_tables() -> None:
         await connection.execute(text("""
             CREATE TRIGGER IF NOT EXISTS events_fts_insert
             AFTER INSERT ON events BEGIN
-                INSERT INTO events_fts(rowid, raw_content, app_name, url)
-                VALUES (new.rowid, new.raw_content, new.app_name, new.url);
+                INSERT INTO events_fts(rowid, raw_content, app_name, url, page_text)
+                VALUES (new.rowid, new.raw_content, new.app_name, new.url, new.page_text);
             END
         """))
         await connection.execute(text("""
@@ -63,7 +66,8 @@ async def create_all_tables() -> None:
                 UPDATE events_fts
                 SET raw_content = new.raw_content,
                     app_name    = new.app_name,
-                    url         = new.url
+                    url         = new.url,
+                    page_text   = new.page_text
                 WHERE rowid = old.rowid;
             END
         """))

@@ -9,3 +9,6 @@ class CaptureEvent(BaseModel):
     app_name: str | None = None
     url: str | None = None
     source: str
+    page_text: str | None = None
+    link_target: str | None = None
+    metadata: dict | None = None

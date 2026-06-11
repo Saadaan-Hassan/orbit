@@ -9,9 +9,11 @@ Pause and exclude filtering is enforced at two layers:
 """
 
 import asyncio
+import json
 import time
 import logging
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +41,7 @@ class _CaptureFilterCache:
     is_paused: bool = False
     paused_until_ms: int | None = None        # None means indefinite
     excluded_app_names: set[str] = field(default_factory=set)
+    excluded_domains: set[str] = field(default_factory=set)
     last_refreshed_at: float = 0.0            # monotonic seconds
 
 
@@ -76,7 +79,26 @@ async def _refresh_cache_if_stale() -> None:
         _filter_cache.is_paused = bool(pause_row.is_paused) if pause_row else False
         _filter_cache.paused_until_ms = pause_row.paused_until if pause_row else None
         _filter_cache.excluded_app_names = {row.app_name for row in excluded_rows}
+
+        # excluded_domains table is created in Step 4. Load it if it exists;
+        # fall back to an empty set so this code path doesn't break before then.
+        try:
+            domain_result = await connection.execute(
+                text("SELECT domain FROM excluded_domains")
+            )
+            _filter_cache.excluded_domains = {row.domain for row in domain_result.fetchall()}
+        except Exception:
+            _filter_cache.excluded_domains = set()
+
         _filter_cache.last_refreshed_at = time.monotonic()
+
+
+def _extract_domain(url: str) -> str | None:
+    """Returns the netloc (e.g. 'example.com') from a URL, or None on failure."""
+    try:
+        return urlparse(url).netloc or None
+    except Exception:
+        return None
 
 
 def _capture_is_currently_paused() -> bool:
@@ -110,19 +132,31 @@ async def capture_event(
     if event.app_name and event.app_name in _filter_cache.excluded_app_names:
         return {"status": "excluded"}
 
+    if event.url:
+        domain = _extract_domain(event.url)
+        if domain and domain in _filter_cache.excluded_domains:
+            return {"status": "excluded"}
+
     await db.execute(
         text("""
-            INSERT INTO events (id, timestamp, type, raw_content, app_name, url, source)
-            VALUES (:id, :timestamp, :type, :raw_content, :app_name, :url, :source)
+            INSERT INTO events
+                (id, timestamp, type, raw_content, app_name, url, source,
+                 page_text, link_target, metadata)
+            VALUES
+                (:id, :timestamp, :type, :raw_content, :app_name, :url, :source,
+                 :page_text, :link_target, :metadata)
         """),
         {
-            "id": event.id,
-            "timestamp": event.timestamp,
-            "type": event.type,
+            "id":          event.id,
+            "timestamp":   event.timestamp,
+            "type":        event.type,
             "raw_content": event.raw_content,
-            "app_name": event.app_name,
-            "url": event.url,
-            "source": event.source,
+            "app_name":    event.app_name,
+            "url":         event.url,
+            "source":      event.source,
+            "page_text":   event.page_text,
+            "link_target": event.link_target,
+            "metadata":    json.dumps(event.metadata) if event.metadata is not None else None,
         },
     )
     await db.commit()
