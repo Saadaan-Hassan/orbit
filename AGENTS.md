@@ -23,7 +23,7 @@ same experience, AI adapts to what they actually do.
 
 **App behaviour:** No dock icon. No Cmd+Tab. Menu bar only (`LSUIElement = true`).
 
-**Completed phases:** Phase 0 ✅ Phase 1 ✅ Phase 2 ✅ Pre-beta hardening ✅ Phase 2.5 ✅ Phase 2.6 ✅
+**Completed phases:** Phase 0 ✅ Phase 1 ✅ Phase 2 ✅ Pre-beta hardening ✅ Phase 2.5 ✅ Phase 2.6 ✅ Phase 2.7 ✅
 
 ---
 
@@ -37,9 +37,14 @@ same experience, AI adapts to what they actually do.
 | **No AI API keys in backend/.env** | `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `VOYAGE_API_KEY` live in Cloudflare Worker secrets ONLY. `backend/.env` has no AI provider keys. |
 | **google-genai SDK not installed** | Gemini is called via `httpx` → Worker `/classify`. The `google-genai` package is not a dependency. |
 | **APScheduler v3.x (stable)** | Session generation uses `AsyncIOScheduler` from `apscheduler.schedulers.asyncio` — this is v3.x stable. Import path: `from apscheduler.schedulers.asyncio import AsyncIOScheduler`. Never use APScheduler v4 (`from apscheduler import AsyncScheduler`) — that is explicitly pre-release and unstable. |
-| **Rust writes SQLite directly** | Clipboard + window + file_activity events → SQLite directly from Rust. Never through FastAPI. Only the Chrome Extension POSTs to FastAPI. |
+| **Rust writes SQLite directly** | Clipboard + window + file_activity + browser_url events → SQLite directly from Rust. Never through FastAPI. Only the Chrome Extension POSTs to FastAPI. `browser_url.rs` writes `type='url', source='native_browser'` events. |
 | **No Docker for Qdrant** | `QdrantClient(path="~/.orbit/qdrant_storage")` local file mode. No server, no Docker. |
 | **Secrets redacted at capture, content flows to AI** | Clipboard secrets become `[REDACTED:type]` in `clipboard.rs` BEFORE any DB write. After that, `raw_content` (window titles, URLs, safe clipboard text) IS sent to Gemini and Claude — they need it to write useful summaries. App names alone are meaningless. The redaction layer is what makes this safe. |
+| **Native browser URL capture (Rust)** | `browser_url.rs` polls the active tab of the frontmost browser every 5 s via osascript. Supports Chrome, Safari, Arc, Brave Browser, Microsoft Edge (not Firefox). Requires macOS Automation permission. Sets `pub static BROWSER_AUTOMATION_DENIED: AtomicBool` when error -1743 fires; clears on next success. Writes `type='url', source='native_browser'` directly to SQLite. |
+| **Two-layer browser capture** | Native (default, no install) captures URL + page title via osascript. Extension (optional, richer) captures `page_content`, `search_query`, `link_click` plus article body. Both can be active simultaneously. Native toggled via `browser_capture_settings.native_enabled`; extension is independent. |
+| **Browser event dedup (10-second window)** | When a `url` event arrives at FastAPI `/capture`, `_find_recent_url_event()` queries `events(url, timestamp)` using `idx_events_url_timestamp`. Extension beats native_browser: new native dropped if extension exists within 10 s; new extension DELETEs existing native. Safety-net dedup also in `scheduler.py` + `recall.py` (page_text-present wins; else first occurrence). |
+| **`browser_capture_settings` table** | Single row (id=1): `native_enabled INTEGER NOT NULL DEFAULT 1`. Seeded by FastAPI on startup. `browser_url.rs` reads this every 30 s — fallback to `true` if absent. Managed via `GET/POST /privacy/browser-capture`. |
+| **Automation permission for native browser capture** | macOS Automation permission must be granted for osascript to read browser tab URLs. Requested at onboarding Step 2 of 5 (always skippable). Three Tauri commands in `lib.rs`: `check_browser_automation_permission`, `trigger_browser_automation_prompt`, `open_automation_system_settings`. |
 | **Recall uses query intent classification** | `classify_query_intent()` in `recall.py` returns "work", "personal", or "general". Only a "work"-intent query excludes `category = 'personal'` events from FTS5 results. "personal" queries include all events and prompt Claude to surface URLs. "general" (the default when no clear signal is present, or when both signals fire) includes everything. |
 | **Recall has offline FTS5 fallback** | FTS5 keyword search always runs first (local, no network). If the Cloudflare Worker is unreachable (`httpx.ConnectError` / `TimeoutException`), Qdrant + Claude are skipped and FTS5 results are streamed as a plain offline message. |
 | **Recall parses time references** | `time_parser.extract_time_range_from_query()` scans the query for phrases like "yesterday", "this morning", "last week". When matched, FTS5 is timestamp-filtered and Qdrant results are post-filtered to sessions that overlap the window. |
@@ -81,7 +86,7 @@ same experience, AI adapts to what they actually do.
 [Rust: file_activity.rs]   ──► SQLite events (direct write, no HTTP)  [watched folders read from file_watch_settings every 30 s]
 [Rust: system_state.rs]    ──► SQLite events (direct write, no HTTP)
 [Rust: app_lifecycle.rs]   ──► SQLite events (direct write, no HTTP)
-[Rust: browser_url.rs]     ──► SQLite events (direct write, no HTTP)  [5 s poll; source='native_browser']
+[Rust: browser_url.rs]     ──► SQLite events (direct write, no HTTP)  [5 s poll; source='native_browser'; reads browser_capture_settings every 30 s; BROWSER_AUTOMATION_DENIED AtomicBool on error -1743]
 
 [content.ts — @mozilla/readability]
     │  5-second visibility filter; sends on tab departure
@@ -95,6 +100,7 @@ same experience, AI adapts to what they actually do.
     ▼
 POST /capture ──► FastAPI
     │  domain check (excluded_domains — 30 s cache) — drop if excluded
+    │  url event dedup: _find_recent_url_event() — extension beats native_browser within 10 s window
     │  page_content page_text → redact_sensitive_content()
     │  search_query raw_content → redact_sensitive_content()
     ▼
@@ -186,20 +192,20 @@ orbit/
 │   │   ├── instrument.ts                   ← Sentry init — FIRST import in main.tsx
 │   │   ├── main.tsx                        ← PostHogProvider wrapper, imports instrument first
 │   │   ├── components/
-│   │   │   ├── OnboardingFlow.tsx          ← first-launch: Welcome→Permissions→Extension→Tips
+│   │   │   ├── OnboardingFlow.tsx          ← 5-step first-launch: Welcome→Accessibility→BrowserAutomation→Extension(optional)→Tips
 │   │   │   ├── ErrorBoundary.tsx           ← global error boundary → Sentry → restart button
 │   │   │   ├── ChatPanel.tsx               ← recall UI, reads conversationHistory from Zustand
 │   │   │   ├── Timeline.tsx                ← scrollable activity log
 │   │   │   ├── MemoryViewer.tsx            ← view + delete events/sessions (two-tab UI)
-│   │   │   ├── PrivacyPanel.tsx            ← capture toggle, excluded apps, excluded websites, file activity watching, wipe button
+│   │   │   ├── PrivacyPanel.tsx            ← capture toggle, excluded apps, excluded websites, browser tracking toggle (BrowserTrackingSection), file activity watching, wipe button
 │   │   │   └── OrbWidget.tsx               ← floating companion orb (Phase 4)
 │   │   ├── store/
 │   │   │   └── orbitStore.ts               ← Zustand: includes conversationHistory: Message[]
 │   │   ├── hooks/
 │   │   │   ├── useRecall.ts                ← POST /recall, appends to conversationHistory
 │   │   │   ├── useAnalytics.ts             ← PostHog wrapper — never call posthog directly
-│   │   │   ├── useOnboarding.ts            ← onboarding state, polls accessibility every 3s
-│   │   │   ├── usePrivacySettings.ts       ← privacy API calls; excluded domains + normalizeDomain(); file watching CRUD
+│   │   │   ├── useOnboarding.ts            ← onboarding state, polls accessibility + browser automation every 3s; requestBrowserAutomation()
+│   │   │   ├── usePrivacySettings.ts       ← privacy API calls; excluded domains + normalizeDomain(); nativeBrowserEnabled + setNativeBrowserEnabled; file watching CRUD
 │   │   │   └── useMemoryData.ts            ← memory viewer: events, sessions, pagination
 │   │   └── types/                          ← all TypeScript types
 │   └── src-tauri/
@@ -211,7 +217,7 @@ orbit/
 │       │   │   ├── file_activity.rs        ← FSEvents via notify + 2 s debounce; reads file_watch_settings every 30 s; stores path only, never content
 │       │   │   ├── system_state.rs         ← Darwin notify API; lock/unlock/sleep/wake → SQLite; macOS only
 │       │   │   ├── app_lifecycle.rs        ← 10s osascript diff; launched/quit → SQLite
-│       │   │   ├── browser_url.rs          ← 5s osascript poll; active tab URL → SQLite; no extension needed
+│       │   │   ├── browser_url.rs          ← 5s osascript poll; source='native_browser'; reads browser_capture_settings every 30 s; BROWSER_AUTOMATION_DENIED AtomicBool
 │       │   │   └── window.rs               ← 30s poll via osascript; idle timer writes is_user_active on each event
 │       │   ├── hotkey.rs                   ← global hotkey (global-hotkey crate)
 │       │   ├── db.rs                       ← SQLite pool (sqlx) — single pool, never recreate
@@ -389,13 +395,13 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 |---|---|
 | `app/src/instrument.ts` | Sentry init. **Must be the first import in main.tsx.** Only initialises if `VITE_SENTRY_DSN` is set. |
 | `app/src/main.tsx` | First import: `./instrument`. Wraps app in `PostHogProvider` with `defaults: '2026-01-30'`, `autocapture: false`, `persistence: 'memory'`. |
-| `app/src/components/OnboardingFlow.tsx` | 4-step first-launch: Welcome → Accessibility (polls every 3s until granted, auto-advances) → Chrome Extension → What to Expect. Blocks main UI until complete. |
+| `app/src/components/OnboardingFlow.tsx` | 5-step first-launch: Welcome → Accessibility (polls every 3s, auto-advances) → Browser Automation (Step 2 of 5 — polls `check_browser_automation_permission` every 3s, always skippable via `hasAdvanced` ref guard) → Chrome Extension (optional) → What to Expect. Blocks main UI until complete. |
 | `app/src/components/ErrorBoundary.tsx` | Class component. Catches render errors → Sentry.captureException → friendly message → restart button. |
 | `app/src/components/ChatPanel.tsx` | Recall UI. Reads `conversationHistory` from Zustand. Shows specific friendly error per failure type. Shows "still learning" message when no sessions exist. |
 | `app/src/hooks/useRecall.ts` | POST /recall. Sends `conversation_history`. Appends each turn to Zustand store. Max 4 turns enforced here. |
 | `app/src/hooks/useAnalytics.ts` | Wraps `usePostHog()`. All components call this — never import posthog-js directly. Strips forbidden property keys before capture. |
-| `app/src/hooks/useOnboarding.ts` | Checks accessibility permission on mount. Polls every 3s while onboarding screen is open. Persists completion state. |
-| `app/src/hooks/usePrivacySettings.ts` | Loads privacy settings in parallel on mount (capture status, excluded apps, excluded domains, file-watch settings). Exposes `setFileWatchEnabled`, `addWatchedFolder`, `removeWatchedFolder` alongside existing app/domain CRUD. `normalizeDomain()` strips URL to bare hostname before any API call. |
+| `app/src/hooks/useOnboarding.ts` | Checks accessibility + browser automation permission on mount. Polls every 3s while onboarding is open. `requestBrowserAutomation()` calls `trigger_browser_automation_prompt` then polls `check_browser_automation_permission` every 3s until granted or unmount. `shouldPollBrowserAutomation = useRef(false)` controls the loop without re-renders. Persists completion state. |
+| `app/src/hooks/usePrivacySettings.ts` | Loads privacy settings in parallel on mount (capture status, excluded apps, excluded domains, browser-capture settings, file-watch settings). Exposes `nativeBrowserEnabled` + `setNativeBrowserEnabled` (POSTs to `/privacy/browser-capture`), `setFileWatchEnabled`, `addWatchedFolder`, `removeWatchedFolder` alongside existing app/domain CRUD. `normalizeDomain()` strips URL to bare hostname before any API call. |
 | `app/src/store/orbitStore.ts` | Zustand global state. Key: `conversationHistory: ConversationMessage[]` — reset on new topic, preserved within session. |
 | `app/src-tauri/src/main.rs` | Entry point. Sets LSUIElement, system tray, spawns FastAPI subprocess, creates SQLite pool, starts clipboard + window capture as tokio tasks. Health-checks FastAPI on startup (10 retries, 1s each). |
 | `app/src-tauri/src/capture/clipboard.rs` | 500ms poll. Runs `detect_sensitive_content_type()` before writing. Stores `[REDACTED:type]` for matches. Deduplicates same content within 5 minutes. |
@@ -403,17 +409,17 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `app/src-tauri/src/capture/file_activity.rs` | FSEvents file activity monitor using `notify` + `notify-debouncer-full`. 2-second debounce. Reads `file_watch_settings` from SQLite on startup and every 30 s via `tokio::select!`; syncs the watcher using a `currently_watched: HashSet<String>` diff. Skips hidden files/dirs, blocked high-noise directories (node_modules, target, build, etc.), and transient file suffixes (.tmp, .swp, .lock, .log). Writes `file_activity` events with `file_path` and `metadata={"action":"created|modified|removed"}`. NEVER reads file contents. |
 | `app/src-tauri/src/capture/system_state.rs` | macOS system state monitor. Uses `notify_register_file_descriptor` (Darwin C API in libSystem — no new crates). Registers 4 Darwin notifications: `com.apple.screenIsLocked` → "lock", `com.apple.screenIsUnlocked` → "unlock", `com.apple.system.willsleep` → "sleep", `com.apple.system.didwake` → "wake". Each fd gets a dedicated blocking OS thread; events bridge to tokio via `mpsc::unbounded_channel`. Writes `type='system_state'` events with `raw_content=<state>` and `metadata={"state":"..."}`. No-op on non-macOS. |
 | `app/src-tauri/src/capture/app_lifecycle.rs` | App launch/quit monitor. Polls running process names every 10 s via `osascript` (`System Events`), diffs against the previous snapshot. Writes `type='app_lifecycle'` events with `app_name` and `metadata={"action":"launched"|"quit"}`. Initial snapshot taken before the first sleep so apps already running at startup are not emitted as launches. |
-| `app/src-tauri/src/capture/browser_url.rs` | Native browser URL monitor. Polls the active tab of the frontmost browser every 5 s via osascript. Supports Chrome, Safari, Arc, Brave Browser, Microsoft Edge. Applies pause-state + excluded-domains checks; skips internal URLs. Deduplicates on URL change. Sets `pub static BROWSER_AUTOMATION_DENIED: AtomicBool` on first `-1743` error (clears on success). Writes `type='url', source='native_browser'`. |
+| `app/src-tauri/src/capture/browser_url.rs` | Native browser URL monitor. Polls the active tab of the frontmost browser every 5 s via osascript. Supports Chrome, Safari, Arc, Brave Browser, Microsoft Edge (not Firefox). `BrowserUrlCaptureCache` reads `browser_capture_settings.native_enabled` every 30 s (fallback `true` if absent). Applies pause-state + excluded-domains checks; skips internal browser URLs; updates dedup cursor even for excluded domains. Sets `pub static BROWSER_AUTOMATION_DENIED: AtomicBool` on first error -1743 (clears on success). Writes `type='url', source='native_browser'`. |
 | `app/src-tauri/src/db.rs` | sqlx SQLite pool. **Single pool shared everywhere. Never open new connections.** |
-| `app/src-tauri/src/commands.rs` | All `#[tauri::command]` functions — thin wrappers only. Logic lives in modules. |
+| `app/src-tauri/src/lib.rs` | Tauri app setup + all `#[tauri::command]` functions via `generate_handler!`. Phase 2.7 additions: `check_browser_automation_permission` (probes each known browser via osascript), `trigger_browser_automation_prompt` (surfaces the macOS Automation dialog), `open_automation_system_settings` (deep-links to `Privacy_Automation` pane). `BROWSER_NAMES_FOR_AUTOMATION_PROBE` constant matches `KNOWN_BROWSER_APP_NAMES` in `browser_url.rs`. |
 | `app/src-tauri/Info.plist` | `LSUIElement = true`. Never remove. Orbit never appears in the dock. |
 | `app/src-tauri/tauri.conf.json` | Two windows: `main` (panel, skipTaskbar, transparent, decorations:false) and `overlay` (Phase 4: fullscreen, alwaysOnTop, focus:false, transparent). |
 | `backend/main.py` | FastAPI with `@asynccontextmanager` lifespan. Inits Sentry, starts `asyncio.create_task(start_session_generation_loop())`. No APScheduler. GET /health endpoint. |
-| `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + auto-sync triggers on startup. Events schema includes `page_text`, `link_target`, `metadata`, `file_path`, `is_user_active` (Phase 2.6). FTS5 indexes 4 columns: `raw_content, app_name, url, page_text`. Sessions schema includes `last_action`, `key_resources`, `topics`, `active_minutes`. `file_watch_settings` table (single row) seeded with enabled=true and default folders. `excluded_domains` seeded with `mail.google.com`, `accounts.google.com`. `fetch_system_state_events()` for break/duration recall queries. `search_events_fts()` accepts `start_ms`, `end_ms`, `exclude_personal`. |
-| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now` so first run is immediate. `generate_sessions_from_recent_events()`: fetch → `_split_events_at_system_boundaries()` (splits on lock/sleep, marks boundary events `session_id='system_boundary'`) → per batch: classify (Gemini) → summarise (Claude Haiku) → embed (Voyage) → mark processed. Event payload to Claude is type-aware; `file_activity` sends `file_path, action`. `active_minutes` computed from `is_user_active` window events. SQL SELECTs include `file_path, is_user_active`. `_ensure_sessions_schema_columns_exist()` adds `topics`, `active_minutes` columns to existing databases on startup. |
-| `backend/routes/recall.py` | FTS5-first sequential pipeline. (1) Classify intent → "work"/"personal"/"general". (2) Parse time reference via `time_parser`. (3) `_query_asks_about_time_or_breaks()` — if true, fetches `system_state` events from DB and adds BREAK/SYSTEM section to context. (4) FTS5 keyword search always runs (offline-safe). (5) Try Worker: Qdrant semantic search → time-window filter → re-rank → Claude SSE stream. Context block formats events by type: `file_activity` → `Worked on file: <name> (<action>) — <path>`; `system_state` → human-readable break label; `active_minutes` shown in session block. Session block also shows `Topics:`, `Active time:`. |
-| `backend/routes/capture.py` | POST /capture (extension only — Rust writes direct). Checks pause state, excluded app names, and excluded domains (all cached 30s). Domain extracted via `urlparse().netloc` before every browser event. `page_text` for `page_content` events and `raw_content` for `search_query` events are passed through `redact_sensitive_content()` before INSERT. GET /events for timeline. |
-| `backend/routes/privacy.py` | Excluded apps CRUD, pause/resume, capture status, full data wipe (SQLite + Qdrant). `GET/POST/DELETE /privacy/excluded-domains` — domain exclusion CRUD. `GET/POST /privacy/file-watching` — enable/disable file activity capture. `POST/DELETE /privacy/watched-folders` — add/remove watched folder paths (JSON body). |
+| `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + auto-sync triggers on startup. Events schema includes `page_text`, `link_target`, `metadata`, `file_path`, `is_user_active` (Phase 2.6). FTS5 indexes 4 columns: `raw_content, app_name, url, page_text`. `idx_events_url_timestamp` index on `events(url, timestamp)` — supports capture-time URL dedup, idempotent on every startup. Sessions schema includes `last_action`, `key_resources`, `topics`, `active_minutes`. `file_watch_settings` table (single row) seeded with enabled=true and default folders. `browser_capture_settings` table (single row, id=1) seeded with `native_enabled=1`. `excluded_domains` seeded with `mail.google.com`, `accounts.google.com`. `fetch_system_state_events()` for break/duration recall queries. `search_events_fts()` accepts `start_ms`, `end_ms`, `exclude_personal`. |
+| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now` so first run is immediate. `generate_sessions_from_recent_events()`: fetch → `_split_events_at_system_boundaries()` → per batch: `_dedup_events_by_url_for_prompt()` safety-net URL dedup (operates on a copy — all event IDs still get `session_id` marked) → classify (Gemini) → summarise (Claude Haiku) → embed (Voyage) → mark processed. Event payload to Claude is type-aware; `file_activity` sends `file_path, action`. `active_minutes` computed from `is_user_active` window events. SQL SELECTs include `file_path, is_user_active`. `_ensure_sessions_schema_columns_exist()` adds `topics`, `active_minutes` columns to existing databases on startup. |
+| `backend/routes/recall.py` | FTS5-first sequential pipeline. (1) Classify intent → "work"/"personal"/"general". (2) Parse time reference via `time_parser`. (3) `_query_asks_about_time_or_breaks()` — if true, fetches `system_state` events from DB and adds BREAK/SYSTEM section to context. (4) FTS5 keyword search always runs (offline-safe). (5) `_dedup_events_by_url()` safety-net: deduplicates FTS5 results by URL (page_text-present wins; else first BM25-ranked occurrence). (6) Try Worker: Qdrant semantic search → time-window filter → re-rank → Claude SSE stream. Context block formats events by type: `file_activity` → `Worked on file: <name> (<action>) — <path>`; `system_state` → human-readable break label; `active_minutes` shown in session block. Session block also shows `Topics:`, `Active time:`. |
+| `backend/routes/capture.py` | POST /capture (extension only — Rust writes direct). Checks pause state, excluded app names, and excluded domains (all cached 30s). Domain extracted via `urlparse().netloc` before every browser event. URL dedup: `_find_recent_url_event()` queries `events(url, timestamp)` with `_URL_DEDUP_WINDOW_MS = 10_000`; extension beats native_browser (drop native); if native in DB and extension arrives, DELETE native INSERT extension. `page_text` for `page_content` events and `raw_content` for `search_query` events are passed through `redact_sensitive_content()` before INSERT. GET /events for timeline. |
+| `backend/routes/privacy.py` | Excluded apps CRUD, pause/resume, capture status, full data wipe (SQLite + Qdrant). `GET/POST/DELETE /privacy/excluded-domains` — domain exclusion CRUD. `GET/POST /privacy/browser-capture` — native browser URL capture toggle; returns `{native_enabled, browsers: [...]}`. `_SUPPORTED_NATIVE_BROWSERS` lists the 5 osascript-compatible browser names. `GET/POST /privacy/file-watching` — enable/disable file activity capture. `POST/DELETE /privacy/watched-folders` — add/remove watched folder paths (JSON body). |
 | `backend/routes/feedback.py` | POST /feedback — stores rating + comment in SQLite. |
 | `backend/services/claude_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/chat`. Handles SSE streaming. Uses Claude Haiku for session gen, Claude Sonnet for recall. Accepts `conversation_history` param. |
 | `backend/services/gemini_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/classify`. Builds Gemini REST API body. Extracts text from `candidates[0].content.parts[0].text`. Sends `id, type, app_name, url, raw_content` — raw_content is already redacted at capture, so it's safe and needed for accurate classification. Falls back to `category='work'` if JSON parse fails. |
@@ -477,6 +483,16 @@ events(
 
 Retained 90 days. Same clipboard content within 5 min is deduplicated.
 Force-processed after 2h if still null session_id.
+
+```sql
+browser_capture_settings(
+  id             INTEGER PRIMARY KEY DEFAULT 1,  -- always 1
+  native_enabled INTEGER NOT NULL DEFAULT 1       -- 0 = stop all osascript browser polling
+)
+```
+
+`browser_url.rs` reads `native_enabled` every 30 s; fallback to `true` if row absent.
+Managed via `GET/POST /privacy/browser-capture`. Shown in PrivacyPanel "Browser Tracking" section.
 
 ### Tier 2 — Sessions
 
@@ -819,6 +835,7 @@ overlay.set_always_on_top(true).unwrap();        // above everything
 | Permission | Why | When |
 |---|---|---|
 | Accessibility | Active window tracking | Phase 0 — required at first launch |
+| Automation | Reading active browser tab URL and title via osascript | Phase 2.7 — requested during onboarding Step 2 of 5; always skippable. One macOS prompt per supported browser (Chrome, Safari, Arc, Brave, Edge). |
 | Screen Recording | Screenshots | Phase 3 |
 | Microphone | Voice input | Phase 4 |
 
