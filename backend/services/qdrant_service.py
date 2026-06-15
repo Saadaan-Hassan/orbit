@@ -9,6 +9,7 @@ still held by a stale FastAPI process from a previous Tauri hot-reload cycle.
 
 import asyncio
 import logging
+import threading
 from pathlib import Path
 
 from qdrant_client import QdrantClient
@@ -35,23 +36,26 @@ MINIMUM_SIMILARITY_SCORE = 0.3
 
 _qdrant_storage_path = str(Path.home() / ".orbit" / "qdrant_storage")
 
-# None until first use. Initialised by _get_client() on the first call to any
-# public function. This means a module import never acquires the Qdrant file
-# lock — only the first actual operation does, by which point the stale
-# process from the previous run has already been killed by Rust.
+# None until first use. A threading.Lock guards creation so that concurrent
+# callers (e.g. from asyncio.to_thread workers) never create two clients.
 _qdrant_client: QdrantClient | None = None
+_qdrant_client_lock = threading.Lock()
 
 
 def _get_client() -> QdrantClient:
     """
     Returns the singleton QdrantClient, creating it on the first call.
 
-    Separated from module-level code so that importing this module never
-    acquires the Qdrant storage lock — only the first real operation does.
+    Thread-safe: the lock ensures exactly one client is ever created even
+    if multiple threads reach this function simultaneously before the client
+    is set. Importing this module never acquires the Qdrant file lock — only
+    the first real operation does.
     """
     global _qdrant_client
     if _qdrant_client is None:
-        _qdrant_client = QdrantClient(path=_qdrant_storage_path)
+        with _qdrant_client_lock:
+            if _qdrant_client is None:  # re-check inside the lock
+                _qdrant_client = QdrantClient(path=_qdrant_storage_path)
     return _qdrant_client
 
 
@@ -91,12 +95,40 @@ async def initialize_qdrant_collection() -> None:
     """
     Creates the orbit_sessions collection if it does not already exist.
     Safe to call on every startup — no-op when the collection is present.
-    """
-    client = _get_client()
 
-    existing_collection_names = await asyncio.to_thread(
-        lambda: [c.name for c in client.get_collections().collections]
-    )
+    Retries up to 5 times with a 1-second delay to handle the hot-reload
+    race where a previous uvicorn worker is still shutting down and holding
+    the Qdrant file lock when the new worker starts.
+    """
+    _MAX_STARTUP_RETRIES = 5
+    _RETRY_DELAY_SECONDS = 1.0
+
+    for attempt in range(1, _MAX_STARTUP_RETRIES + 1):
+        try:
+            client = _get_client()
+            existing_collection_names = await asyncio.to_thread(
+                lambda: [c.name for c in client.get_collections().collections]
+            )
+            break  # client opened successfully
+        except RuntimeError as exc:
+            if "already accessed" not in str(exc):
+                raise
+            if attempt == _MAX_STARTUP_RETRIES:
+                raise RuntimeError(
+                    f"Qdrant storage is still locked after {_MAX_STARTUP_RETRIES} "
+                    f"attempts. Stop any other Orbit backend processes and retry."
+                ) from exc
+            # Reset the module-level client so the next attempt creates a fresh one.
+            global _qdrant_client
+            _qdrant_client = None
+            logger.warning(
+                "Qdrant storage locked by another process (attempt %d/%d). "
+                "Retrying in %.0fs…",
+                attempt,
+                _MAX_STARTUP_RETRIES,
+                _RETRY_DELAY_SECONDS,
+            )
+            await asyncio.sleep(_RETRY_DELAY_SECONDS)
 
     if COLLECTION_NAME not in existing_collection_names:
         await asyncio.to_thread(
