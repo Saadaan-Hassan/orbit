@@ -16,7 +16,52 @@ _async_engine = create_async_engine(_database_url, echo=False)
 _async_session_factory = async_sessionmaker(_async_engine, expire_on_commit=False)
 
 
+async def _migrate_schema() -> None:
+    """
+    Idempotent schema migrations for existing databases.
+
+    Runs before the main CREATE block so that:
+    - Columns added to events via ALTER TABLE are present before any INSERT.
+    - The FTS5 virtual table is dropped and recreated when its column set
+      changes, because SQLite FTS5 does not support ALTER TABLE ADD COLUMN.
+      The table is content-backed (content='events'), so dropping it loses no
+      event data — only the search index, which is rebuilt automatically on the
+      next INSERT/UPDATE via the triggers recreated here.
+    """
+    async with _async_engine.begin() as connection:
+        # Add screen_text to events if this is an existing database.
+        try:
+            await connection.execute(
+                text("ALTER TABLE events ADD COLUMN screen_text TEXT")
+            )
+        except Exception:
+            pass  # Column already present — ALTER TABLE fails on duplicates.
+
+        # Rebuild FTS5 if screen_text is not yet in the index.
+        # PRAGMA table_info returns one row per column; we collect the names.
+        fts_info = await connection.execute(text("PRAGMA table_info(events_fts)"))
+        fts_columns = {row[1] for row in fts_info.fetchall()}
+        if "screen_text" not in fts_columns:
+            # Drop triggers first — they reference the FTS table structure.
+            await connection.execute(
+                text("DROP TRIGGER IF EXISTS events_fts_insert")
+            )
+            await connection.execute(
+                text("DROP TRIGGER IF EXISTS events_fts_update")
+            )
+            await connection.execute(
+                text("DROP TRIGGER IF EXISTS events_fts_delete")
+            )
+            await connection.execute(text("DROP TABLE IF EXISTS events_fts"))
+            # The CREATE VIRTUAL TABLE and trigger statements in create_all_tables()
+            # below will now recreate the FTS index with the full column set.
+
+
 async def create_all_tables() -> None:
+    # Apply any pending schema migrations before the main CREATE block so that
+    # existing databases are brought up to date before new tables are created.
+    await _migrate_schema()
+
     async with _async_engine.begin() as connection:
         await connection.execute(text("""
             CREATE TABLE IF NOT EXISTS events (
@@ -33,13 +78,15 @@ async def create_all_tables() -> None:
                 link_target    TEXT,
                 metadata       TEXT,
                 file_path      TEXT,
-                is_user_active INTEGER
+                is_user_active INTEGER,
+                screen_text    TEXT
             )
         """))
-        # FTS5 virtual table mirrors the key text columns. page_text is included
-        # so that extracted page body content is keyword-searchable alongside
-        # titles and URLs. content='events' avoids duplicating data; the porter
-        # tokenizer enables stemming so "debugging" matches "debug".
+        # FTS5 virtual table mirrors the key text columns. page_text and
+        # screen_text are included so browser article body and on-screen
+        # accessibility text are keyword-searchable alongside titles and URLs.
+        # content='events' avoids duplicating data; the porter tokenizer enables
+        # stemming so "debugging" matches "debug".
         await connection.execute(text("""
             CREATE VIRTUAL TABLE IF NOT EXISTS events_fts
             USING fts5(
@@ -47,6 +94,7 @@ async def create_all_tables() -> None:
                 app_name,
                 url,
                 page_text,
+                screen_text,
                 content='events',
                 content_rowid='rowid',
                 tokenize='porter unicode61'
@@ -58,8 +106,8 @@ async def create_all_tables() -> None:
         await connection.execute(text("""
             CREATE TRIGGER IF NOT EXISTS events_fts_insert
             AFTER INSERT ON events BEGIN
-                INSERT INTO events_fts(rowid, raw_content, app_name, url, page_text)
-                VALUES (new.rowid, new.raw_content, new.app_name, new.url, new.page_text);
+                INSERT INTO events_fts(rowid, raw_content, app_name, url, page_text, screen_text)
+                VALUES (new.rowid, new.raw_content, new.app_name, new.url, new.page_text, new.screen_text);
             END
         """))
         await connection.execute(text("""
@@ -69,7 +117,8 @@ async def create_all_tables() -> None:
                 SET raw_content = new.raw_content,
                     app_name    = new.app_name,
                     url         = new.url,
-                    page_text   = new.page_text
+                    page_text   = new.page_text,
+                    screen_text = new.screen_text
                 WHERE rowid = old.rowid;
             END
         """))
@@ -195,6 +244,21 @@ async def create_all_tables() -> None:
         # Ensure the single browser_capture_settings row exists.
         await connection.execute(text("""
             INSERT OR IGNORE INTO browser_capture_settings (id, native_enabled)
+            VALUES (1, 1)
+        """))
+
+        # Single-row table (id=1 always) that controls whether on-screen text
+        # is captured via the macOS Accessibility API (AXUIElement).
+        await connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS screen_content_settings (
+                id      INTEGER PRIMARY KEY DEFAULT 1,
+                enabled INTEGER NOT NULL DEFAULT 1
+            )
+        """))
+
+        # Ensure the single screen_content_settings row exists.
+        await connection.execute(text("""
+            INSERT OR IGNORE INTO screen_content_settings (id, enabled)
             VALUES (1, 1)
         """))
 

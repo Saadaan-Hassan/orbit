@@ -14,3 +14,4 @@ class CaptureEvent(BaseModel):
     metadata: dict | None = None
     file_path: str | None = None
     is_user_active: bool | None = None
+    screen_text: str | None = None

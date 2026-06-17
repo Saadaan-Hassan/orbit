@@ -204,8 +204,9 @@ async def capture_event(
 
     # page_text carries extracted article body — redact secrets before storing.
     # raw_content for search_query events is the typed search term, which could
-    # contain a pasted secret. Both fields are sourced from the browser and have
-    # not passed through the Rust clipboard redactor.
+    # contain a pasted secret. screen_text carries accessibility-captured on-screen
+    # text, also sourced outside the Rust redaction layer. All three fields are
+    # redacted inline before any DB write.
     page_text_to_store = event.page_text
     if event.type == "page_content" and page_text_to_store:
         page_text_to_store = redact_sensitive_content(page_text_to_store)
@@ -214,14 +215,20 @@ async def capture_event(
     if event.type == "search_query" and raw_content_to_store:
         raw_content_to_store = redact_sensitive_content(raw_content_to_store)
 
+    screen_text_to_store = event.screen_text
+    if event.type == "screen_content" and screen_text_to_store:
+        screen_text_to_store = redact_sensitive_content(screen_text_to_store)
+
     await db.execute(
         text("""
             INSERT INTO events
                 (id, timestamp, type, raw_content, app_name, url, source,
-                 page_text, link_target, metadata, file_path, is_user_active)
+                 page_text, link_target, metadata, file_path, is_user_active,
+                 screen_text)
             VALUES
                 (:id, :timestamp, :type, :raw_content, :app_name, :url, :source,
-                 :page_text, :link_target, :metadata, :file_path, :is_user_active)
+                 :page_text, :link_target, :metadata, :file_path, :is_user_active,
+                 :screen_text)
         """),
         {
             "id":             event.id,
@@ -237,6 +244,7 @@ async def capture_event(
             "file_path":      event.file_path,
             # Pydantic delivers bool | None; SQLite stores INTEGER 1/0/NULL.
             "is_user_active": int(event.is_user_active) if event.is_user_active is not None else None,
+            "screen_text":    screen_text_to_store,
         },
     )
     await db.commit()
