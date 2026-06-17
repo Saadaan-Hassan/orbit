@@ -68,6 +68,10 @@ class SetBrowserCaptureRequest(BaseModel):
     native_enabled: bool
 
 
+class SetScreenContentRequest(BaseModel):
+    enabled: bool
+
+
 # ---------------------------------------------------------------------------
 # Excluded apps
 # ---------------------------------------------------------------------------
@@ -201,6 +205,33 @@ async def set_browser_capture(request: SetBrowserCaptureRequest) -> dict:
             {"enabled": 1 if request.native_enabled else 0},
         )
     return {"native_enabled": request.native_enabled}
+
+
+# ---------------------------------------------------------------------------
+# On-screen content capture (AXUIElement — macOS Accessibility API)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/screen-content")
+async def get_screen_content() -> dict:
+    async with _async_engine.connect() as connection:
+        result = await connection.execute(
+            text("SELECT enabled FROM screen_content_settings WHERE id = 1")
+        )
+        row = result.fetchone()
+    return {"enabled": bool(row.enabled) if row else True}
+
+
+@router.post("/screen-content")
+async def set_screen_content(request: SetScreenContentRequest) -> dict:
+    async with _async_engine.begin() as connection:
+        await connection.execute(
+            text(
+                "UPDATE screen_content_settings SET enabled = :enabled WHERE id = 1"
+            ),
+            {"enabled": 1 if request.enabled else 0},
+        )
+    return {"enabled": request.enabled}
 
 
 # ---------------------------------------------------------------------------

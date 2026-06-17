@@ -26,6 +26,8 @@ export interface PrivacySettings {
   fileWatchEnabled: boolean;
   // Absolute folder paths being watched for file activity.
   watchedFolders: string[];
+  // Whether on-screen text capture via Accessibility API is enabled.
+  screenContentEnabled: boolean;
   // True while DELETE /privacy/all-data is in flight.
   isWiping: boolean;
   // True while the initial load is in flight.
@@ -39,6 +41,7 @@ export interface PrivacySettings {
   removeExcludedDomain: (domain: string) => Promise<void>;
   setNativeBrowserEnabled: (enabled: boolean) => Promise<void>;
   setFileWatchEnabled: (enabled: boolean) => Promise<void>;
+  setScreenContentEnabled: (enabled: boolean) => Promise<void>;
   addWatchedFolder: (folder: string) => Promise<void>;
   removeWatchedFolder: (folder: string) => Promise<void>;
   pauseCapture: (durationMinutes: number | null) => Promise<void>;
@@ -78,6 +81,7 @@ export function usePrivacySettings(): PrivacySettings {
   const [excludedDomains, setExcludedDomains] = useState<string[]>([]);
   const [nativeBrowserEnabled, setNativeBrowserEnabledState] = useState(true);
   const [fileWatchEnabled, setFileWatchEnabledState] = useState(true);
+  const [screenContentEnabled, setScreenContentEnabledState] = useState(true);
   const [watchedFolders, setWatchedFolders] = useState<string[]>([]);
   const [isWiping, setIsWiping] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -93,12 +97,14 @@ export function usePrivacySettings(): PrivacySettings {
           excludedDomainsResponse,
           browserCaptureResponse,
           fileWatchResponse,
+          screenContentResponse,
         ] = await Promise.all([
           fetch(`${BACKEND_BASE_URL}/privacy/capture-status`),
           fetch(`${BACKEND_BASE_URL}/privacy/excluded-apps`),
           fetch(`${BACKEND_BASE_URL}/privacy/excluded-domains`),
           fetch(`${BACKEND_BASE_URL}/privacy/browser-capture`),
           fetch(`${BACKEND_BASE_URL}/privacy/file-watching`),
+          fetch(`${BACKEND_BASE_URL}/privacy/screen-content`),
         ]);
 
         if (
@@ -106,7 +112,8 @@ export function usePrivacySettings(): PrivacySettings {
           !excludedAppsResponse.ok ||
           !excludedDomainsResponse.ok ||
           !browserCaptureResponse.ok ||
-          !fileWatchResponse.ok
+          !fileWatchResponse.ok ||
+          !screenContentResponse.ok
         ) {
           throw new Error("Failed to load privacy settings from backend.");
         }
@@ -120,6 +127,8 @@ export function usePrivacySettings(): PrivacySettings {
           await browserCaptureResponse.json();
         const fileWatchData: { enabled: boolean; watched_folders: string[] } =
           await fileWatchResponse.json();
+        const screenContentData: { enabled: boolean } =
+          await screenContentResponse.json();
 
         setIsCapturing(!statusData.is_paused);
         setPausedUntil(statusData.paused_until);
@@ -127,6 +136,7 @@ export function usePrivacySettings(): PrivacySettings {
         setExcludedDomains(excludedDomainsData.excluded_domains);
         setNativeBrowserEnabledState(browserCaptureData.native_enabled);
         setFileWatchEnabledState(fileWatchData.enabled);
+        setScreenContentEnabledState(screenContentData.enabled);
         setWatchedFolders(fileWatchData.watched_folders);
         setError(null);
       } catch {
@@ -242,6 +252,19 @@ export function usePrivacySettings(): PrivacySettings {
     []
   );
 
+  const setScreenContentEnabled = useCallback(
+    async (enabled: boolean): Promise<void> => {
+      const response = await fetch(`${BACKEND_BASE_URL}/privacy/screen-content`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!response.ok) throw new Error("Failed to update on-screen content setting.");
+      setScreenContentEnabledState(enabled);
+    },
+    []
+  );
+
   const addWatchedFolder = useCallback(
     async (folder: string): Promise<void> => {
       const response = await fetch(`${BACKEND_BASE_URL}/privacy/watched-folders`, {
@@ -325,6 +348,7 @@ export function usePrivacySettings(): PrivacySettings {
     excludedDomains,
     nativeBrowserEnabled,
     fileWatchEnabled,
+    screenContentEnabled,
     watchedFolders,
     isWiping,
     isLoading,
@@ -335,6 +359,7 @@ export function usePrivacySettings(): PrivacySettings {
     removeExcludedDomain,
     setNativeBrowserEnabled,
     setFileWatchEnabled,
+    setScreenContentEnabled,
     addWatchedFolder,
     removeWatchedFolder,
     pauseCapture,

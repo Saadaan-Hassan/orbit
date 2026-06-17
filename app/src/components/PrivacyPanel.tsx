@@ -66,6 +66,68 @@ function ConfirmDialog({
   );
 }
 
+// ─── Section 0 — On-Screen Content ───────────────────────────────────────────
+interface ScreenContentSectionProps {
+  enabled: boolean;
+  onToggle: (enabled: boolean) => Promise<void>;
+}
+
+function ScreenContentSection({ enabled, onToggle }: ScreenContentSectionProps) {
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function handleToggle(): Promise<void> {
+    setActionError(null);
+    try {
+      await onToggle(!enabled);
+    } catch {
+      setActionError("Could not update on-screen content setting.");
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <SectionHeading>On-Screen Content</SectionHeading>
+      <p className="text-xs text-zinc-400 dark:text-zinc-500 font-light leading-relaxed mb-1">
+        This lets Orbit understand what you're actually working on — the document
+        you're writing, the code you're editing, the conversation you're having —
+        not just which app is open. Orbit never reads password fields, and you can
+        exclude any app below.
+      </p>
+
+      <div className="flex items-center justify-between px-3.5 py-2.5 bg-zinc-50/20 dark:bg-zinc-900/10 rounded-2xl">
+        <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
+          Read on-screen text
+        </span>
+        <button
+          onClick={handleToggle}
+          aria-pressed={enabled}
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-500 ${
+            enabled ? "bg-zinc-900 dark:bg-white" : "bg-zinc-200 dark:bg-zinc-700"
+          }`}
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white dark:bg-zinc-950 shadow transition-transform ${
+              enabled ? "translate-x-4" : "translate-x-0.5"
+            }`}
+          />
+        </button>
+      </div>
+
+      <p className="text-[11px] text-zinc-400 dark:text-zinc-500 leading-relaxed px-1">
+        To block specific apps, add them to{" "}
+        <span className="font-semibold text-zinc-500 dark:text-zinc-400">
+          Excluded Apps
+        </span>{" "}
+        below.
+      </p>
+
+      {actionError && (
+        <p className="text-xs text-red-500 font-medium px-1 mt-1">{actionError}</p>
+      )}
+    </div>
+  );
+}
+
 // ─── Section 1 — Capture Status ──────────────────────────────────────────────
 interface CaptureStatusSectionProps {
   isCapturing: boolean;
@@ -666,6 +728,7 @@ export function PrivacyPanel() {
     excludedDomains,
     nativeBrowserEnabled,
     fileWatchEnabled,
+    screenContentEnabled,
     watchedFolders,
     isWiping,
     isLoading,
@@ -676,6 +739,7 @@ export function PrivacyPanel() {
     removeExcludedDomain,
     setNativeBrowserEnabled,
     setFileWatchEnabled,
+    setScreenContentEnabled,
     addWatchedFolder,
     removeWatchedFolder,
     pauseCapture,
@@ -699,6 +763,13 @@ export function PrivacyPanel() {
 
   return (
     <div className="flex flex-col gap-6 bg-transparent">
+      <ScreenContentSection
+        enabled={screenContentEnabled}
+        onToggle={setScreenContentEnabled}
+      />
+
+      <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
+
       <CaptureStatusSection
         isCapturing={isCapturing}
         pausedUntil={pausedUntil}
