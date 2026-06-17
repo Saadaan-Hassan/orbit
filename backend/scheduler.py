@@ -41,36 +41,64 @@ STALE_EVENT_FORCE_PROCESS_SECONDS = 2 * 60 * 60  # 2 hours
 # Minimum events in a project group to justify generating a session summary.
 MINIMUM_EVENTS_FOR_SESSION = 5
 
-SESSION_SUMMARY_SYSTEM_PROMPT = (
-    "You are summarizing a user's work session from their captured activity. "
-    "Be concise and specific. Output valid JSON only. No markdown, no preamble."
-)
+FUSION_SESSION_SYSTEM_PROMPT = """\
+You are Orbit's memory engine. You receive overlapping signals captured from the user's
+computer: window titles, browser URLs, article text, search queries, clipboard content,
+file edits, on-screen text read via Accessibility API, and idle state.
 
-SESSION_SUMMARY_USER_PROMPT_TEMPLATE = """\
-Here are the user's captured activities for the last 30-60 minutes:
+Your job is to TRIANGULATE — not enumerate. Find what the overlapping signals agree on
+and state WHAT the user was actually doing as specifically as possible.
+
+Signal priority (strongest → weakest):
+  file_activity  > screen_text  > page_text  > search_query  > url  > window title
+
+Rules:
+- If file edits and screen text agree, that is high-confidence. Say so in evidence.
+- Name specific files, URLs, article headlines, and search terms. Never say "browsed the
+  web", "worked on a project", or other vague phrases.
+- next_step must be a concrete action ("fix the null-check in auth.py line 47"), not
+  generic ("continue working").
+- blockers: note anything they hit repeatedly, error messages visible in screen_text,
+  or searches that escalated (same topic, different queries).
+- Output valid JSON only. No markdown fences, no preamble, no trailing text.\
+"""
+
+FUSION_SESSION_USER_PROMPT_TEMPLATE = """\
+Here are the captured signals for this work session in chronological order.
+Each entry is one observation from one capture channel.
+
 {events_json}
 
-Event types and their fields:
-- "window" / "clipboard" / "url": raw_content, app_name, url
-- "page_content": title (page headline), page_text (article body), author, site_name, url
-- "search_query": query (what they typed into the search box), search_engine
-- "link_click": link_text (visible anchor text), link_target (destination URL)
-- "file_activity": file_path (full path of the file), action (created/modified/removed)
-- "app_lifecycle": app_name, action (launched/quit)
+Field guide:
+  type         — capture channel: window | url | clipboard | page_content | search_query |
+                 link_click | file_activity | screen_content | app_lifecycle
+  time         — wall-clock time of capture (UTC)
+  app          — frontmost application at capture time
+  title        — window title, clipboard text, or page headline depending on type
+  url          — page address (browser events)
+  page_text    — article body the user read (truncated to 300 chars)
+  screen_text  — on-screen text read by Accessibility API (truncated to 400 chars)
+  file_path    — absolute path of the file edited/created/removed
+  action       — file_activity: created|modified|removed  /  app_lifecycle: launched|quit
+  search_query — what the user typed into a search box
+  link_target  — URL the user clicked through to
+  category     — Gemini classification: work | research | personal | system | communication
+  idle         — true when user had no keyboard/mouse input in the 60 s before capture
 
-File edits (file_activity events) are the strongest signal of what the user was building or changing — name specific files in your summary and weight them as primary evidence over window titles.
-Use page_text to understand what was read. Use query to understand what was being looked up.
-Write summaries like "read an article by Jane Doe about vector databases" — not "visited a website."
-
-Respond with this exact JSON structure:
+Return this exact JSON (all keys required; use null for absent values):
 {{
-  "project_name": "detected project name or null",
-  "goal": "one sentence: what the user was trying to accomplish",
-  "summary": "2-3 sentences describing what happened — name specific articles, searches, or resources",
-  "key_resources": ["important URLs or file paths"],
+  "project_name": "detected project name, or null",
+  "goal": "one sentence: what the user was trying to accomplish this session",
+  "activity": "specific description of WHAT they did — name files, articles, searches, and code",
+  "summary": "2–3 sentences synthesising the session, written like a colleague's handoff note",
+  "next_step": "the most likely concrete action to continue this work",
+  "blockers": "anything they seemed stuck on or returned to repeatedly, or null",
+  "evidence": "the signals (file edits, screen text, searches) that most strongly support your activity conclusion — be brief",
   "last_action": "the most recent meaningful thing the user did",
-  "topics": ["subjects the user engaged with, e.g. 'vector databases', 'React hooks', 'tax filing'"]
-}}"""
+  "key_resources": ["important URLs or file paths"],
+  "topics": ["subject areas the user engaged with, e.g. 'vector databases', 'React hooks'"]
+}}\
+"""
 
 # ---------------------------------------------------------------------------
 # Schema migration helper
@@ -129,24 +157,32 @@ async def _ensure_events_schema_columns_exist() -> None:
             )
             logger.info("Added is_user_active column to events table.")
 
+        if "screen_text" not in existing_column_names:
+            await connection.execute(
+                text("ALTER TABLE events ADD COLUMN screen_text TEXT")
+            )
+            logger.info("Added screen_text column to events table.")
+
 
 async def _ensure_sessions_schema_columns_exist() -> None:
-    """Adds topics column to sessions when absent (existing databases)."""
+    """Adds missing columns to sessions for existing databases."""
     async with _async_engine.begin() as connection:
         pragma_rows = await connection.execute(text("PRAGMA table_info(sessions)"))
         existing_column_names = {row[1] for row in pragma_rows.fetchall()}
 
-        if "topics" not in existing_column_names:
-            await connection.execute(
-                text("ALTER TABLE sessions ADD COLUMN topics TEXT")
-            )
-            logger.info("Added topics column to sessions table.")
-
-        if "active_minutes" not in existing_column_names:
-            await connection.execute(
-                text("ALTER TABLE sessions ADD COLUMN active_minutes INTEGER")
-            )
-            logger.info("Added active_minutes column to sessions table.")
+        for col, col_type in [
+            ("topics",        "TEXT"),
+            ("active_minutes","INTEGER"),
+            # Fusion columns — what the user was doing, where they're headed, what blocked them.
+            ("activity",      "TEXT"),
+            ("next_step",     "TEXT"),
+            ("blockers",      "TEXT"),
+        ]:
+            if col not in existing_column_names:
+                await connection.execute(
+                    text(f"ALTER TABLE sessions ADD COLUMN {col} {col_type}")
+                )
+                logger.info("Added %s column to sessions table.", col)
 
 
 # ---------------------------------------------------------------------------
@@ -201,19 +237,23 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     useful summaries; app names alone are not enough.
     """
     # ------------------------------------------------------------------
-    # Build Claude prompt — type-aware payload so Claude sees the richest
-    # available representation for each event type.
-    # raw_content is already safe at this point (redacted at capture).
-    # Deduplicate by URL before building the payload so that the same page
-    # is not described twice when both native_browser and the extension
-    # captured it. project_events is left unchanged for session marking.
+    # Build fused signal payload for Claude.
+    #
+    # Rather than separate type-specific branches, every event contributes
+    # all of its informative fields in one unified object. Claude can then
+    # triangulate across overlapping channels (e.g. screen_text + file_path
+    # + window title all pointing at the same task) rather than reading a
+    # flat list of disconnected facts.
+    #
+    # raw_content is already safe (redacted at Rust capture time).
+    # Deduplicate by URL so the same page isn't described twice when both
+    # native_browser and the extension captured it. project_events is
+    # untouched — session marking still uses the full original list.
     # ------------------------------------------------------------------
     events_payload_for_prompt = []
     for event in _dedup_events_by_url_for_prompt(project_events):
         event_type = event.get("type", "")
 
-        # Parse the metadata JSON blob once per event — it carries author,
-        # site_name, search_engine etc. depending on the event type.
         metadata_raw = event.get("metadata")
         metadata: dict = {}
         if metadata_raw:
@@ -226,49 +266,84 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
             except Exception:
                 pass
 
-        shared_fields = {
-            "id":       event.get("id"),
-            "type":     event_type,
-            "app_name": event.get("app_name") or "",
-            "url":      event.get("url") or "",
-            "category": event.get("category") or "",
+        ts_ms = event.get("timestamp", 0)
+        time_str = (
+            datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%H:%M:%S")
+            if ts_ms else ""
+        )
+
+        # Core fields present in every fused event.
+        fused: dict = {
+            "type": event_type,
+            "time": time_str,
         }
 
-        if event_type == "page_content":
-            page_text = (event.get("page_text") or "").strip()
-            events_payload_for_prompt.append({
-                **shared_fields,
-                "title":     event.get("raw_content") or "",
-                "page_text": page_text[:500],
-                "author":    metadata.get("author"),
-                "site_name": metadata.get("site_name"),
-            })
-        elif event_type == "search_query":
-            events_payload_for_prompt.append({
-                **shared_fields,
-                "query":         event.get("raw_content") or "",
-                "search_engine": metadata.get("search_engine"),
-            })
-        elif event_type == "link_click":
-            events_payload_for_prompt.append({
-                **shared_fields,
-                "link_text":   event.get("raw_content") or "",
-                "link_target": event.get("link_target") or "",
-            })
-        elif event_type == "file_activity":
-            events_payload_for_prompt.append({
-                **shared_fields,
-                "file_path": event.get("file_path") or event.get("raw_content") or "",
-                "action":    metadata.get("action", "modified"),
-            })
-        else:
-            # window, clipboard, url, app_lifecycle
-            events_payload_for_prompt.append({
-                **shared_fields,
-                "raw_content": event.get("raw_content") or "",
-            })
+        app = (event.get("app_name") or "").strip()
+        if app:
+            fused["app"] = app
 
-    user_prompt = SESSION_SUMMARY_USER_PROMPT_TEMPLATE.format(
+        category = (event.get("category") or "").strip()
+        if category:
+            fused["category"] = category
+
+        # Idle state — only window and screen_content events carry this.
+        is_active = event.get("is_user_active")
+        if is_active is not None:
+            fused["idle"] = (is_active == 0)
+
+        # Title / raw content (window title, clipboard text, page headline).
+        # search_query events use a dedicated key instead to avoid ambiguity.
+        raw = (event.get("raw_content") or "").strip()
+
+        if event_type == "search_query":
+            if raw:
+                fused["search_query"] = raw
+            se = metadata.get("search_engine")
+            if se:
+                fused["search_engine"] = se
+        elif raw:
+            fused["title"] = raw
+
+        url = (event.get("url") or "").strip()
+        if url:
+            fused["url"] = url
+
+        # Article body — strongest signal for "what they read".
+        page_text = (event.get("page_text") or "").strip()
+        if page_text:
+            fused["page_text"] = page_text[:300]
+
+        # On-screen text — strongest signal for "what they were working on".
+        screen_text = (event.get("screen_text") or "").strip()
+        if screen_text:
+            fused["screen_text"] = screen_text[:400]
+
+        # File path — strongest signal for code / document edits.
+        file_path = (event.get("file_path") or "").strip()
+        if file_path:
+            fused["file_path"] = file_path
+
+        # Link the user clicked through to.
+        link_target = (event.get("link_target") or "").strip()
+        if link_target:
+            fused["link_target"] = link_target
+
+        # Metadata sub-fields.
+        action = metadata.get("action")
+        if action:
+            fused["action"] = action
+
+        author = metadata.get("author")
+        if author:
+            fused["author"] = author
+
+        site_name = metadata.get("site_name")
+        if site_name:
+            fused["site_name"] = site_name
+
+        events_payload_for_prompt.append(fused)
+
+    user_prompt = FUSION_SESSION_USER_PROMPT_TEMPLATE.format(
         events_json=json.dumps(events_payload_for_prompt, ensure_ascii=False, indent=2)
     )
 
@@ -276,7 +351,7 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
 
     try:
         raw_claude_response = await generate_session_summary(
-            system_prompt=SESSION_SUMMARY_SYSTEM_PROMPT,
+            system_prompt=FUSION_SESSION_SYSTEM_PROMPT,
             user_prompt=user_prompt,
         )
     except Exception as claude_error:
@@ -314,6 +389,9 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     project_name  = session_data.get("project_name")
     goal          = session_data.get("goal")
     ai_summary    = session_data.get("summary", "")
+    activity      = session_data.get("activity")      # what they were specifically doing
+    next_step     = session_data.get("next_step")     # concrete continuation action
+    blockers      = session_data.get("blockers")      # what they seemed stuck on, or null
     last_action   = session_data.get("last_action")
     key_resources = json.dumps(session_data.get("key_resources", []))
     topics        = json.dumps(session_data.get("topics", []))
@@ -334,9 +412,11 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
                 """
                 INSERT INTO sessions
                     (id, start_time, end_time, project_name, goal, ai_summary,
+                     activity, next_step, blockers,
                      last_action, key_resources, topics, active_minutes)
                 VALUES
                     (:id, :start_time, :end_time, :project_name, :goal, :ai_summary,
+                     :activity, :next_step, :blockers,
                      :last_action, :key_resources, :topics, :active_minutes)
                 """
             ),
@@ -347,6 +427,9 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
                 "project_name":   project_name,
                 "goal":           goal,
                 "ai_summary":     ai_summary,
+                "activity":       activity,
+                "next_step":      next_step,
+                "blockers":       blockers,
                 "last_action":    last_action,
                 "key_resources":  key_resources,
                 "topics":         topics,
@@ -368,11 +451,14 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
         filter(None, [
             project_name,
             goal,
+            # activity and next_step are the sharpest "what" signals — include
+            # them in the vector so recall queries like "what was I working on in
+            # auth.py" match on the specific activity description.
+            activity,
+            next_step,
             ai_summary,
             session_data.get("last_action"),
             " ".join(session_data.get("key_resources", [])),
-            # Topics give the vector the subject vocabulary the user engaged with —
-            # critical for "what was I researching about X" queries.
             " ".join(topics_list),
         ])
     )
@@ -381,6 +467,9 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
         "session_id":     new_session_id,
         "project_name":   project_name,
         "goal":           goal,
+        "activity":       activity,
+        "next_step":      next_step,
+        "blockers":       blockers,
         "ai_summary":     ai_summary,
         "last_action":    session_data.get("last_action"),
         "key_resources":  session_data.get("key_resources", []),
@@ -525,7 +614,8 @@ async def generate_sessions_from_recent_events() -> None:
             text(
                 """
                 SELECT id, timestamp, type, raw_content, app_name, url, source,
-                       page_text, link_target, metadata, file_path, is_user_active
+                       page_text, screen_text, link_target, metadata, file_path,
+                       is_user_active, category
                 FROM   events
                 WHERE  timestamp >= :cutoff
                 AND    (session_id IS NULL OR session_id = '')
@@ -541,7 +631,8 @@ async def generate_sessions_from_recent_events() -> None:
             text(
                 """
                 SELECT id, timestamp, type, raw_content, app_name, url, source,
-                       page_text, link_target, metadata, file_path, is_user_active
+                       page_text, screen_text, link_target, metadata, file_path,
+                       is_user_active, category
                 FROM   events
                 WHERE  timestamp < :stale_cutoff
                 AND    (session_id IS NULL OR session_id = '')
