@@ -24,16 +24,15 @@ logger = logging.getLogger(__name__)
 
 # Two separate models — chosen by task, not by default.
 #
-# RECALL_MODEL  — user-facing: streams a structured answer from session
-#   context. Sonnet 4.6 is near-identical to Opus in RAG/synthesis quality
-#   and costs 6× less ($3/$15 vs $5/$25 per 1M tokens).
+# RECALL_MODEL  — user-facing recall and signal fusion. Sonnet 4.6 is used
+#   for both: recall synthesis (streaming) and the background fusion step,
+#   which is reasoning-heavy (detective triangulation across many signals)
+#   and runs only every 30 min, so the cost is fine.
 #
-# SUMMARY_MODEL — background task, runs every 30 min, never seen by the
-#   user directly. Haiku 4.5 is purpose-built for fast structured extraction
-#   and costs 5× less than Sonnet ($1/$5 per 1M tokens). Session summarisation
-#   is straightforward JSON extraction from a list of app names/titles —
-#   it does not need reasoning-heavy models.
-RECALL_MODEL = "claude-sonnet-4-6"
+# SUMMARY_MODEL — reserved for lightweight extraction tasks that genuinely
+#   don't need reasoning (e.g. future classification micro-tasks). Currently
+#   unused in the hot path but kept as a named constant for future callers.
+RECALL_MODEL  = "claude-sonnet-4-6"
 SUMMARY_MODEL = "claude-haiku-4-5-20251001"
 
 # The Worker adds its own upstream timeout; we give a generous client-side
@@ -129,6 +128,7 @@ async def stream_recall_response(
 async def generate_session_summary(
     system_prompt: str,
     user_prompt: str,
+    model: str = SUMMARY_MODEL,
 ) -> str:
     """
     Sends a non-streaming chat request to Claude via the Cloudflare Worker
@@ -137,6 +137,9 @@ async def generate_session_summary(
     Args:
         system_prompt: Instructions that shape Claude's output format/style.
         user_prompt:   The actual content Claude should reason about.
+        model:         Which Claude model to use. Defaults to SUMMARY_MODEL
+                       (Haiku) for simple extraction; pass RECALL_MODEL (Sonnet)
+                       for reasoning-heavy tasks like signal fusion.
 
     Returns:
         Raw text string from Claude's first content block.
@@ -146,7 +149,7 @@ async def generate_session_summary(
             status that is not recoverable (caller handles retries if needed).
     """
     request_payload = {
-        "model": SUMMARY_MODEL,
+        "model": model,
         "max_tokens": 1024,
         "system": system_prompt,
         "messages": [

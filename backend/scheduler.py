@@ -18,7 +18,7 @@ from sqlalchemy import text
 
 from database import _async_engine
 from services.analytics_service import capture_analytics_event
-from services.claude_service import generate_session_summary
+from services.claude_service import RECALL_MODEL, generate_session_summary
 from services.gemini_service import classify_events_batch
 from services.qdrant_service import add_session_embedding, initialize_qdrant_collection
 
@@ -42,61 +42,60 @@ STALE_EVENT_FORCE_PROCESS_SECONDS = 2 * 60 * 60  # 2 hours
 MINIMUM_EVENTS_FOR_SESSION = 5
 
 FUSION_SESSION_SYSTEM_PROMPT = """\
-You are Orbit's memory engine. You receive overlapping signals captured from the user's
-computer: window titles, browser URLs, article text, search queries, clipboard content,
-file edits, on-screen text read via Accessibility API, and idle state.
+You reconstruct what a person was doing on their computer during a short work
+session, using multiple overlapping signals captured from their machine.
 
-Your job is to TRIANGULATE — not enumerate. Find what the overlapping signals agree on
-and state WHAT the user was actually doing as specifically as possible.
+You are like a detective, not a camera. No single signal tells you the whole
+story. Each is a partial clue:
+- active app + window title = which app and document/file
+- on-screen text (screen_content) = what was actually visible/being worked on
+- file activity = which files were created or edited
+- clipboard = what they copied (often an error, a snippet, a value)
+- browser URLs + page content = what they were reading or researching
+- search queries = what they were trying to find out
+- idle/active = whether they were truly working or the app was just open
+- system lock/sleep = when they stepped away
 
-Signal priority (strongest → weakest):
-  file_activity  > screen_text  > page_text  > search_query  > url  > window title
+Your job: TRIANGULATE these into a specific, confident description of what the
+person was DOING — not a list of apps. Cross-reference signals. The clipboard
+snippet often reveals the purpose of the file edit. The open browser tab reveals
+what the code change was for. The on-screen text reveals the actual task.
 
 Rules:
-- If file edits and screen text agree, that is high-confidence. Say so in evidence.
-- Name specific files, URLs, article headlines, and search terms. Never say "browsed the
-  web", "worked on a project", or other vague phrases.
-- next_step must be a concrete action ("fix the null-check in auth.py line 47"), not
-  generic ("continue working").
-- blockers: note anything they hit repeatedly, error messages visible in screen_text,
-  or searches that escalated (same topic, different queries).
-- Output valid JSON only. No markdown fences, no preamble, no trailing text.\
+- Be specific and concrete. Name the real file, the real topic, the real ticket,
+  the real document, the real conversation subject — pulled from the signals.
+- Infer the activity from overlapping evidence, but DO NOT invent details that
+  no signal supports. If signals conflict or are thin, say what you can support
+  and mark uncertainty.
+- Distinguish primary activity from incidental noise (a quick Slack check during
+  deep coding is not the session's purpose).
+- Focus on CONTINUATION: where they were in the work, what the natural next step
+  is, and anything they appeared stuck on. This is the most valuable output.
+- Ignore anything that looks like a password, secret, or [REDACTED:...] value.
+- Use plain language. No technical jargon about how you were given this data.
+
+Return ONLY valid JSON. No markdown, no preamble, no explanation outside the JSON.\
 """
 
 FUSION_SESSION_USER_PROMPT_TEMPLATE = """\
-Here are the captured signals for this work session in chronological order.
-Each entry is one observation from one capture channel.
+Here are the captured signals from one work session, in chronological order.
+Each line is one signal. Fields may be empty when a signal type doesn't apply.
 
-{events_json}
+{fused_signals}
 
-Field guide:
-  type         — capture channel: window | url | clipboard | page_content | search_query |
-                 link_click | file_activity | screen_content | app_lifecycle
-  time         — wall-clock time of capture (UTC)
-  app          — frontmost application at capture time
-  title        — window title, clipboard text, or page headline depending on type
-  url          — page address (browser events)
-  page_text    — article body the user read (truncated to 300 chars)
-  screen_text  — on-screen text read by Accessibility API (truncated to 400 chars)
-  file_path    — absolute path of the file edited/created/removed
-  action       — file_activity: created|modified|removed  /  app_lifecycle: launched|quit
-  search_query — what the user typed into a search box
-  link_target  — URL the user clicked through to
-  category     — Gemini classification: work | research | personal | system | communication
-  idle         — true when user had no keyboard/mouse input in the 60 s before capture
+Reconstruct what this person was doing and return EXACTLY this JSON structure:
 
-Return this exact JSON (all keys required; use null for absent values):
 {{
-  "project_name": "detected project name, or null",
-  "goal": "one sentence: what the user was trying to accomplish this session",
-  "activity": "specific description of WHAT they did — name files, articles, searches, and code",
-  "summary": "2–3 sentences synthesising the session, written like a colleague's handoff note",
-  "next_step": "the most likely concrete action to continue this work",
-  "blockers": "anything they seemed stuck on or returned to repeatedly, or null",
-  "evidence": "the signals (file edits, screen text, searches) that most strongly support your activity conclusion — be brief",
-  "last_action": "the most recent meaningful thing the user did",
-  "key_resources": ["important URLs or file paths"],
-  "topics": ["subject areas the user engaged with, e.g. 'vector databases', 'React hooks'"]
+  "project_name": "the project/context name, or null if unclear",
+  "activity": "a specific 1-2 sentence description of WHAT they were actually doing, inferred by combining the signals. Name real files/topics/tickets/documents. Not 'used VS Code' — instead 'implementing Stripe webhook verification in billing.service.ts'.",
+  "evidence": "one short sentence: which signals support this conclusion (e.g. 'file edits to billing.ts + clipboard showing constructEvent + open Stripe webhooks docs')",
+  "goal": "one sentence: what they appeared to be trying to accomplish",
+  "summary": "2-3 sentences describing how the session unfolded",
+  "last_action": "the most recent meaningful thing they did before the session ended — be specific, this is what helps them remember where they stopped",
+  "next_step": "the most likely next action to continue this work, inferred from where they left off. If genuinely unclear, null.",
+  "blockers": "anything they appeared stuck on or an unresolved problem, or null",
+  "key_resources": ["specific files, URLs, docs, or tickets that mattered this session"],
+  "topics": ["the actual subjects/topics engaged with"]
 }}\
 """
 
@@ -221,6 +220,86 @@ def _dedup_events_by_url_for_prompt(events: list[dict]) -> list[dict]:
     return result
 
 
+def _build_fused_signals(events: list[dict]) -> str:
+    """
+    Serialises a list of events into compact, signal-labelled text lines.
+
+    Each line starts with a local wall-clock time and a signal-type label so
+    Claude can scan the stream and spot overlapping evidence at a glance —
+    e.g. "FILE modified billing.ts" followed immediately by "CLIPBOARD:
+    constructEvent" followed by "BROWSER: stripe.com/docs/webhooks" tells the
+    detective story far more clearly than three separate JSON objects would.
+
+    Format matches the canonical example in the spec:
+      [14:30] APP focus: VS Code — window: "billing.service.ts — myapp"
+      [14:31] FILE modified: /Users/sa/myapp/src/billing.service.ts
+      [14:31] CLIPBOARD: "stripe.webhooks.constructEvent"
+    """
+    lines: list[str] = []
+    for event in events:
+        ts_ms = event.get("timestamp", 0)
+        time_label = (
+            datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+            .astimezone()
+            .strftime("%H:%M")
+            if ts_ms else "??:??"
+        )
+        event_type = event.get("type", "")
+        app = event.get("app_name") or ""
+
+        metadata_raw = event.get("metadata")
+        metadata: dict = {}
+        if metadata_raw:
+            try:
+                metadata = (
+                    json.loads(metadata_raw)
+                    if isinstance(metadata_raw, str)
+                    else metadata_raw
+                )
+            except Exception:
+                pass
+
+        if event_type == "window":
+            raw = event.get("raw_content") or ""
+            lines.append(f'[{time_label}] APP focus: {app} — window: "{raw}"')
+        elif event_type == "screen_content":
+            screen_text = (event.get("screen_text") or "")[:400]
+            lines.append(f'[{time_label}] SCREEN text: "{screen_text}"')
+        elif event_type == "file_activity":
+            action = metadata.get("action", "")
+            file_path = event.get("file_path") or ""
+            lines.append(f'[{time_label}] FILE {action}: {file_path}')
+        elif event_type == "clipboard":
+            raw = (event.get("raw_content") or "")[:200]
+            lines.append(f'[{time_label}] CLIPBOARD: "{raw}"')
+        elif event_type == "url":
+            url = event.get("url") or ""
+            raw = event.get("raw_content") or ""
+            lines.append(f'[{time_label}] BROWSER: {url} — "{raw}"')
+        elif event_type == "page_content":
+            page_text = (event.get("page_text") or "")[:300]
+            lines.append(f'[{time_label}] PAGE content: "{page_text}"')
+        elif event_type == "search_query":
+            raw = event.get("raw_content") or ""
+            lines.append(f'[{time_label}] SEARCHED: "{raw}"')
+        elif event_type == "link_click":
+            raw = event.get("raw_content") or ""
+            link_target = event.get("link_target") or ""
+            lines.append(f'[{time_label}] CLICKED: "{raw}" -> {link_target}')
+        elif event_type == "app_lifecycle":
+            action = metadata.get("action", "")
+            lines.append(f'[{time_label}] APP {action}: {app}')
+        elif event_type == "system_state":
+            state = metadata.get("state", "")
+            lines.append(f'[{time_label}] SYSTEM: {state}')
+
+        # Append idle flag inline so Claude sees the pause in context.
+        if event.get("is_user_active") == 0:
+            lines.append(f'[{time_label}] (user idle)')
+
+    return "\n".join(lines)
+
+
 async def _generate_session_for_events(project_events: list[dict]) -> None:
     """
     Summarises one project's classified events with Claude, persists the
@@ -237,114 +316,24 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     useful summaries; app names alone are not enough.
     """
     # ------------------------------------------------------------------
-    # Build fused signal payload for Claude.
+    # Build fused signal block for Claude.
     #
-    # Rather than separate type-specific branches, every event contributes
-    # all of its informative fields in one unified object. Claude can then
-    # triangulate across overlapping channels (e.g. screen_text + file_path
-    # + window title all pointing at the same task) rather than reading a
-    # flat list of disconnected facts.
+    # Each event becomes one labelled text line so Claude can scan the
+    # chronological stream and spot overlapping evidence — e.g. FILE + CLIPBOARD
+    # + BROWSER on the same timestamp triangulates far better than separate
+    # JSON objects would.
     #
-    # raw_content is already safe (redacted at Rust capture time).
     # Deduplicate by URL so the same page isn't described twice when both
     # native_browser and the extension captured it. project_events is
     # untouched — session marking still uses the full original list.
+    # raw_content is already safe (redacted at Rust capture time).
     # ------------------------------------------------------------------
-    events_payload_for_prompt = []
-    for event in _dedup_events_by_url_for_prompt(project_events):
-        event_type = event.get("type", "")
-
-        metadata_raw = event.get("metadata")
-        metadata: dict = {}
-        if metadata_raw:
-            try:
-                metadata = (
-                    json.loads(metadata_raw)
-                    if isinstance(metadata_raw, str)
-                    else metadata_raw
-                )
-            except Exception:
-                pass
-
-        ts_ms = event.get("timestamp", 0)
-        time_str = (
-            datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%H:%M:%S")
-            if ts_ms else ""
-        )
-
-        # Core fields present in every fused event.
-        fused: dict = {
-            "type": event_type,
-            "time": time_str,
-        }
-
-        app = (event.get("app_name") or "").strip()
-        if app:
-            fused["app"] = app
-
-        category = (event.get("category") or "").strip()
-        if category:
-            fused["category"] = category
-
-        # Idle state — only window and screen_content events carry this.
-        is_active = event.get("is_user_active")
-        if is_active is not None:
-            fused["idle"] = (is_active == 0)
-
-        # Title / raw content (window title, clipboard text, page headline).
-        # search_query events use a dedicated key instead to avoid ambiguity.
-        raw = (event.get("raw_content") or "").strip()
-
-        if event_type == "search_query":
-            if raw:
-                fused["search_query"] = raw
-            se = metadata.get("search_engine")
-            if se:
-                fused["search_engine"] = se
-        elif raw:
-            fused["title"] = raw
-
-        url = (event.get("url") or "").strip()
-        if url:
-            fused["url"] = url
-
-        # Article body — strongest signal for "what they read".
-        page_text = (event.get("page_text") or "").strip()
-        if page_text:
-            fused["page_text"] = page_text[:300]
-
-        # On-screen text — strongest signal for "what they were working on".
-        screen_text = (event.get("screen_text") or "").strip()
-        if screen_text:
-            fused["screen_text"] = screen_text[:400]
-
-        # File path — strongest signal for code / document edits.
-        file_path = (event.get("file_path") or "").strip()
-        if file_path:
-            fused["file_path"] = file_path
-
-        # Link the user clicked through to.
-        link_target = (event.get("link_target") or "").strip()
-        if link_target:
-            fused["link_target"] = link_target
-
-        # Metadata sub-fields.
-        action = metadata.get("action")
-        if action:
-            fused["action"] = action
-
-        author = metadata.get("author")
-        if author:
-            fused["author"] = author
-
-        site_name = metadata.get("site_name")
-        if site_name:
-            fused["site_name"] = site_name
-
-        events_payload_for_prompt.append(fused)
+    fused_signal_lines = _build_fused_signals(
+        _dedup_events_by_url_for_prompt(project_events)
+    )
 
     user_prompt = FUSION_SESSION_USER_PROMPT_TEMPLATE.format(
-        events_json=json.dumps(events_payload_for_prompt, ensure_ascii=False, indent=2)
+        fused_signals=fused_signal_lines
     )
 
     logger.info("Session generator: requesting Claude summary for %d event(s).", len(project_events))
@@ -353,6 +342,7 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
         raw_claude_response = await generate_session_summary(
             system_prompt=FUSION_SESSION_SYSTEM_PROMPT,
             user_prompt=user_prompt,
+            model=RECALL_MODEL,  # Sonnet — fusion is reasoning-heavy, runs only every 30 min
         )
     except Exception as claude_error:
         logger.error(
