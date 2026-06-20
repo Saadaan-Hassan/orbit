@@ -428,7 +428,9 @@ async def search_events_fts(
                        e.source,
                        e.page_text,
                        e.link_target,
-                       e.metadata
+                       e.metadata,
+                       e.file_path,
+                       e.screen_text
                 FROM   events e
                 JOIN   events_fts fts ON e.rowid = fts.rowid
                 WHERE  events_fts MATCH :query

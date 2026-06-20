@@ -344,7 +344,15 @@ def _build_context_block(
                 except Exception:
                     pass
 
-            if event_type == "page_content":
+            if event_type == "screen_content":
+                screen_text = (event.get("screen_text") or "").strip()
+                snippet_source = screen_text or raw_content
+                snippet = snippet_source[:200]
+                ellipsis = "…" if len(snippet_source) > 200 else ""
+                context_lines.append(
+                    f"  [{readable_timestamp}] In {app_name}: \"{snippet}{ellipsis}\""
+                )
+            elif event_type == "page_content":
                 author    = metadata.get("author") or ""
                 site_name = metadata.get("site_name") or ""
                 author_part   = f" by {author}" if author else ""
@@ -427,15 +435,28 @@ def _build_context_block(
                     raw_topics = []
             topics_text = ", ".join(raw_topics) if raw_topics else ""
 
+            activity    = session.get("activity") or ""
+            next_step   = session.get("next_step") or ""
+            blockers    = session.get("blockers") or ""
             active_minutes = session.get("active_minutes")
 
             context_lines.append(f"  [{readable_timestamp}] Project: {project}")
-            context_lines.append(f"    Goal: {goal}")
-            context_lines.append(f"    Summary: {summary}")
+            # activity from fused session prompt; fall back to ai_summary for
+            # older sessions that pre-date the fusion upgrade.
+            if activity:
+                context_lines.append(f"    What you were doing: {activity}")
+            elif summary:
+                context_lines.append(f"    Summary: {summary}")
+            if goal:
+                context_lines.append(f"    Goal: {goal}")
+            if next_step:
+                context_lines.append(f"    Next step: {next_step}")
+            if last_action:
+                context_lines.append(f"    Left off: {last_action}")
+            if blockers:
+                context_lines.append(f"    Blocked on: {blockers}")
             if topics_text:
                 context_lines.append(f"    Topics: {topics_text}")
-            if last_action:
-                context_lines.append(f"    Last action: {last_action}")
             if resources_text:
                 context_lines.append(f"    Resources: {resources_text}")
             if active_minutes is not None and active_minutes > 0:
