@@ -23,7 +23,7 @@ same experience, AI adapts to what they actually do.
 
 **App behaviour:** No dock icon. No Cmd+Tab. Menu bar only (`LSUIElement = true`).
 
-**Completed phases:** Phase 0 ✅ Phase 1 ✅ Phase 2 ✅ Pre-beta hardening ✅ Phase 2.5 ✅ Phase 2.6 ✅ Phase 2.7 ✅
+**Completed phases:** Phase 0 ✅ Phase 1 ✅ Phase 2 ✅ Pre-beta hardening ✅ Phase 2.5 ✅ Phase 2.6 ✅ Phase 2.7 ✅ Phase 2.9 ✅
 
 ---
 
@@ -60,6 +60,10 @@ same experience, AI adapts to what they actually do.
 | **Session boundaries split on lock/sleep** | `_split_events_at_system_boundaries()` in `scheduler.py` walks the chronologically-sorted unprocessed event list. Each `system_state` event with state `"lock"` or `"sleep"` ends the current content batch; content events after an `"unlock"`/`"wake"` start a new batch. Boundary events are immediately marked `session_id='system_boundary'` so they are never re-classified. Each content batch then goes through the full classify → group → summarise pipeline independently. |
 | **active_minutes on sessions** | `sessions.active_minutes` (INTEGER) counts `window` events where `is_user_active = 1` in a session's event list, multiplied by the 30-second poll interval, divided by 60. Represents a lower-bound estimate of keyboard/mouse-active time (lower bound because the window tracker only fires on title changes, not every 30 s unconditionally). Included in the Qdrant payload metadata for "how long did I work on X?" recall. |
 | **File watch settings (privacy control)** | `file_watch_settings` table in SQLite (single row, id=1): `enabled` INTEGER + `watched_folders` JSON TEXT array of absolute paths. Seeded on first run with `~/Documents`, `~/Desktop`, `~/Downloads`. `file_activity.rs` reads this table on startup and every 30 s via a `tokio::select!` refresh tick, then syncs the `notify` watcher using a `currently_watched: HashSet<String>` diff (unwatch removed paths, watch added paths). Disabling sets the desired set to empty, unwatching everything. Managed via `GET/POST /privacy/file-watching` and `POST/DELETE /privacy/watched-folders`; surfaced in PrivacyPanel under "File Activity". |
+| **On-screen content capture (Rust)** | `screen_content.rs` polls the focused UI element every 8 s via the macOS AXUIElement API. Uses raw `extern "C"` bindings to ApplicationServices + CoreFoundation — **not** a third-party accessibility crate. All AX calls run in `spawn_blocking` to avoid stalling the async runtime. `ScreenContentCaptureCache` reads `screen_content_settings.enabled`, pause state, and excluded apps every 30 s. **`AXSecureTextField` is skipped unconditionally at every traversal depth** — password fields are never read. Traversal cap: max depth 3, max 30 elements, text truncated to 1 500 chars, deduped by text equality before INSERT. `AXErrorAPIDisabled` is logged once via `AtomicBool` then silently suppressed. Writes `type='screen_content'` events with `raw_content=window_title`, `screen_text=accessible_text`. Requires Accessibility permission (same grant as `window.rs`). |
+| **`screen_content_settings` table** | Single row (id=1): `enabled INTEGER NOT NULL DEFAULT 1`. Seeded by FastAPI on startup. `screen_content.rs` reads this every 30 s — fallback to `true` if absent. Managed via `GET/POST /privacy/screen-content`. The On-Screen Content toggle is placed **FIRST** in PrivacyPanel (most powerful capture gets most prominent control). |
+| **Signal fusion session prompt** | Phase 2.9 replaces the flat per-event JSON prompt with a labelled text-line format. `_build_fused_signals()` serialises each event chronologically as one readable line: `[14:30] APP focus: VS Code — window: "billing.service.ts"`, `[14:31] SCREEN text: "..."`, `[14:31] FILE modified: /path/to/file`, etc. `FUSION_SESSION_SYSTEM_PROMPT` instructs Claude to act as a detective: triangulate overlapping signals, name real files/topics/tickets, produce a concrete `next_step`. Session generation now uses **Claude Sonnet 4.6** (not Haiku) — fusion is reasoning-heavy but runs only every 30 min so cost is acceptable. New session columns: `activity` (what specifically they did), `next_step` (concrete continuation), `blockers` (what they seemed stuck on). |
+| **FTS5 indexes screen_text** | `events_fts` virtual table now indexes 5 columns: `raw_content, app_name, url, page_text, screen_text`. Keyword recall queries that match on-screen text snippets return `screen_content` events. `_migrate_schema()` in `database.py` drops and rebuilds the FTS5 table + triggers when `screen_text` is absent from an existing index. |
 
 ---
 
@@ -87,6 +91,7 @@ same experience, AI adapts to what they actually do.
 [Rust: system_state.rs]    ──► SQLite events (direct write, no HTTP)
 [Rust: app_lifecycle.rs]   ──► SQLite events (direct write, no HTTP)
 [Rust: browser_url.rs]     ──► SQLite events (direct write, no HTTP)  [5 s poll; source='native_browser'; reads browser_capture_settings every 30 s; BROWSER_AUTOMATION_DENIED AtomicBool on error -1743]
+[Rust: screen_content.rs]  ──► SQLite events (direct write, no HTTP)  [8 s poll; AXUIElement focused-element traversal; reads screen_content_settings every 30 s; skips AXSecureTextField at every depth; max depth 3 / 30 elements / 1 500 chars; dedup by text equality]
 
 [content.ts — @mozilla/readability]
     │  5-second visibility filter; sends on tab departure
@@ -123,15 +128,22 @@ httpx → Worker /classify → Gemini Flash API
     │  classifies: work / research / personal / system / communication
     │  updates events.category in SQLite
     ▼
-httpx → Worker /chat → Claude Haiku 4.5
-    │  generates: {project_name, goal, summary, key_resources, last_action, topics}
-    │  file_activity events included in payload: "file_path, action"
+_build_fused_signals() → labelled text lines per event
+    │  [HH:MM] APP focus: <app> — window: "<title>"
+    │  [HH:MM] SCREEN text: "<accessible text snippet>"
+    │  [HH:MM] FILE modified: /path/to/file
+    │  [HH:MM] CLIPBOARD: "<redacted-safe text>"
+    │  [HH:MM] BROWSER: <url> — "<page title>"  etc.
+    ▼
+httpx → Worker /chat → Claude Sonnet 4.6  (reasoning-heavy fusion, runs every 30 min)
+    │  FUSION_SESSION_SYSTEM_PROMPT: detective triangulation across overlapping signals
+    │  generates: {project_name, goal, activity, summary, last_action, next_step, blockers, key_resources, topics, evidence}
     │  active_minutes = (window events with is_user_active=1) × 30 s ÷ 60
-    │  INSERT INTO sessions  (includes active_minutes, topics)
+    │  INSERT INTO sessions  (includes activity, next_step, blockers, active_minutes, topics)
     ▼
 httpx → Worker /embed → Voyage AI
-    │  512-dim vector of session summary text (includes topics)
-    └► Qdrant local upsert  (payload includes active_minutes)
+    │  512-dim vector: project_name | goal | activity | next_step | summary | topics
+    └► Qdrant local upsert  (payload includes activity, next_step, blockers, active_minutes)
 ```
 
 ### Data Flow — Recall (on user query)
@@ -158,8 +170,9 @@ FTS5 keyword search (SQLite, local — always runs, even offline)
     │                   │
     │                   ▼
     │           httpx → Worker /chat → Claude Sonnet 4.6 (user-facing)
-    │                   receives: time label + intent hint + FTS5 events
-    │                             + re-ranked sessions + conversation_history
+    │                   receives: time label + intent hint + FTS5 events (incl. screen_content)
+    │                             + re-ranked sessions (incl. activity / next_step / blockers)
+    │                             + conversation_history
     │                   ▼
     │           SSE stream ──► React renders token by token
     │
@@ -197,7 +210,7 @@ orbit/
 │   │   │   ├── ChatPanel.tsx               ← recall UI, reads conversationHistory from Zustand
 │   │   │   ├── Timeline.tsx                ← scrollable activity log
 │   │   │   ├── MemoryViewer.tsx            ← view + delete events/sessions (two-tab UI)
-│   │   │   ├── PrivacyPanel.tsx            ← capture toggle, excluded apps, excluded websites, browser tracking toggle (BrowserTrackingSection), file activity watching, wipe button
+│   │   │   ├── PrivacyPanel.tsx            ← capture toggle, excluded apps, excluded websites, browser tracking toggle (BrowserTrackingSection), file activity watching, wipe button; ScreenContentSection rendered FIRST
 │   │   │   └── OrbWidget.tsx               ← floating companion orb (Phase 4)
 │   │   ├── store/
 │   │   │   └── orbitStore.ts               ← Zustand: includes conversationHistory: Message[]
@@ -205,7 +218,7 @@ orbit/
 │   │   │   ├── useRecall.ts                ← POST /recall, appends to conversationHistory
 │   │   │   ├── useAnalytics.ts             ← PostHog wrapper — never call posthog directly
 │   │   │   ├── useOnboarding.ts            ← onboarding state, polls accessibility + browser automation every 3s; requestBrowserAutomation()
-│   │   │   ├── usePrivacySettings.ts       ← privacy API calls; excluded domains + normalizeDomain(); nativeBrowserEnabled + setNativeBrowserEnabled; file watching CRUD
+│   │   │   ├── usePrivacySettings.ts       ← privacy API calls; excluded domains + normalizeDomain(); nativeBrowserEnabled + setNativeBrowserEnabled; file watching CRUD; screenContentEnabled + setScreenContentEnabled
 │   │   │   └── useMemoryData.ts            ← memory viewer: events, sessions, pagination
 │   │   └── types/                          ← all TypeScript types
 │   └── src-tauri/
@@ -218,6 +231,7 @@ orbit/
 │       │   │   ├── system_state.rs         ← Darwin notify API; lock/unlock/sleep/wake → SQLite; macOS only
 │       │   │   ├── app_lifecycle.rs        ← 10s osascript diff; launched/quit → SQLite
 │       │   │   ├── browser_url.rs          ← 5s osascript poll; source='native_browser'; reads browser_capture_settings every 30 s; BROWSER_AUTOMATION_DENIED AtomicBool
+│       │   │   ├── screen_content.rs       ← 8s AXUIElement poll; skips AXSecureTextField; max depth 3/30 elements/1 500 chars; reads screen_content_settings every 30 s
 │       │   │   └── window.rs               ← 30s poll via osascript; idle timer writes is_user_active on each event
 │       │   ├── hotkey.rs                   ← global hotkey (global-hotkey crate)
 │       │   ├── db.rs                       ← SQLite pool (sqlx) — single pool, never recreate
@@ -322,6 +336,8 @@ orbit/
 | `tauri-plugin-updater` | Auto-updates via GitHub Releases |
 | `tauri-plugin-dialog` | Native dialogs |
 | `tauri-plugin-process` | App restart |
+| `accessibility` + `accessibility-sys` | macOS AXUIElement bindings (macOS-only) — on-screen text capture via Accessibility API |
+| `core-foundation` | CF pointer RAII wrappers (`CFOwned`) for safe use of AX/CF objects |
 
 ### Python Dependencies (uv only — never pip)
 | Package | Purpose |
@@ -349,7 +365,7 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | Task | Model | Route |
 |---|---|---|
 | User recall + conversation | Claude Sonnet 4 | Worker `/chat` |
-| Background session summaries | Claude Haiku 4.5 | Worker `/chat` (cheaper) |
+| Background session summaries (signal fusion) | Claude Sonnet 4.6 | Worker `/chat` — reasoning-heavy fusion, every 30 min |
 | Event classification | `gemini-3.1-flash-lite` | Worker `/classify` |
 | Session embeddings | Voyage AI `voyage-3-lite` (512 dims) | Worker `/embed` |
 | Voice STT (Phase 4) | Whisper.cpp → Apple Speech fallback | local only |
@@ -359,7 +375,7 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | Layer | Tool | Notes |
 |---|---|---|
 | Structured events | SQLite `~/.orbit/orbit.db` | All events, sessions, memory objects |
-| Keyword search | SQLite FTS5 (built-in) | BM25, porter tokenizer. Indexes `raw_content, app_name, url, page_text` — article body is searchable. |
+| Keyword search | SQLite FTS5 (built-in) | BM25, porter tokenizer. Indexes 5 columns: `raw_content, app_name, url, page_text, screen_text` — article body and on-screen text are searchable. |
 | Semantic search | Qdrant `~/.orbit/qdrant_storage/` | `QdrantClient(path=...)`, no Docker |
 
 ### Landing Page
@@ -401,7 +417,7 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `app/src/hooks/useRecall.ts` | POST /recall. Sends `conversation_history`. Appends each turn to Zustand store. Max 4 turns enforced here. |
 | `app/src/hooks/useAnalytics.ts` | Wraps `usePostHog()`. All components call this — never import posthog-js directly. Strips forbidden property keys before capture. |
 | `app/src/hooks/useOnboarding.ts` | Checks accessibility + browser automation permission on mount. Polls every 3s while onboarding is open. `requestBrowserAutomation()` calls `trigger_browser_automation_prompt` then polls `check_browser_automation_permission` every 3s until granted or unmount. `shouldPollBrowserAutomation = useRef(false)` controls the loop without re-renders. Persists completion state. |
-| `app/src/hooks/usePrivacySettings.ts` | Loads privacy settings in parallel on mount (capture status, excluded apps, excluded domains, browser-capture settings, file-watch settings). Exposes `nativeBrowserEnabled` + `setNativeBrowserEnabled` (POSTs to `/privacy/browser-capture`), `setFileWatchEnabled`, `addWatchedFolder`, `removeWatchedFolder` alongside existing app/domain CRUD. `normalizeDomain()` strips URL to bare hostname before any API call. |
+| `app/src/hooks/usePrivacySettings.ts` | Loads privacy settings in parallel on mount (capture status, excluded apps, excluded domains, browser-capture settings, file-watch settings, screen-content settings). Exposes `screenContentEnabled` + `setScreenContentEnabled` (POSTs to `/privacy/screen-content`) alongside `nativeBrowserEnabled`, `setFileWatchEnabled`, `addWatchedFolder`, `removeWatchedFolder`, app/domain CRUD. `normalizeDomain()` strips URL to bare hostname. |
 | `app/src/store/orbitStore.ts` | Zustand global state. Key: `conversationHistory: ConversationMessage[]` — reset on new topic, preserved within session. |
 | `app/src-tauri/src/main.rs` | Entry point. Sets LSUIElement, system tray, spawns FastAPI subprocess, creates SQLite pool, starts clipboard + window capture as tokio tasks. Health-checks FastAPI on startup (10 retries, 1s each). |
 | `app/src-tauri/src/capture/clipboard.rs` | 500ms poll. Runs `detect_sensitive_content_type()` before writing. Stores `[REDACTED:type]` for matches. Deduplicates same content within 5 minutes. |
@@ -410,18 +426,19 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `app/src-tauri/src/capture/system_state.rs` | macOS system state monitor. Uses `notify_register_file_descriptor` (Darwin C API in libSystem — no new crates). Registers 4 Darwin notifications: `com.apple.screenIsLocked` → "lock", `com.apple.screenIsUnlocked` → "unlock", `com.apple.system.willsleep` → "sleep", `com.apple.system.didwake` → "wake". Each fd gets a dedicated blocking OS thread; events bridge to tokio via `mpsc::unbounded_channel`. Writes `type='system_state'` events with `raw_content=<state>` and `metadata={"state":"..."}`. No-op on non-macOS. |
 | `app/src-tauri/src/capture/app_lifecycle.rs` | App launch/quit monitor. Polls running process names every 10 s via `osascript` (`System Events`), diffs against the previous snapshot. Writes `type='app_lifecycle'` events with `app_name` and `metadata={"action":"launched"|"quit"}`. Initial snapshot taken before the first sleep so apps already running at startup are not emitted as launches. |
 | `app/src-tauri/src/capture/browser_url.rs` | Native browser URL monitor. Polls the active tab of the frontmost browser every 5 s via osascript. Supports Chrome, Safari, Arc, Brave Browser, Microsoft Edge (not Firefox). `BrowserUrlCaptureCache` reads `browser_capture_settings.native_enabled` every 30 s (fallback `true` if absent). Applies pause-state + excluded-domains checks; skips internal browser URLs; updates dedup cursor even for excluded domains. Sets `pub static BROWSER_AUTOMATION_DENIED: AtomicBool` on first error -1743 (clears on success). Writes `type='url', source='native_browser'`. |
+| `app/src-tauri/src/capture/screen_content.rs` | On-screen text capture via macOS AXUIElement. 8 s poll. All AX calls via raw `extern "C"` bindings (ApplicationServices + CoreFoundation) in `spawn_blocking`. `ScreenContentCaptureCache` reads `screen_content_settings.enabled`, pause state, excluded apps every 30 s. `CFOwned` RAII struct ensures CF pointer lifecycle. `capture_screen_content_sync()` returns `CaptureOutcome::Success` or `CaptureOutcome::ApiDisabled`. `collect_text()` traverses focused UI element — **skips `AXSecureTextField` at every depth unconditionally**, max depth 3, max 30 elements. Text truncated to 1 500 chars, deduped by equality. `AXErrorAPIDisabled` logged once via `AtomicBool`, then silently suppressed. Writes `type='screen_content'`, `raw_content=window_title`, `screen_text=accessible_text`. No-op branch on non-macOS (`#[cfg(not(target_os = "macos"))]`). |
 | `app/src-tauri/src/db.rs` | sqlx SQLite pool. **Single pool shared everywhere. Never open new connections.** |
 | `app/src-tauri/src/lib.rs` | Tauri app setup + all `#[tauri::command]` functions via `generate_handler!`. Phase 2.7 additions: `check_browser_automation_permission` (probes each known browser via osascript), `trigger_browser_automation_prompt` (surfaces the macOS Automation dialog), `open_automation_system_settings` (deep-links to `Privacy_Automation` pane). `BROWSER_NAMES_FOR_AUTOMATION_PROBE` constant matches `KNOWN_BROWSER_APP_NAMES` in `browser_url.rs`. |
 | `app/src-tauri/Info.plist` | `LSUIElement = true`. Never remove. Orbit never appears in the dock. |
 | `app/src-tauri/tauri.conf.json` | Two windows: `main` (panel, skipTaskbar, transparent, decorations:false) and `overlay` (Phase 4: fullscreen, alwaysOnTop, focus:false, transparent). |
 | `backend/main.py` | FastAPI with `@asynccontextmanager` lifespan. Inits Sentry, starts `asyncio.create_task(start_session_generation_loop())`. No APScheduler. GET /health endpoint. |
-| `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + auto-sync triggers on startup. Events schema includes `page_text`, `link_target`, `metadata`, `file_path`, `is_user_active` (Phase 2.6). FTS5 indexes 4 columns: `raw_content, app_name, url, page_text`. `idx_events_url_timestamp` index on `events(url, timestamp)` — supports capture-time URL dedup, idempotent on every startup. Sessions schema includes `last_action`, `key_resources`, `topics`, `active_minutes`. `file_watch_settings` table (single row) seeded with enabled=true and default folders. `browser_capture_settings` table (single row, id=1) seeded with `native_enabled=1`. `excluded_domains` seeded with `mail.google.com`, `accounts.google.com`. `fetch_system_state_events()` for break/duration recall queries. `search_events_fts()` accepts `start_ms`, `end_ms`, `exclude_personal`. |
-| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now` so first run is immediate. `generate_sessions_from_recent_events()`: fetch → `_split_events_at_system_boundaries()` → per batch: `_dedup_events_by_url_for_prompt()` safety-net URL dedup (operates on a copy — all event IDs still get `session_id` marked) → classify (Gemini) → summarise (Claude Haiku) → embed (Voyage) → mark processed. Event payload to Claude is type-aware; `file_activity` sends `file_path, action`. `active_minutes` computed from `is_user_active` window events. SQL SELECTs include `file_path, is_user_active`. `_ensure_sessions_schema_columns_exist()` adds `topics`, `active_minutes` columns to existing databases on startup. |
-| `backend/routes/recall.py` | FTS5-first sequential pipeline. (1) Classify intent → "work"/"personal"/"general". (2) Parse time reference via `time_parser`. (3) `_query_asks_about_time_or_breaks()` — if true, fetches `system_state` events from DB and adds BREAK/SYSTEM section to context. (4) FTS5 keyword search always runs (offline-safe). (5) `_dedup_events_by_url()` safety-net: deduplicates FTS5 results by URL (page_text-present wins; else first BM25-ranked occurrence). (6) Try Worker: Qdrant semantic search → time-window filter → re-rank → Claude SSE stream. Context block formats events by type: `file_activity` → `Worked on file: <name> (<action>) — <path>`; `system_state` → human-readable break label; `active_minutes` shown in session block. Session block also shows `Topics:`, `Active time:`. |
+| `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + auto-sync triggers on startup. Events schema includes `page_text`, `link_target`, `metadata`, `file_path`, `is_user_active`, `screen_text` (Phase 2.9). FTS5 indexes 5 columns: `raw_content, app_name, url, page_text, screen_text`. `_migrate_schema()` drops + rebuilds FTS5 table + triggers when `screen_text` absent. `idx_events_url_timestamp` index on `events(url, timestamp)`. Sessions schema includes `last_action`, `key_resources`, `topics`, `active_minutes`, `activity`, `next_step`, `blockers` (Phase 2.9). `screen_content_settings` table (single row, id=1) seeded with `enabled=1`. `file_watch_settings` table seeded with default folders. `browser_capture_settings` table seeded with `native_enabled=1`. `search_events_fts()` SELECT now includes `file_path` and `screen_text`. |
+| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now`. `generate_sessions_from_recent_events()`: fetch → `_split_events_at_system_boundaries()` → per batch: `_dedup_events_by_url_for_prompt()` → classify (Gemini) → `_build_fused_signals()` (labelled text lines: `[HH:MM] APP focus / SCREEN text / FILE / CLIPBOARD / BROWSER / …`) → `FUSION_SESSION_SYSTEM_PROMPT` (detective triangulation) → **Claude Sonnet 4.6** → embed (Voyage) → mark processed. New session fields extracted: `activity`, `next_step`, `blockers`. `_ensure_sessions_schema_columns_exist()` adds `topics`, `active_minutes`, `activity`, `next_step`, `blockers`. SQL SELECTs include `screen_text, file_path, is_user_active, category`. |
+| `backend/routes/recall.py` | FTS5-first sequential pipeline. (1) Classify intent. (2) Parse time reference. (3) Optionally fetch system_state events. (4) FTS5 keyword search (returns `file_path` + `screen_text` columns now). (5) URL dedup. (6) Qdrant → re-rank → Claude SSE. Context block: `screen_content` events formatted as `[time] In <app>: "<screen_text snippet>"`. Session block shows fused fields: `What you were doing: <activity>` (falls back to `Summary` for pre-Phase-2.9 sessions), `Goal`, `Next step: <next_step>`, `Left off: <last_action>`, `Blocked on: <blockers>`, `Topics`, `Resources`, `Active time`. |
 | `backend/routes/capture.py` | POST /capture (extension only — Rust writes direct). Checks pause state, excluded app names, and excluded domains (all cached 30s). Domain extracted via `urlparse().netloc` before every browser event. URL dedup: `_find_recent_url_event()` queries `events(url, timestamp)` with `_URL_DEDUP_WINDOW_MS = 10_000`; extension beats native_browser (drop native); if native in DB and extension arrives, DELETE native INSERT extension. `page_text` for `page_content` events and `raw_content` for `search_query` events are passed through `redact_sensitive_content()` before INSERT. GET /events for timeline. |
-| `backend/routes/privacy.py` | Excluded apps CRUD, pause/resume, capture status, full data wipe (SQLite + Qdrant). `GET/POST/DELETE /privacy/excluded-domains` — domain exclusion CRUD. `GET/POST /privacy/browser-capture` — native browser URL capture toggle; returns `{native_enabled, browsers: [...]}`. `_SUPPORTED_NATIVE_BROWSERS` lists the 5 osascript-compatible browser names. `GET/POST /privacy/file-watching` — enable/disable file activity capture. `POST/DELETE /privacy/watched-folders` — add/remove watched folder paths (JSON body). |
+| `backend/routes/privacy.py` | Excluded apps CRUD, pause/resume, capture status, full data wipe (SQLite + Qdrant). `GET/POST/DELETE /privacy/excluded-domains` — domain exclusion CRUD. `GET/POST /privacy/browser-capture` — native browser URL capture toggle; returns `{native_enabled, browsers: [...]}`. `GET/POST /privacy/screen-content` — on-screen content capture toggle; `SetScreenContentRequest(enabled: bool)` UPDATEs `screen_content_settings`. `GET/POST /privacy/file-watching` — enable/disable file activity capture. `POST/DELETE /privacy/watched-folders` — add/remove watched folder paths (JSON body). |
 | `backend/routes/feedback.py` | POST /feedback — stores rating + comment in SQLite. |
-| `backend/services/claude_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/chat`. Handles SSE streaming. Uses Claude Haiku for session gen, Claude Sonnet for recall. Accepts `conversation_history` param. |
+| `backend/services/claude_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/chat`. Handles SSE streaming. `RECALL_MODEL = "claude-sonnet-4-6"` used for both recall (streaming) and fusion session gen (non-streaming). `SUMMARY_MODEL = "claude-haiku-4-5-20251001"` available for future lightweight tasks. `generate_session_summary()` accepts `model: str = SUMMARY_MODEL` — pass `model=RECALL_MODEL` for fusion. |
 | `backend/services/gemini_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/classify`. Builds Gemini REST API body. Extracts text from `candidates[0].content.parts[0].text`. Sends `id, type, app_name, url, raw_content` — raw_content is already redacted at capture, so it's safe and needed for accurate classification. Falls back to `category='work'` if JSON parse fails. |
 | `backend/services/voyage_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/embed`. Body: `{"input": [text], "model": "voyage-3-lite", "input_type": "document"}`. Returns 512-dim float list. |
 | `backend/services/time_parser.py` | Standard-library time reference parser (no third-party deps). `extract_time_range_from_query(query, now_ms)` checks 11 patterns most-specific-first (e.g. "yesterday morning" before "yesterday") and returns `{"start_ms": int, "end_ms": int, "label": str}` or `None`. Used by `recall.py` to filter both FTS5 and Qdrant results to a concrete time window. |
@@ -457,6 +474,7 @@ events(
   type         TEXT NOT NULL,       -- 'clipboard' | 'window' | 'url'
                                     --   | 'page_content' | 'search_query' | 'link_click'
                                     --   | 'file_activity' | 'system_state' | 'app_lifecycle'
+                                    --   | 'screen_content'
   raw_content  TEXT,                -- secrets replaced with [REDACTED:type] at capture;
                                     --  safe redacted content IS forwarded to Gemini + Claude.
                                     --  for page_content: page title. for search_query: query text.
@@ -472,6 +490,9 @@ events(
   file_path    TEXT,                -- absolute path (file_activity events only; contents never read)
   is_user_active INTEGER,           -- 1 = user input within last 60 s at capture time (window events);
                                     --   0 = idle; NULL for all other event types
+  screen_text  TEXT,                -- on-screen accessible text (screen_content events);
+                                    --  captured via AXUIElement; max 1 500 chars;
+                                    --  AXSecureTextField never read; FTS5-indexed
   metadata     TEXT                 -- JSON: {author, site_name, excerpt, time_on_page} for page_content;
                                     --       {search_engine, time_on_page} for search_query;
                                     --       {link_text} for link_click;
@@ -494,6 +515,16 @@ browser_capture_settings(
 `browser_url.rs` reads `native_enabled` every 30 s; fallback to `true` if row absent.
 Managed via `GET/POST /privacy/browser-capture`. Shown in PrivacyPanel "Browser Tracking" section.
 
+```sql
+screen_content_settings(
+  id      INTEGER PRIMARY KEY DEFAULT 1,  -- always 1
+  enabled INTEGER NOT NULL DEFAULT 1       -- 0 = stop all AXUIElement screen-text polling
+)
+```
+
+`screen_content.rs` reads `enabled` every 30 s; fallback to `true` if absent.
+Managed via `GET/POST /privacy/screen-content`. Toggle shown FIRST in PrivacyPanel.
+
 ### Tier 2 — Sessions
 
 ```sql
@@ -508,6 +539,9 @@ sessions(
   key_resources TEXT,            -- JSON array of important URLs / file paths
   topics        TEXT,            -- JSON array of subject areas ("vector databases", "tax filing" …)
                                  --  included in Qdrant embedding text for subject-based recall
+  activity      TEXT,            -- specific description of what the user was doing (from signal fusion)
+  next_step     TEXT,            -- most likely concrete action to continue this work
+  blockers      TEXT,            -- what they seemed stuck on, or null
   active_minutes INTEGER,        -- lower-bound estimate: count of is_user_active=1 window events × 30 s ÷ 60
                                  --  lower-bound because window tracker only fires on title change
   embedding_id  TEXT             -- Qdrant point ID
@@ -552,16 +586,15 @@ has nothing real to say.\
 """
 ```
 
-Session summary prompt (background, Claude Haiku 4.5):
+Signal fusion prompt (background, Claude Sonnet 4.6 — runs every 30 min):
 
-```python
-SESSION_SYSTEM_PROMPT = """\
-You are summarizing a user's computer activity session.
-Be concise and specific. Return valid JSON only. No markdown, no preamble.
-Use plain language — avoid technical jargon. The summary should make sense
-to anyone, not just technical users.\
-"""
-```
+See `FUSION_SESSION_SYSTEM_PROMPT` in `backend/scheduler.py`. Key principles:
+- Detective framing: triangulate overlapping signals, don't enumerate apps.
+- Signal priority: `file_activity > screen_text > page_text > search_query > url > window title`.
+- `_build_fused_signals()` serialises events as labelled text lines (`[HH:MM] APP focus / SCREEN text / FILE / CLIPBOARD / BROWSER / SEARCHED / CLICKED / SYSTEM…`) so Claude sees chronological overlap at a glance.
+- Required JSON output fields: `project_name`, `activity`, `evidence`, `goal`, `summary`, `last_action`, `next_step`, `blockers`, `key_resources`, `topics`.
+- `next_step` must be a concrete action, not generic ("fix the null-check in auth.py", not "continue working").
+- `evidence` is internal-only for quality debugging — never shown in the UI.
 
 ---
 
@@ -643,6 +676,19 @@ All patterns run on every call (unlike Rust which returns on the first match, si
 the whole clipboard value anyway). The JWT pattern uses an `eyJ` anchor to avoid false positives
 in long-form text. API key pattern uses a negative lookbehind `(?<![A-Za-z0-9_])` + 8-char
 minimum body to avoid mid-word false matches.
+
+### On-Screen Content Capture (AXUIElement)
+
+`screen_content.rs` reads the focused UI element's accessible text via the macOS Accessibility API. Security constraints:
+
+- **`AXSecureTextField` is NEVER read** — this check fires at every traversal level, before descending into children. Password fields of any depth are unconditionally skipped.
+- Only the **focused application** is queried — `AXUIElementCreateSystemWide()` → focused app → focused window → focused UI element. No cross-app scanning.
+- **Depth cap**: max 3 levels of element traversal; max 30 elements total.
+- **Size cap**: text truncated to 1 500 chars before any DB write.
+- **Dedup**: identical consecutive captures are dropped (text equality check before INSERT).
+- `AXErrorAPIDisabled` (Accessibility permission revoked) is logged once, then the loop runs silently — no repeated error spam.
+- `screen_content_settings.enabled = 0` stops all AX polling; `excluded_app_names` also respected.
+- `screen_text` IS sent to Claude for session fusion — it is the strongest signal for what the user was actively working on. Never contains secrets (they appear as `[REDACTED:type]` in clipboard; AX text of secure fields is never read).
 
 ### App Exclude List
 
@@ -911,6 +957,9 @@ and auto-advances when granted.
 - Capture audio or microphone input before Phase 4. Phase 4 requires explicit user permission at the macOS prompt.
 - Capture screen contents or take screenshots before Phase 3. Phase 3 requires explicit Screen Recording permission.
 - Capture network connections, DNS queries, HTTP request bodies, or OS audit logs — these are never part of Orbit's data model.
+- Read `AXSecureTextField` elements at any traversal depth via the Accessibility API — password fields must be skipped before descending. This check is in `collect_text()` at every recursive call.
+- Query any application other than the frontmost focused app via AXUIElement — `screen_content.rs` only reads from the focused app.
+- Traverse AX element trees deeper than 3 levels or past 30 total elements — these caps prevent runaway traversal on complex UIs.
 
 ---
 
