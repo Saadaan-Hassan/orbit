@@ -156,19 +156,14 @@ fn main() {
         orbit_database_file_path,
     ));
 
-    tokio_runtime.spawn(capture::app_lifecycle::start_app_lifecycle_monitor(
-        sqlx_connection_pool.clone(),
-    ));
-
     tokio_runtime.spawn(capture::system_state::start_system_state_monitor(
         sqlx_connection_pool.clone(),
     ));
 
-    tokio_runtime.spawn(capture::window::start_window_tracker(
-        sqlx_connection_pool.clone(),
-    ));
-
-    tokio_runtime.spawn(capture::browser_url::start_native_browser_url_monitor(
+    // unified_poller replaces three separate osascript polling tasks:
+    // app_lifecycle (10s), window (30s), and browser_url (5s).
+    // All three are now driven by a single 8-second combined osascript.
+    tokio_runtime.spawn(capture::unified_poller::start_unified_poller(
         sqlx_connection_pool.clone(),
     ));
 

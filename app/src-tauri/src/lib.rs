@@ -102,7 +102,7 @@ fn mark_onboarding_completed() {
 // ---------------------------------------------------------------------------
 
 /// App names to probe when checking/triggering Automation permission.
-/// Matches the KNOWN_BROWSER_APP_NAMES list in capture/browser_url.rs.
+/// Matches the KNOWN_BROWSER_APP_NAMES list in capture/unified_poller.rs.
 const BROWSER_NAMES_FOR_AUTOMATION_PROBE: &[&str] = &[
     "Google Chrome",
     "Safari",
