@@ -141,7 +141,7 @@ const logoTextStyle: CSSProperties = {
   letterSpacing: "-0.02em",
   display: "inline-block",
   verticalAlign: "middle",
-  paddingLeft: "10px",
+  paddingLeft: "4px",
   lineHeight: "32px",
 };
 
