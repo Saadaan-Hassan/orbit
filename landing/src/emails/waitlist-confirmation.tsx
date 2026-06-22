@@ -31,20 +31,20 @@ export default function WaitlistConfirmation({
       <Head />
 
       {/* Preview text shown in inbox before the email is opened */}
-      <Preview>You're on the Orbit waitlist — we'll be in touch 🪐</Preview>
+      <Preview>You&apos;re on the Orbit waitlist. We&apos;ll be in touch soon.</Preview>
 
       <Body style={bodyStyle}>
         <Container style={containerStyle}>
           {/* Top header line accent */}
           <div style={accentBarStyle} />
 
-          {/* Logo / wordmark */}
+          {/* Logo + wordmark */}
           <div style={logoContainerStyle}>
             <Img
               src={`${process.env.NEXT_PUBLIC_APP_URL ?? "https://heyorbit.saadaan.dev"}/logo.png`}
               width="32"
               height="32"
-              alt="Orbit Logo"
+              alt="Orbit"
               style={logoImageStyle}
             />
             <span style={logoTextStyle}>Orbit</span>
@@ -129,7 +129,7 @@ const logoContainerStyle: CSSProperties = {
 };
 
 const logoImageStyle: CSSProperties = {
-  borderRadius: "8px",
+  borderRadius: "6px",
   display: "inline-block",
   verticalAlign: "middle",
 };

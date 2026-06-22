@@ -2,9 +2,9 @@ import Link from "next/link";
 import Image from "next/image";
 
 export const metadata = {
-  title: "Privacy Policy — Orbit",
+  title: "Privacy Policy | Orbit",
   description:
-    "Orbit is designed to help you remember your work — not to collect your data.",
+    "Orbit is designed to help you remember your work, not collect your data.",
   alternates: {
     canonical: "/privacy",
   },
@@ -41,8 +41,8 @@ export default function PrivacyPolicy() {
         <div className="flex flex-col gap-1">
           <p className="text-xs text-zinc-500">Last updated: June 2026</p>
           <p className="text-sm font-light text-zinc-400 mt-2 leading-relaxed">
-            Orbit is designed to help you remember your work — not to collect
-            your data. Almost everything stays on your Mac, and you remain in
+            Orbit is designed to help you remember your work, not collect your
+            data. Almost everything stays on your Mac, and you remain in
             complete control of what Orbit stores, processes, and remembers.
           </p>
         </div>
@@ -63,31 +63,38 @@ export default function PrivacyPolicy() {
             </p>
             <ul className="list-disc list-inside flex flex-col gap-3 pl-2">
               <li>
-                <span className="text-zinc-300 font-medium">Active app and window title</span> — which application is in focus and what its window is titled, captured when the title changes.
+                <span className="text-zinc-300 font-medium">Active app and window title.</span>{" "}
+                Orbit tracks which application is in focus and what its window is titled, captured whenever the title changes.
               </li>
               <li>
-                <span className="text-zinc-300 font-medium">On-screen text</span> — the readable text visible in your active app&apos;s interface, read via macOS&apos;s built-in Accessibility API. This requires the Accessibility permission you grant during setup.{" "}
-                <span className="text-zinc-400">Password fields are never read — they are identified and skipped before any text is accessed, at every level of the interface.</span>
+                <span className="text-zinc-300 font-medium">On-screen text.</span>{" "}
+                The readable text visible in your active app&apos;s interface, accessed via macOS&apos;s built-in Accessibility API. This requires the Accessibility permission you grant during setup.{" "}
+                <span className="text-zinc-400">Password fields are never read. They are identified and skipped before any text is accessed, at every level of the interface.</span>
               </li>
               <li>
-                <span className="text-zinc-300 font-medium">Browser URL and page title</span> — the URL and title of your active browser tab. Captured natively from Chrome, Safari, Arc, Brave, and Edge using macOS Automation, and optionally via the Orbit Chrome extension for richer page context (article text, search queries).
+                <span className="text-zinc-300 font-medium">Browser URL and page title.</span>{" "}
+                The URL and title of your active browser tab. Captured natively from Chrome, Safari, Arc, Brave, and Edge using macOS Automation, and optionally via the Orbit Chrome extension for richer context like article text and search queries.
               </li>
               <li>
-                <span className="text-zinc-300 font-medium">Clipboard text</span> — text you copy. Secrets are detected and replaced with{" "}
+                <span className="text-zinc-300 font-medium">Clipboard text.</span>{" "}
+                Text you copy. Secrets are detected and replaced with{" "}
                 <code className="px-1 py-0.5 rounded bg-white/5 text-xs text-zinc-400 font-mono">
                   [REDACTED]
                 </code>{" "}
                 before any storage. The original value is never written to disk.
               </li>
               <li>
-                <span className="text-zinc-300 font-medium">File activity</span> — when you create, modify, or move files in your Documents, Desktop, and Downloads folders. Only the file name and path are recorded.{" "}
+                <span className="text-zinc-300 font-medium">File activity.</span>{" "}
+                When you create, modify, or move files in your Documents, Desktop, and Downloads folders. Only the file name and path are recorded.{" "}
                 <span className="text-zinc-400">File contents are never read.</span>
               </li>
               <li>
-                <span className="text-zinc-300 font-medium">App launches and quits</span> — which applications you open and close, to help Orbit understand the flow of your work sessions.
+                <span className="text-zinc-300 font-medium">App launches and quits.</span>{" "}
+                Which applications you open and close, to help Orbit understand the flow of your work sessions.
               </li>
               <li>
-                <span className="text-zinc-300 font-medium">System events</span> — when your screen locks or unlocks, and when your Mac sleeps or wakes. Used to mark session boundaries in your memory timeline.
+                <span className="text-zinc-300 font-medium">System events.</span>{" "}
+                When your screen locks or unlocks, and when your Mac sleeps or wakes. Used to mark session boundaries in your memory timeline.
               </li>
             </ul>
 
@@ -103,7 +110,7 @@ export default function PrivacyPolicy() {
               </li>
               <li>
                 Passwords, API keys, credit card numbers, or other secrets
-                (detected and redacted before storage)
+                (detected and redacted before any storage)
               </li>
               <li>
                 Password fields or secure text inputs in any application
@@ -129,13 +136,13 @@ export default function PrivacyPolicy() {
               <li>Access your email or messaging accounts</li>
               <li>Access saved passwords in your browser or keychain</li>
               <li>
-                Read messages from end-to-end encrypted services (unless
-                they appear in a window title you have shared)
+                Read messages from end-to-end encrypted services, unless
+                they appear in a window title you have shared
               </li>
               <li>Turn on your microphone or camera</li>
               <li>
-                Read text in other apps while they are not the focused
-                foreground application
+                Read text in apps that are not currently the focused foreground
+                application
               </li>
             </ul>
           </div>
@@ -154,7 +161,7 @@ export default function PrivacyPolicy() {
               </code>{" "}
               in an SQLite database and a local vector index. This data never
               leaves your device unless you explicitly opt in to cloud sync
-              (which does not yet exist — it is a future opt-in feature).
+              (not yet available).
             </p>
             <p className="text-zinc-400">
               Orbit also transmits non-personal telemetry for crash reporting
@@ -180,22 +187,21 @@ export default function PrivacyPolicy() {
             <ul className="list-disc list-inside flex flex-col gap-2 pl-2">
               <li>
                 App names, window titles, browser URLs, and file paths from
-                your recent activity — to give the AI enough context to write
-                a useful summary of what you worked on.
+                your recent activity. This gives the AI enough context to
+                write a useful summary of what you worked on.
               </li>
               <li>
-                On-screen text snippets (already filtered to remove any
-                detected secrets before they leave the app).
+                On-screen text snippets, already filtered to remove any
+                detected secrets before they leave the app.
               </li>
               <li>
-                AI-generated session summaries — short descriptions of your
-                activity, for example:{" "}
+                Short AI-generated session summaries of your activity, for example:{" "}
                 <span className="text-zinc-400 italic">
                   &ldquo;Worked on a Next.js project in VS Code, reviewed
                   billing.service.ts, and browsed Stripe documentation.&rdquo;
                 </span>
               </li>
-              <li>Your recall queries — the questions you ask Orbit.</li>
+              <li>Your recall queries, the questions you ask Orbit.</li>
             </ul>
             <p className="mt-2">
               Orbit{" "}
@@ -205,17 +211,17 @@ export default function PrivacyPolicy() {
               <li>Raw clipboard content</li>
               <li>File contents</li>
               <li>
-                Secrets — passwords, API keys, tokens (they are replaced with{" "}
+                Passwords, API keys, or other secrets. These are replaced with{" "}
                 <code className="px-1 py-0.5 rounded bg-white/5 text-xs font-mono">
                   [REDACTED]
                 </code>{" "}
-                before Orbit ever touches them)
+                before Orbit ever touches them.
               </li>
             </ul>
             <p className="mt-2 text-zinc-400">
               Orbit currently uses Claude (Anthropic), Gemini Flash (Google),
               and Voyage AI to power AI features. These providers process only
-              the information necessary to fulfil your request; all
+              the information needed to fulfil your request and all
               communication is encrypted in transit.
             </p>
           </div>
@@ -234,7 +240,7 @@ export default function PrivacyPolicy() {
             <ul className="list-disc list-inside flex flex-col gap-2 pl-2">
               <li>Whether the app was opened</li>
               <li>
-                That a recall query occurred — never the contents of the query
+                That a recall query occurred (never the contents of the query)
               </li>
               <li>Whether a memory session was generated</li>
             </ul>
@@ -274,9 +280,8 @@ export default function PrivacyPolicy() {
           </h2>
           <p className="text-sm leading-relaxed font-light">
             As Orbit evolves, this policy may be updated. Significant changes
-            will be communicated through the app or website. The &ldquo;last
-            updated&rdquo; date at the top of this page reflects the most
-            recent revision.
+            will be communicated through the app or website. The date at the
+            top of this page reflects the most recent revision.
           </p>
         </section>
 

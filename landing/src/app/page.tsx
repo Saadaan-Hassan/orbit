@@ -6,19 +6,19 @@ const HOW_IT_WORKS = [
     step: "01",
     icon: Eye,
     headline: "Orbit watches quietly",
-    body: "No dock icon. No interruptions. Orbit lives in your menu bar and passively notes which apps, documents, and websites you're working with — without ever reading your passwords or private data.",
+    body: "No dock icon. No interruptions. Orbit lives in your menu bar and passively notes which apps, documents, and websites you work with. It never reads your passwords or private data.",
   },
   {
     step: "02",
     icon: Layers,
     headline: "Orbit builds your memory",
-    body: "Every 30 minutes, your activity is distilled into clear, searchable memory. No manual tagging, no journaling required. What you were doing and why — just there, when you need it.",
+    body: "Every 30 minutes, your activity is turned into clear, searchable memory. No manual tagging, no journaling. It just works.",
   },
   {
     step: "03",
     icon: Search,
     headline: "You ask. Orbit remembers.",
-    body: "Ask anything in plain language. \"What was I working on yesterday morning?\" or \"Where did I leave that project?\" Orbit answers with specifics — files, URLs, context.",
+    body: "Ask anything in plain language. What was I working on yesterday? Where did I leave that project? Orbit answers with specifics: files, URLs, context.",
   },
 ];
 
@@ -47,7 +47,7 @@ export default function Page() {
 
           {/* Subheadline */}
           <p className="max-w-xl text-base sm:text-lg text-zinc-400/90 leading-relaxed font-light">
-            You spend hours rebuilding mental context every time you switch tasks. Orbit fixes that — it quietly remembers your work so you never have to start over.
+            You spend hours rebuilding mental context every time you switch tasks. Orbit remembers your work so you never have to start over.
           </p>
 
           {/* Waitlist form */}
@@ -116,7 +116,7 @@ export default function Page() {
         <div className="mt-6 flex items-center justify-center gap-3 rounded-xl border border-white/5 bg-white/[0.015] px-6 py-4 text-center">
           <p className="text-xs text-zinc-600 font-light leading-relaxed max-w-xl">
             <span className="text-zinc-400 font-medium">Your privacy is the foundation, not a checkbox.</span>
-            {" "}Everything Orbit captures stays on your Mac in a local database. Cloud AI only ever sees anonymised summaries — never raw content, passwords, or file data. You can pause, exclude apps, or wipe everything at any time.{" "}
+            {" "}Everything Orbit captures stays on your Mac in a local database. Cloud AI only ever sees short summaries of your activity, never raw content or passwords. You can pause, exclude apps, or wipe everything at any time.{" "}
             <a href="/privacy" className="text-zinc-400 underline underline-offset-2 hover:text-white transition-colors">
               Read our privacy policy →
             </a>
