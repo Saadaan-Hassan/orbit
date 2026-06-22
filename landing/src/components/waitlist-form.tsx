@@ -47,10 +47,10 @@ export default function WaitlistForm() {
           <CheckCircle2 className="h-6 w-6" />
         </div>
         <h3 className="text-xl font-semibold text-white tracking-tight">
-          Welcome to the Orbit list
+          You&apos;re in.
         </h3>
         <p className="text-sm text-zinc-400 mt-2 leading-relaxed">
-          You&apos;re officially queued for early access. We&apos;ll be in touch as soon as your slot opens.
+          Check your inbox — a confirmation is on its way. We&apos;ll reach out personally when your early access is ready.
         </p>
       </div>
     );

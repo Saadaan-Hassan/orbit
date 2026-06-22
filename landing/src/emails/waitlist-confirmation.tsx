@@ -41,7 +41,7 @@ export default function WaitlistConfirmation({
           {/* Logo / wordmark */}
           <div style={logoContainerStyle}>
             <Img
-              src={`${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/logo.png`}
+              src={`${process.env.NEXT_PUBLIC_APP_URL ?? "https://heyorbit.saadaan.dev"}/logo.png`}
               width="32"
               height="32"
               alt="Orbit Logo"

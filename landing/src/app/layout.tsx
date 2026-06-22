@@ -16,12 +16,30 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const APP_URL =
+  process.env.NEXT_PUBLIC_APP_URL ?? "https://heyorbit.saadaan.dev";
+
+const DESCRIPTION =
+  "Orbit remembers your work, restores your context, and helps you get back into flow without wasting time rebuilding your mental state.";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(APP_URL),
   title: "Orbit — Never lose your place again.",
-  description:
-    "Orbit remembers your work, restores your context, and helps you get back into flow without wasting time rebuilding your mental state.",
+  description: DESCRIPTION,
   alternates: {
-    canonical: "/",
+    canonical: APP_URL,
+  },
+  openGraph: {
+    type: "website",
+    url: APP_URL,
+    title: "Orbit — Never lose your place again.",
+    description: DESCRIPTION,
+    siteName: "Orbit",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Orbit — Never lose your place again.",
+    description: DESCRIPTION,
   },
 };
 
