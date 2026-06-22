@@ -1,8 +1,8 @@
 use chrono::Utc;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
-use std::process::Command;
 use std::time::Instant;
+use tokio::process::Command as TokioCommand;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
@@ -156,7 +156,7 @@ pub async fn start_window_tracker(sqlx_connection_pool: SqlitePool) {
 
         // Get the active app name first — this requires no permissions.
         // Only attempt the window title (which needs Accessibility) if that succeeds.
-        if let Some(active_app_name) = get_frontmost_app_name() {
+        if let Some(active_app_name) = get_frontmost_app_name().await {
             // Skip events from excluded apps entirely — nothing is written to
             // SQLite, so excluded apps leave no trace in the activity log.
             if capture_cache.app_is_excluded(&active_app_name) {
@@ -168,6 +168,7 @@ pub async fn start_window_tracker(sqlx_connection_pool: SqlitePool) {
             // If unavailable, we fall back to the app name so the app-switch
             // event is still captured regardless of permission state.
             let effective_window_title = get_frontmost_window_title()
+                .await
                 .unwrap_or_else(|| active_app_name.clone());
 
             let is_non_empty = !effective_window_title.is_empty();
@@ -209,30 +210,36 @@ pub async fn start_window_tracker(sqlx_connection_pool: SqlitePool) {
 // Returns the display name of the frontmost application (e.g. "Google Chrome").
 // Uses `path to frontmost application` + Finder's `info for`, which requires
 // no Accessibility or Screen Recording permission on any macOS version.
-fn get_frontmost_app_name() -> Option<String> {
-    run_osascript(
+async fn get_frontmost_app_name() -> Option<String> {
+    run_osascript_async(
         "tell application \"Finder\" to return name of \
          (info for (path to frontmost application))",
     )
+    .await
 }
 
 // Returns the title of the front window of the active application.
 // Requires Accessibility permission — returns None silently when unavailable
 // so the caller can fall back to the app name.
-fn get_frontmost_window_title() -> Option<String> {
-    run_osascript(
+async fn get_frontmost_window_title() -> Option<String> {
+    run_osascript_async(
         "tell application \"System Events\" to get title of front window of \
          (first application process whose frontmost is true)",
     )
+    .await
 }
 
 // Runs a single-line AppleScript expression and returns trimmed stdout,
 // or None if the command fails or produces no output.
-fn run_osascript(applescript_expression: &str) -> Option<String> {
-    let command_output = Command::new("osascript")
+//
+// Uses tokio::process::Command so the osascript subprocess is spawned
+// without blocking a tokio worker thread during the OS round-trip.
+async fn run_osascript_async(applescript_expression: &str) -> Option<String> {
+    let command_output = TokioCommand::new("osascript")
         .arg("-e")
         .arg(applescript_expression)
-        .output();
+        .output()
+        .await;
 
     match command_output {
         Ok(output) if output.status.success() => {

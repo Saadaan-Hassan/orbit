@@ -390,9 +390,17 @@ async def get_capture_status() -> dict:
 async def wipe_all_data() -> dict:
     """
     Irreversibly deletes every captured event, session, and memory object,
-    and clears all Qdrant embeddings. capture_state is preserved so the
-    user's pause preference survives the wipe.
+    and clears all Qdrant embeddings.
+
+    What is NOT wiped:
+    - capture_state — pause preference survives the wipe.
+    - excluded_apps and excluded_domains — these are privacy *settings*, not
+      captured *data*. Wiping them would mean 1Password, Bitwarden, and the
+      user's personal websites could be inadvertently captured immediately
+      after a wipe, before the user notices and re-adds them.
     """
+    from database import _seed_default_excluded_apps, _seed_default_excluded_domains
+
     async with _async_engine.begin() as connection:
         # Delete child tables before parents to satisfy foreign key ordering,
         # even though SQLite doesn't enforce FK constraints by default.
@@ -400,10 +408,15 @@ async def wipe_all_data() -> dict:
         await connection.execute(text("DELETE FROM events_fts"))
         await connection.execute(text("DELETE FROM events"))
         await connection.execute(text("DELETE FROM sessions"))
-        await connection.execute(text("DELETE FROM excluded_apps"))
 
     # Remove all vector embeddings from the local Qdrant collection.
     await wipe_all_session_embeddings()
+
+    # Re-seed default excluded apps and domains in case the user had emptied
+    # those lists before the wipe. Both functions are no-ops when rows are
+    # already present — they only insert when the table is completely empty.
+    await _seed_default_excluded_apps()
+    await _seed_default_excluded_domains()
 
     logger.warning("Full memory wipe completed — all user data deleted.")
     return {"status": "ok", "message": "All memory wiped"}

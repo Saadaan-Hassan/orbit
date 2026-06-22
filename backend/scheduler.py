@@ -9,7 +9,7 @@ main.py's lifespan context manager.
 import json
 import logging
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -40,6 +40,13 @@ STALE_EVENT_FORCE_PROCESS_SECONDS = 2 * 60 * 60  # 2 hours
 
 # Minimum events in a project group to justify generating a session summary.
 MINIMUM_EVENTS_FOR_SESSION = 5
+
+# Batch-size ceilings for the Claude fusion call. Batches that exceed either
+# limit are split in half chronologically before being sent to Claude.
+# These prevent oversized prompts that cause JSON parse failures (the root
+# cause of the 149 parse_failed events observed in initial real-world use).
+MAX_EVENTS_PER_BATCH = 60
+MAX_SIGNAL_CHARS_PER_BATCH = 8_000
 
 FUSION_SESSION_SYSTEM_PROMPT = """\
 You reconstruct what a person was doing on their computer during a short work
@@ -74,6 +81,26 @@ Rules:
 - Ignore anything that looks like a password, secret, or [REDACTED:...] value.
 - Use plain language. No technical jargon about how you were given this data.
 
+CRITICAL DISTINCTION — Author vs. Reviewer:
+When the user visits external URLs, GitHub repos, or apps they did not build
+themselves, they are likely REVIEWING or RESEARCHING, not working on that
+project. Signals that indicate REVIEWING:
+- link_click events to URLs containing other people's usernames (e.g. github.com/someone_else/)
+- page_content from apps with unfamiliar branding or names
+- Multiple short visits to different external apps in quick succession
+- A "review", "submission", "judging", or "evaluate" pattern in any URL or title
+
+Signals that indicate PRIMARY WORK (what the user is building):
+- file_activity events — file edits always mean primary work on their own project
+- localhost:XXXX URLs — a local dev server is always their own project
+- clipboard content matching file names or code snippets from file_activity events
+- screen_content from their IDE or terminal
+
+When both patterns exist in one batch, the PRIMARY WORK signals (file_activity,
+localhost) define the main project and set the project_name. The reviewing
+activity is secondary context — describe it as "while also reviewing [X]"
+not as a separate work stream or the primary focus.
+
 Return ONLY valid JSON. No markdown, no preamble, no explanation outside the JSON.\
 """
 
@@ -87,7 +114,7 @@ Reconstruct what this person was doing and return EXACTLY this JSON structure:
 
 {{
   "project_name": "the project/context name, or null if unclear",
-  "activity": "a specific 1-2 sentence description of WHAT they were actually doing, inferred by combining the signals. Name real files/topics/tickets/documents. Not 'used VS Code' — instead 'implementing Stripe webhook verification in billing.service.ts'.",
+  "activity": "WHAT they were primarily building or creating, inferred from file edits, localhost activity, and IDE/terminal signals. Name real files and topics. If they were also reviewing external content (other people's repos, submitted apps, external URLs), note it as secondary: 'while also reviewing [X] submissions'. Never describe reviewed-but-not-built projects as the primary work.",
   "evidence": "one short sentence: which signals support this conclusion (e.g. 'file edits to billing.ts + clipboard showing constructEvent + open Stripe webhooks docs')",
   "goal": "one sentence: what they appeared to be trying to accomplish",
   "summary": "2-3 sentences describing how the session unfolded",
@@ -176,6 +203,9 @@ async def _ensure_sessions_schema_columns_exist() -> None:
             ("activity",      "TEXT"),
             ("next_step",     "TEXT"),
             ("blockers",      "TEXT"),
+            # Dominant Gemini category for the session's event batch.
+            # Used to filter personal sessions from work-intent recall queries.
+            ("category",      "TEXT"),
         ]:
             if col not in existing_column_names:
                 await connection.execute(
@@ -300,6 +330,22 @@ def _build_fused_signals(events: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def estimate_fused_signal_char_count(events: list[dict]) -> int:
+    """
+    Rough char count of what _build_fused_signals() will produce for a batch.
+    Used to decide whether to split before sending to Claude. Mirrors the per-
+    field truncation limits in _build_fused_signals() so the estimate is tight.
+    """
+    return sum(
+        len(str(e.get("raw_content") or "")) +
+        len(str(e.get("screen_text") or "")[:400]) +
+        len(str(e.get("page_text") or "")[:300]) +
+        len(str(e.get("file_path") or "")) +
+        50  # overhead per event line (label, timestamp, whitespace)
+        for e in events
+    )
+
+
 async def _generate_session_for_events(project_events: list[dict]) -> None:
     """
     Summarises one project's classified events with Claude, persists the
@@ -315,6 +361,31 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     [REDACTED:<type>] placeholder. Claude needs the actual content to write
     useful summaries; app names alone are not enough.
     """
+    # ------------------------------------------------------------------
+    # Batch-size guard: if the event list is too large, split it in half
+    # chronologically and recurse rather than sending an oversized prompt
+    # to Claude. Oversized batches produce JSON parse failures (the root
+    # cause of the 149 parse_failed events in initial real-world testing).
+    # Two specific 1-hour sessions are always better than one vague 2-hour one.
+    # ------------------------------------------------------------------
+    signal_char_count = estimate_fused_signal_char_count(project_events)
+    if len(project_events) > MAX_EVENTS_PER_BATCH or signal_char_count > MAX_SIGNAL_CHARS_PER_BATCH:
+        midpoint = len(project_events) // 2
+        first_half = project_events[:midpoint]
+        second_half = project_events[midpoint:]
+        logger.info(
+            "Session generator: batch of %d event(s) / ~%d signal chars exceeds "
+            "limit (%d events / %d chars) — splitting into halves of %d + %d.",
+            len(project_events), signal_char_count,
+            MAX_EVENTS_PER_BATCH, MAX_SIGNAL_CHARS_PER_BATCH,
+            len(first_half), len(second_half),
+        )
+        if len(first_half) >= MINIMUM_EVENTS_FOR_SESSION:
+            await _generate_session_for_events(first_half)
+        if len(second_half) >= MINIMUM_EVENTS_FOR_SESSION:
+            await _generate_session_for_events(second_half)
+        return
+
     # ------------------------------------------------------------------
     # Build fused signal block for Claude.
     #
@@ -362,11 +433,31 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     try:
         session_data = json.loads(cleaned_response)
     except json.JSONDecodeError as json_parse_error:
-        logger.error(
-            "Session generator: failed to parse Claude JSON: %s. Raw: %.200s",
+        logger.warning(
+            "Session generator: Claude JSON parse failure — "
+            "%d events, ~%d signal chars. "
+            "Error: %s. "
+            "Claude response (first 200 chars): %.200s. "
+            "Marking as 'parse_failed' to prevent infinite retry.",
+            len(project_events),
+            estimate_fused_signal_char_count(project_events),
             json_parse_error,
             raw_claude_response,
         )
+        # Circuit breaker: stamp the batch with a sentinel session_id so these
+        # events are not reprocessed on the next scheduler run. A permanent retry
+        # loop would burn API credits without ever producing a session.
+        event_ids         = [event["id"] for event in project_events]
+        id_placeholders   = ", ".join(f":id_{i}" for i in range(len(event_ids)))
+        id_bindings       = {f"id_{i}": eid for i, eid in enumerate(event_ids)}
+        async with _async_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    f"UPDATE events SET session_id = 'parse_failed' "
+                    f"WHERE id IN ({id_placeholders})"
+                ),
+                id_bindings,
+            )
         return
 
     # ------------------------------------------------------------------
@@ -396,6 +487,18 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     )
     active_minutes = active_window_poll_count * 30 // 60
 
+    # Dominant Gemini-classified category for this event batch. Used by the
+    # recall pipeline to filter personal sessions out of work-intent queries.
+    # Counter ignores events with no category (not yet classified).
+    dominant_category_counter = Counter(
+        e.get("category") for e in project_events if e.get("category")
+    )
+    dominant_category: str = (
+        dominant_category_counter.most_common(1)[0][0]
+        if dominant_category_counter
+        else "work"
+    )
+
     async with _async_engine.begin() as connection:
         await connection.execute(
             text(
@@ -403,27 +506,28 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
                 INSERT INTO sessions
                     (id, start_time, end_time, project_name, goal, ai_summary,
                      activity, next_step, blockers,
-                     last_action, key_resources, topics, active_minutes)
+                     last_action, key_resources, topics, active_minutes, category)
                 VALUES
                     (:id, :start_time, :end_time, :project_name, :goal, :ai_summary,
                      :activity, :next_step, :blockers,
-                     :last_action, :key_resources, :topics, :active_minutes)
+                     :last_action, :key_resources, :topics, :active_minutes, :category)
                 """
             ),
             {
-                "id":             new_session_id,
-                "start_time":     session_start_timestamp,
-                "end_time":       session_end_timestamp,
-                "project_name":   project_name,
-                "goal":           goal,
-                "ai_summary":     ai_summary,
-                "activity":       activity,
-                "next_step":      next_step,
-                "blockers":       blockers,
-                "last_action":    last_action,
-                "key_resources":  key_resources,
-                "topics":         topics,
-                "active_minutes": active_minutes,
+                "id":              new_session_id,
+                "start_time":      session_start_timestamp,
+                "end_time":        session_end_timestamp,
+                "project_name":    project_name,
+                "goal":            goal,
+                "ai_summary":      ai_summary,
+                "activity":        activity,
+                "next_step":       next_step,
+                "blockers":        blockers,
+                "last_action":     last_action,
+                "key_resources":   key_resources,
+                "topics":          topics,
+                "active_minutes":  active_minutes,
+                "category":        dominant_category,
             },
         )
 
@@ -467,6 +571,9 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
         "start_time":     session_start_timestamp,
         "end_time":       session_end_timestamp,
         "active_minutes": active_minutes,
+        # Stored in the Qdrant payload so recall.py can filter personal
+        # sessions out of work-intent queries after semantic search.
+        "category":       dominant_category,
     }
 
     try:
@@ -475,10 +582,15 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
             summary_text=embedding_text,
             metadata=embedding_metadata,
         )
+        # add_session_embedding() derives the Qdrant integer point ID as
+        # abs(hash(session_id)) % 10**9. We store that same integer (as a
+        # string) so delete_session_embedding() can convert it back with
+        # int(embedding_id) and address the right Qdrant point.
+        stable_point_id = abs(hash(new_session_id)) % (10**9)
         async with _async_engine.begin() as connection:
             await connection.execute(
                 text("UPDATE sessions SET embedding_id = :eid WHERE id = :sid"),
-                {"eid": new_session_id, "sid": new_session_id},
+                {"eid": str(stable_point_id), "sid": new_session_id},
             )
     except Exception as embedding_error:
         logger.warning(
@@ -766,6 +878,85 @@ async def generate_sessions_from_recent_events() -> None:
             sessions_generated,
         )
 
+    # ------------------------------------------------------------------
+    # Step 5 — Recovery: retry any parse_failed events from prior runs
+    # ------------------------------------------------------------------
+    await _retry_parse_failed_events()
+
+
+# ---------------------------------------------------------------------------
+# Parse-failed recovery
+# ---------------------------------------------------------------------------
+
+async def _retry_parse_failed_events() -> None:
+    """
+    Fetches up to 20 events stamped parse_failed and retries them through
+    the full classify → fuse → store pipeline in groups of ≤20.
+
+    This recovers events from batches where Claude returned unparseable JSON
+    (e.g. because the original batch was too large). The batch-size guard in
+    _generate_session_for_events() now prevents this from recurring, but
+    existing parse_failed rows need a one-time recovery pass.
+
+    Each retry is a single attempt per scheduler run — if parsing fails again
+    the events stay as parse_failed rather than looping. If it succeeds,
+    _generate_session_for_events() overwrites parse_failed with the real
+    session_id.
+    """
+    async with _async_engine.connect() as connection:
+        rows = await connection.execute(
+            text(
+                """
+                SELECT id, timestamp, type, raw_content, app_name, url, source,
+                       page_text, screen_text, link_target, metadata, file_path,
+                       is_user_active, category
+                FROM   events
+                WHERE  session_id = 'parse_failed'
+                ORDER  BY timestamp ASC
+                LIMIT  20
+                """
+            )
+        )
+        failed_events = [dict(row._mapping) for row in rows.fetchall()]
+
+    if not failed_events:
+        return
+
+    logger.info(
+        "Session generator: retrying %d parse_failed event(s).",
+        len(failed_events),
+    )
+
+    # Re-classify with Gemini to get fresh project groupings. The original
+    # category column values may be stale or absent for some event types.
+    classified = await classify_events_batch(failed_events)
+
+    async with _async_engine.begin() as connection:
+        for event in classified:
+            await connection.execute(
+                text("UPDATE events SET category = :category WHERE id = :id"),
+                {"category": event.get("category"), "id": event["id"]},
+            )
+
+    project_groups: dict[str | None, list[dict]] = defaultdict(list)
+    for event in classified:
+        project_groups[event.get("project") or None].append(event)
+
+    for project_key, group_events in project_groups.items():
+        if len(group_events) < MINIMUM_EVENTS_FOR_SESSION:
+            logger.info(
+                "Session generator: parse_failed recovery — skipping project '%s', "
+                "only %d event(s) (minimum %d).",
+                project_key, len(group_events), MINIMUM_EVENTS_FOR_SESSION,
+            )
+            continue
+        logger.info(
+            "Session generator: parse_failed recovery — retrying %d event(s) "
+            "for project '%s'.",
+            len(group_events), project_key,
+        )
+        await _generate_session_for_events(group_events)
+
 
 # ---------------------------------------------------------------------------
 # Scheduler factory
@@ -786,6 +977,7 @@ def create_session_scheduler() -> AsyncIOScheduler:
         minutes=30,
         id="generate_sessions",
         name="Generate sessions from recent activity events",
+        max_instances=1,
         next_run_time=datetime.now(timezone.utc),
     )
     return scheduler

@@ -10,12 +10,16 @@ One httpx.AsyncClient is created at module level and reused for every
 request — never instantiate a new client per call.
 """
 
+import asyncio
+import logging
 import os
 
 import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -55,6 +59,11 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
     document and query embeddings are symmetric — the same function is safe
     to use for both storing (session summaries) and querying (recall search).
 
+    Retries up to 2 times on transport errors or non-2xx responses, with
+    exponential backoff (1 s, 2 s). A transient failure does not permanently
+    exclude the session from semantic recall — only a third consecutive failure
+    raises so the caller can decide how to handle it.
+
     Args:
         text_to_embed: Any text string to embed.
 
@@ -62,7 +71,8 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
         List of 512 floats representing the text in embedding space.
 
     Raises:
-        httpx.HTTPStatusError: on non-2xx response.
+        httpx.HTTPStatusError: on non-2xx response after all retries.
+        httpx.TransportError: on network failure after all retries.
     """
     request_body = {
         "input":      [text_to_embed],
@@ -70,14 +80,31 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
         "input_type": "document",
     }
 
-    response = await _http_client.post("/embed", json=request_body)
+    for attempt_number in range(3):
+        try:
+            response = await _http_client.post("/embed", json=request_body)
 
-    if not response.is_success:
-        print(
-            f"Voyage AI embedding request failed: "
-            f"HTTP {response.status_code} — {response.text}"
-        )
-        response.raise_for_status()
+            if response.is_success:
+                return response.json()["data"][0]["embedding"]
 
-    response_body = response.json()
-    return response_body["data"][0]["embedding"]
+            logger.error(
+                "Voyage AI embedding request failed: HTTP %d — %s (attempt %d/3)",
+                response.status_code, response.text, attempt_number + 1,
+            )
+            if attempt_number < 2:
+                await asyncio.sleep(2 ** attempt_number)
+            else:
+                response.raise_for_status()
+
+        except httpx.TransportError as transport_error:
+            logger.error(
+                "Voyage AI embedding transport error: %s (attempt %d/3)",
+                transport_error, attempt_number + 1,
+            )
+            if attempt_number < 2:
+                await asyncio.sleep(2 ** attempt_number)
+            else:
+                raise
+
+    # Unreachable — the loop always raises or returns on the last attempt.
+    raise RuntimeError("generate_text_embedding: exhausted retries without returning")

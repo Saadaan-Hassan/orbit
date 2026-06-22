@@ -1,12 +1,7 @@
 import { useState } from "react";
 import { useAnalytics } from "../hooks/useAnalytics";
-import {
-  useMemoryData,
-  type EventTypeFilter,
-  type MemoryEvent,
-  type MemorySession,
-  type SessionSummaryJson,
-} from "../hooks/useMemoryData";
+import { useMemoryData } from "../hooks/useMemoryData";
+import type { EventTypeFilter, MemoryEvent, MemorySession } from "../types";
 
 // ─── Formatting Helpers ───────────────────────────────────────────────────────
 function formatTimestamp(timestampMs: number): string {
@@ -82,15 +77,6 @@ function eventTypeIcon(type: string): React.ReactNode {
   }
 }
 
-function parseSummaryJson(rawJson: string | null): SessionSummaryJson | null {
-  if (!rawJson) return null;
-  try {
-    return JSON.parse(rawJson) as SessionSummaryJson;
-  } catch {
-    return null;
-  }
-}
-
 // ─── Trash Button (Inline SVG) ───────────────────────────────────────────────
 function TrashButton({ onClick, label }: { onClick: () => void; label: string }) {
   return (
@@ -159,10 +145,17 @@ interface EventsTabProps {
 }
 
 const EVENT_FILTER_OPTIONS: { label: string; value: EventTypeFilter }[] = [
-  { label: "All",       value: "all"       },
-  { label: "Clipboard", value: "clipboard" },
-  { label: "Window",    value: "window"    },
-  { label: "Browser",   value: "url"       },
+  { label: "All",         value: "all"           },
+  { label: "Clipboard",   value: "clipboard"     },
+  { label: "Window",      value: "window"        },
+  { label: "Browser",     value: "url"           },
+  { label: "Page",        value: "page_content"  },
+  { label: "Search",      value: "search_query"  },
+  { label: "Link",        value: "link_click"    },
+  { label: "File",        value: "file_activity" },
+  { label: "System",      value: "system_state"  },
+  { label: "App",         value: "app_lifecycle" },
+  { label: "Screen",      value: "screen_content"},
 ];
 
 function EventsTab({
@@ -215,7 +208,7 @@ function EventsTab({
           </button>
         ))}
         <span className="ml-auto text-[10px] text-zinc-400 dark:text-zinc-500 self-center font-medium">
-          {totalEvents} events
+          {totalEvents} items recorded
         </span>
       </div>
 
@@ -225,7 +218,11 @@ function EventsTab({
           <p className="text-xs text-zinc-400 dark:text-zinc-500 py-4 text-center">Loading events…</p>
         )}
         {!isLoadingEvents && events.length === 0 && (
-          <p className="text-xs text-zinc-400 dark:text-zinc-500 py-4 text-center">No events found.</p>
+          <p className="text-xs text-zinc-400 dark:text-zinc-500 py-4 text-center">
+            {eventsTypeFilter !== "all"
+              ? `No ${eventsTypeFilter.replace("_", " ")} activity found.`
+              : "Nothing captured yet — keep working and I'll fill this in."}
+          </p>
         )}
 
         {Object.entries(eventsByDate).map(([dateLabel, dateEvents]) => (
@@ -302,8 +299,6 @@ function SessionRow({ session, onDelete }: SessionRowProps) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const { captureEvent } = useAnalytics();
 
-  const parsedSummary = parseSummaryJson(session.ai_summary);
-
   async function handleConfirmDelete(): Promise<void> {
     setShowDeleteConfirm(false);
     captureEvent("memory_item_deleted", { item_type: "session" });
@@ -312,6 +307,23 @@ function SessionRow({ session, onDelete }: SessionRowProps) {
 
   const durationLabel = formatDuration(session.start_time, session.end_time);
   const startLabel = formatTimestamp(session.start_time);
+
+  // Parse key_resources JSON array — stored as a JSON string from Claude.
+  let parsedResources: string[] = [];
+  if (session.key_resources) {
+    try {
+      const parsed = JSON.parse(session.key_resources);
+      if (Array.isArray(parsed)) parsedResources = parsed;
+    } catch {
+      // Malformed JSON — skip the resources block.
+    }
+  }
+
+  // Decide whether the expansion has any Phase 2.9 content to render.
+  const hasRichContent = Boolean(
+    session.activity || session.next_step || session.goal ||
+    session.blockers || session.last_action || parsedResources.length > 0
+  );
 
   return (
     <>
@@ -334,11 +346,16 @@ function SessionRow({ session, onDelete }: SessionRowProps) {
                 {session.project_name ?? "Unnamed Session"}
               </span>
               <span className="text-[9px] bg-zinc-100 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">
-                {session.event_count} event{session.event_count !== 1 ? "s" : ""}
+                {session.event_count} item{session.event_count !== 1 ? "s" : ""}
               </span>
               <span className="text-[9px] bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">
                 {durationLabel}
               </span>
+              {session.active_minutes != null && session.active_minutes > 0 && (
+                <span className="text-[9px] text-zinc-400 dark:text-zinc-500 font-medium">
+                  {session.active_minutes}m active
+                </span>
+              )}
             </div>
             {session.goal && (
               <p className="text-xs text-zinc-500 dark:text-zinc-400 font-light truncate leading-relaxed">
@@ -354,17 +371,55 @@ function SessionRow({ session, onDelete }: SessionRowProps) {
           />
         </div>
 
-        {/* Dynamic drop-down summaries */}
-        {isExpanded && parsedSummary && (
-          <div className="bg-zinc-50/50 dark:bg-zinc-900/20 px-4 py-3 text-xs text-zinc-600 dark:text-zinc-300 space-y-3 font-light leading-relaxed">
-            {parsedSummary.summary && (
-              <p className="font-light">{parsedSummary.summary}</p>
+        {/* Expanded detail — Phase 2.9 rich fields */}
+        {isExpanded && hasRichContent && (
+          <div className="bg-zinc-50/50 dark:bg-zinc-900/20 px-4 py-3 space-y-3 text-xs leading-relaxed">
+            {/* next_step is the product's core value — most prominent */}
+            {session.next_step && (
+              <div className="bg-zinc-900 dark:bg-white rounded-xl px-3.5 py-2.5">
+                <p className="text-[9px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-1">
+                  Continue →
+                </p>
+                <p className="font-semibold text-white dark:text-zinc-950 leading-snug">
+                  {session.next_step}
+                </p>
+              </div>
             )}
-            {parsedSummary.key_resources && parsedSummary.key_resources.length > 0 && (
-              <div className="pt-1.5">
-                <p className="font-bold text-zinc-400 dark:text-zinc-500 text-[10px] uppercase tracking-wider mb-1">Key Context Items</p>
+
+            {session.activity && (
+              <div>
+                <p className="text-[9px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-0.5">
+                  What you were doing
+                </p>
+                <p className="text-zinc-600 dark:text-zinc-300 font-light">{session.activity}</p>
+              </div>
+            )}
+
+            {session.blockers && (
+              <div>
+                <p className="text-[9px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-0.5">
+                  Stuck on
+                </p>
+                <p className="text-zinc-500 dark:text-zinc-400 font-light">{session.blockers}</p>
+              </div>
+            )}
+
+            {session.last_action && (
+              <div>
+                <p className="text-[9px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-0.5">
+                  Last action
+                </p>
+                <p className="text-zinc-500 dark:text-zinc-400 font-light">{session.last_action}</p>
+              </div>
+            )}
+
+            {parsedResources.length > 0 && (
+              <div>
+                <p className="text-[9px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-1">
+                  Resources
+                </p>
                 <ul className="space-y-1">
-                  {parsedSummary.key_resources.map((resource, index) => (
+                  {parsedResources.map((resource, index) => (
                     <li key={index} className="flex items-start gap-2">
                       <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium">→</span>
                       <span className="break-all text-zinc-500 dark:text-zinc-400">{resource}</span>
@@ -373,20 +428,15 @@ function SessionRow({ session, onDelete }: SessionRowProps) {
                 </ul>
               </div>
             )}
-            {parsedSummary.last_action && (
-              <p className="pt-1.5 text-[11px]">
-                <span className="font-bold text-zinc-400 dark:text-zinc-500 text-[10px] uppercase tracking-wider">Last Action: </span>
-                <span className="text-zinc-500 dark:text-zinc-400">{parsedSummary.last_action}</span>
-              </p>
-            )}
           </div>
         )}
 
-        {isExpanded && !parsedSummary && session.ai_summary && (
+        {/* Fallback for pre-Phase-2.9 sessions that only have ai_summary */}
+        {isExpanded && !hasRichContent && session.ai_summary && (
           <div className="bg-zinc-50/50 dark:bg-zinc-900/20 px-4 py-3">
-            <pre className="text-xs text-zinc-500 dark:text-zinc-400 whitespace-pre-wrap break-all font-mono">
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 font-light leading-relaxed">
               {session.ai_summary}
-            </pre>
+            </p>
           </div>
         )}
       </div>
@@ -423,7 +473,7 @@ function SessionsTab({
     <div className="flex flex-col h-full bg-transparent">
       <div className="flex items-center justify-between py-2 shrink-0">
         <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-bold uppercase tracking-wider">
-          {totalSessions} sessions generated
+          {totalSessions} work summaries
         </span>
       </div>
       <div className="flex-1 overflow-y-auto py-3">
@@ -432,7 +482,7 @@ function SessionsTab({
         )}
         {!isLoadingSessions && sessions.length === 0 && (
           <p className="text-xs text-zinc-400 dark:text-zinc-500 py-4 text-center italic">
-            No sessions yet. Synthesized summaries generate every 30 minutes.
+            I'll create a summary every 30 minutes as you work.
           </p>
         )}
 

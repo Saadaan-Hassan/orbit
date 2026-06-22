@@ -83,20 +83,22 @@ async def _refresh_cache_if_stale() -> None:
             )
             excluded_rows = exclude_result.fetchall()
 
+            # excluded_domains must be queried inside the same open connection.
+            # Previously this ran after the `async with` block closed, causing
+            # a "connection already released" error that was silently caught and
+            # left excluded_domains permanently empty.
+            try:
+                domain_result = await connection.execute(
+                    text("SELECT domain FROM excluded_domains")
+                )
+                domain_rows = domain_result.fetchall()
+            except Exception:
+                domain_rows = []
+
         _filter_cache.is_paused = bool(pause_row.is_paused) if pause_row else False
         _filter_cache.paused_until_ms = pause_row.paused_until if pause_row else None
         _filter_cache.excluded_app_names = {row.app_name for row in excluded_rows}
-
-        # excluded_domains table is created in Step 4. Load it if it exists;
-        # fall back to an empty set so this code path doesn't break before then.
-        try:
-            domain_result = await connection.execute(
-                text("SELECT domain FROM excluded_domains")
-            )
-            _filter_cache.excluded_domains = {row.domain for row in domain_result.fetchall()}
-        except Exception:
-            _filter_cache.excluded_domains = set()
-
+        _filter_cache.excluded_domains = {row.domain for row in domain_rows}
         _filter_cache.last_refreshed_at = time.monotonic()
 
 

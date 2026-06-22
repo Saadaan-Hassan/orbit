@@ -1,43 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { BACKEND_BASE_URL } from "@/lib/config";
+import type { EventTypeFilter, MemoryEvent, MemorySession } from "../types";
+
 const EVENTS_PAGE_SIZE = 50;
 const SESSIONS_PAGE_SIZE = 20;
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export type EventTypeFilter = "all" | "clipboard" | "window" | "url";
-
-export interface MemoryEvent {
-  id: string;
-  timestamp: number;
-  type: string;
-  raw_content: string | null;
-  app_name: string | null;
-  url: string | null;
-  source: string;
-}
-
-export interface SessionSummaryJson {
-  project_name?: string;
-  goal?: string;
-  summary?: string;
-  key_resources?: string[];
-  last_action?: string;
-}
-
-export interface MemorySession {
-  id: string;
-  start_time: number;
-  end_time: number;
-  project_name: string | null;
-  goal: string | null;
-  ai_summary: string | null; // Raw JSON string from Claude
-  embedding_id: string | null;
-  event_count: number;
-}
 
 export interface UseMemoryDataReturn {
   // Events

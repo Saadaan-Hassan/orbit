@@ -3,7 +3,7 @@
 
 mod capture;
 
-use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
 use std::str::FromStr;
 
 // FastAPI subprocess management is only needed in dev mode.
@@ -107,25 +107,38 @@ fn main() {
             let sqlite_connect_options =
                 SqliteConnectOptions::from_str(&format!("sqlite:{}", orbit_database_file_path))
                     .expect("Failed to parse SQLite connection string")
-                    .create_if_missing(true);
+                    .create_if_missing(true)
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .synchronous(SqliteSynchronous::Normal)
+                    .busy_timeout(std::time::Duration::from_secs(5));
 
             sqlx::SqlitePool::connect_with(sqlite_connect_options).await
         })
         .expect("Failed to open SQLite connection pool");
 
-    // Ensure the events table exists so the clipboard monitor can write
-    // immediately without waiting for the backend to run first.
+    // Ensure the events table exists with the full schema so all capture
+    // modules can write immediately, before FastAPI runs create_all_tables().
+    // Must match database.py's DDL exactly — adding a column here requires
+    // a corresponding ALTER TABLE migration in _migrate_schema().
     tokio_runtime
         .block_on(async {
             sqlx::query(
                 "CREATE TABLE IF NOT EXISTS events (
-                    id          TEXT PRIMARY KEY,
-                    timestamp   INTEGER NOT NULL,
-                    type        TEXT NOT NULL,
-                    raw_content TEXT,
-                    app_name    TEXT,
-                    url         TEXT,
-                    source      TEXT NOT NULL
+                    id              TEXT PRIMARY KEY,
+                    timestamp       INTEGER NOT NULL,
+                    type            TEXT NOT NULL,
+                    raw_content     TEXT,
+                    app_name        TEXT,
+                    url             TEXT,
+                    source          TEXT NOT NULL,
+                    session_id      TEXT,
+                    category        TEXT,
+                    page_text       TEXT,
+                    link_target     TEXT,
+                    metadata        TEXT,
+                    file_path       TEXT,
+                    is_user_active  INTEGER,
+                    screen_text     TEXT
                 )",
             )
             .execute(&sqlx_connection_pool)

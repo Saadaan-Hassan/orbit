@@ -77,6 +77,12 @@ fn restart_app(app_handle: tauri::AppHandle) {
     app_handle.restart();
 }
 
+/// Exits the application cleanly. Used by the startup-failure error screen.
+#[tauri::command]
+fn quit_app(app_handle: tauri::AppHandle) {
+    app_handle.exit(0);
+}
+
 /// Writes ~/.orbit/onboarding_done to mark onboarding as complete.
 #[tauri::command]
 fn mark_onboarding_completed() {
@@ -442,6 +448,7 @@ where
             get_onboarding_completed,
             mark_onboarding_completed,
             restart_app,
+            quit_app,
             position_window,
             check_browser_automation_permission,
             trigger_browser_automation_prompt,

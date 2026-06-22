@@ -1,7 +1,7 @@
 use chrono::Utc;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
-use std::process::Command;
+use tokio::process::Command as TokioCommand;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
@@ -19,12 +19,12 @@ use uuid::Uuid;
 /// already running at startup is treated as a baseline, not a "just launched"
 /// event.
 pub async fn start_app_lifecycle_monitor(sqlx_connection_pool: SqlitePool) {
-    let mut previously_running_app_names = get_running_app_names();
+    let mut previously_running_app_names = get_running_app_names().await;
 
     loop {
         sleep(Duration::from_secs(10)).await;
 
-        let currently_running_app_names = get_running_app_names();
+        let currently_running_app_names = get_running_app_names().await;
 
         // Apps present now but absent before = launched since last poll.
         for app_name in currently_running_app_names.difference(&previously_running_app_names) {
@@ -74,11 +74,17 @@ async fn write_app_lifecycle_event(pool: &SqlitePool, app_name: &str, action: &s
 /// Returns the set of currently running application process names by querying
 /// System Events via osascript. Returns an empty set on any failure — the
 /// next poll will retry automatically.
-fn get_running_app_names() -> HashSet<String> {
-    let osascript_output = Command::new("osascript").args([
-        "-e",
-        "tell application \"System Events\" to get name of every application process",
-    ]).output();
+///
+/// Uses tokio::process::Command so the 200–800 ms osascript round-trip does
+/// not block a tokio worker thread.
+async fn get_running_app_names() -> HashSet<String> {
+    let osascript_output = TokioCommand::new("osascript")
+        .args([
+            "-e",
+            "tell application \"System Events\" to get name of every application process",
+        ])
+        .output()
+        .await;
 
     match osascript_output {
         Ok(output) if output.status.success() => {
@@ -90,7 +96,12 @@ fn get_running_app_names() -> HashSet<String> {
                 // AppleScript lists are returned as comma-space-separated strings.
                 trimmed
                     .split(", ")
-                    .filter(|name| !name.is_empty())
+                    .filter(|name| {
+                        !name.is_empty()
+                            && *name != "missing value"
+                            && !name.starts_with("com.apple.")
+                            && !name.contains("WebKit")
+                    })
                     .map(|name| name.to_string())
                     .collect()
             }

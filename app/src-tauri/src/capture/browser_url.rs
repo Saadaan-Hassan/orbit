@@ -1,9 +1,9 @@
 use chrono::Utc;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+use tokio::process::Command as TokioCommand;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
@@ -184,7 +184,7 @@ pub async fn start_native_browser_url_monitor(sqlx_connection_pool: SqlitePool) 
         }
 
         // Only proceed when a known browser is the active application.
-        let frontmost_app_name = match get_frontmost_app_name() {
+        let frontmost_app_name = match get_frontmost_app_name().await {
             Some(name) => name,
             None => continue,
         };
@@ -202,7 +202,7 @@ pub async fn start_native_browser_url_monitor(sqlx_connection_pool: SqlitePool) 
         // when the user eventually grants Automation permission.
         let active_tab_script = build_active_tab_script(browser_name);
         let (script_stdout, script_stderr) =
-            run_osascript_capturing_output(&active_tab_script);
+            run_osascript_capturing_output(&active_tab_script).await;
 
         // Detect Automation permission denial (-1743). Log the first occurrence
         // only; subsequent denials are tracked via BROWSER_AUTOMATION_DENIED
@@ -322,11 +322,12 @@ fn build_active_tab_script(browser_name: &str) -> String {
 ///
 /// Uses the same Finder-based approach as window.rs. Requires no special
 /// permissions — not Accessibility, not Automation.
-fn get_frontmost_app_name() -> Option<String> {
+async fn get_frontmost_app_name() -> Option<String> {
     let (stdout, _stderr) = run_osascript_capturing_output(
         "tell application \"Finder\" to return name of \
          (info for (path to frontmost application))",
-    );
+    )
+    .await;
     stdout
 }
 
@@ -335,13 +336,17 @@ fn get_frontmost_app_name() -> Option<String> {
 /// Both streams are captured separately so callers can distinguish an
 /// Automation permission denial (in stderr with error code -1743) from an
 /// ordinary empty result (stdout empty, no stderr error).
-fn run_osascript_capturing_output(
+///
+/// Uses tokio::process::Command so the osascript subprocess is spawned
+/// without blocking a tokio worker thread during the OS round-trip.
+async fn run_osascript_capturing_output(
     applescript_expression: &str,
 ) -> (Option<String>, String) {
-    let command_result = Command::new("osascript")
+    let command_result = TokioCommand::new("osascript")
         .arg("-e")
         .arg(applescript_expression)
-        .output();
+        .output()
+        .await;
 
     match command_result {
         Ok(output) => {

@@ -105,7 +105,7 @@ function AccessibilityStep({
     <div className="flex flex-col gap-5 px-2">
       <div className="flex flex-col gap-1.5">
         <h2 className="text-lg font-bold text-zinc-900 dark:text-white tracking-tight">
-          Allow Accessibility Access
+          Let Orbit see which app you're using
         </h2>
         <p className="text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed font-light">
           Orbit needs this permission to know which app you're using and what
@@ -143,7 +143,7 @@ function AccessibilityStep({
           </p>
           <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-relaxed">
             {hasPermission
-              ? "Orbit can now track your active apps and windows."
+              ? "Orbit can now notice which app you switch to."
               : "Orbit cannot remember your workflow without this permission."}
           </p>
         </div>
@@ -357,51 +357,73 @@ function BrowserAutomationStep({
   );
 }
 
-// ─── Step 3 — Chrome Extension (optional) ────────────────────────────────────
+// ─── Step 3 — Chrome Extension (coming soon) ─────────────────────────────────
 function ChromeExtensionStep({ onNext }: { onNext: () => void }) {
+  const [showManualInstructions, setShowManualInstructions] = useState(false);
+
   return (
     <div className="flex flex-col gap-5 px-2">
       <div className="flex flex-col gap-1.5">
         <h2 className="text-lg font-bold text-zinc-900 dark:text-white tracking-tight">
-          Want deeper memory?{" "}
-          <span className="font-normal text-zinc-400 dark:text-zinc-500">(optional)</span>
+          Browser extension{" "}
+          <span className="font-normal text-zinc-400 dark:text-zinc-500">(coming soon)</span>
         </h2>
         <p className="text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed font-light">
-          The browser extension lets Orbit remember the actual content of
-          articles you read and what you search for — not just the page address.
-          It's optional. You can always add it later.
+          For even deeper memory — the content of articles you read and searches
+          you do — install the Orbit Chrome extension. We'll notify you when
+          it's available on the Web Store.
         </p>
       </div>
 
-      <div className="rounded-2xl bg-zinc-50 dark:bg-zinc-900/50 p-4 flex flex-col gap-3">
-        <p className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">How to install</p>
-        {[
-          "Open Chrome and go to chrome://extensions",
-          "Enable Developer Mode (top-right toggle)",
-          "Click Load Unpacked and select the Orbit extension folder",
-        ].map((step, i) => (
-          <div key={step} className="flex items-start gap-2.5">
-            <span className="text-[10px] font-bold text-zinc-400 dark:text-zinc-600 w-4 h-4 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center shrink-0 mt-0.5">
-              {i + 1}
-            </span>
-            <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">{step}</p>
+      {/* Collapsible manual install instructions for technical users */}
+      <div className="rounded-2xl bg-zinc-50 dark:bg-zinc-900/50 overflow-hidden">
+        <button
+          onClick={() => setShowManualInstructions((prev) => !prev)}
+          className="w-full flex items-center justify-between px-4 py-3 text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors cursor-pointer"
+        >
+          <span>Already have it?</span>
+          <svg
+            viewBox="0 0 16 16"
+            width="12"
+            height="12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={`transition-transform ${showManualInstructions ? "rotate-180" : ""}`}
+          >
+            <polyline points="4 6 8 10 12 6" />
+          </svg>
+        </button>
+
+        {showManualInstructions && (
+          <div className="px-4 pb-4 flex flex-col gap-3 border-t border-zinc-100 dark:border-zinc-800 pt-3">
+            <p className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+              Manual install
+            </p>
+            {[
+              "Open Chrome and go to chrome://extensions",
+              "Enable Developer Mode (top-right toggle)",
+              "Click Load Unpacked and select the Orbit extension folder",
+            ].map((step, i) => (
+              <div key={step} className="flex items-start gap-2.5">
+                <span className="text-[10px] font-bold text-zinc-400 dark:text-zinc-600 w-4 h-4 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center shrink-0 mt-0.5">
+                  {i + 1}
+                </span>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">{step}</p>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
 
       <div className="flex flex-col gap-2 mt-1">
-        {/* Skip is the prominent CTA — the extension is optional */}
         <button
           onClick={onNext}
           className="w-full py-3 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-sm font-semibold hover:opacity-90 transition-all cursor-pointer"
         >
-          Skip for now
-        </button>
-        <button
-          onClick={onNext}
-          className="w-full py-2.5 rounded-xl text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-all cursor-pointer"
-        >
-          Get Extension →
+          Continue →
         </button>
       </div>
     </div>
@@ -462,6 +484,20 @@ function WhatToExpectStep({ onFinish }: { onFinish: () => void }) {
           <div>
             <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">Pause anytime</p>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-relaxed">Need privacy? Pause memory capture from the menu bar whenever you want.</p>
+          </div>
+        </div>
+
+        {/* Give it time */}
+        <div className="flex items-start gap-3.5 p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-900/50">
+          <span className="mt-0.5 shrink-0 text-zinc-500 dark:text-zinc-400">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          </span>
+          <div>
+            <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">Give it 30 minutes</p>
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-relaxed">Ask me anything after 30 minutes of normal use — I need time to build your first summary.</p>
           </div>
         </div>
       </div>

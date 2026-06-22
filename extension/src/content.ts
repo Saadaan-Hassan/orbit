@@ -290,6 +290,16 @@ document.addEventListener("click", (event: MouseEvent) => {
   const href = anchorElement.href;
   if (!href || href.startsWith("javascript:")) return;
 
+  // Skip intra-page fragment jumps (#section links). These are scroll events,
+  // not navigations — capturing them produces noise with no recall value.
+  if (
+    anchorElement.hash &&
+    anchorElement.pathname === window.location.pathname &&
+    anchorElement.hostname === window.location.hostname
+  ) {
+    return;
+  }
+
   const linkText = anchorElement.textContent ?? "";
   sendLinkClick(href, linkText);
 });

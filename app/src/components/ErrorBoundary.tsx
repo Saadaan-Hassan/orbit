@@ -53,7 +53,7 @@ export class ErrorBoundary extends React.Component<
               Orbit ran into an issue
             </h1>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed font-light">
-              Try restarting the app. If this keeps happening, please let us know.
+              Try restarting the app. If this keeps happening, visit orbit.app for help.
             </p>
           </div>
 

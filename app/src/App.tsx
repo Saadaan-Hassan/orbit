@@ -11,6 +11,7 @@ import { PrivacyPanel } from "./components/PrivacyPanel";
 import { RecallSearch } from "./components/RecallSearch";
 import { useOnboarding } from "./hooks/useOnboarding";
 import { useUpdater } from "./hooks/useUpdater";
+import { useWindowPosition } from "./hooks/useWindowPosition";
 
 type ActivePanel = "chat" | "memory" | "privacy";
 
@@ -19,7 +20,16 @@ export default function App() {
   const [isCollapsed, setIsCollapsed] = useState(true);
   const isCollapsedRef = useRef(true);
   const [backendStatus, setBackendStatus] = useState<"unknown" | "unavailable" | "ready">("unknown");
-  const { isCompleted: onboardingCompleted, isLoading: onboardingLoading, completeOnboarding } = useOnboarding();
+  const [startupErrored, setStartupErrored] = useState(false);
+  const [accessibilityBannerDismissed, setAccessibilityBannerDismissed] = useState(false);
+  const { positionWindow } = useWindowPosition();
+  const {
+    isCompleted: onboardingCompleted,
+    isLoading: onboardingLoading,
+    completeOnboarding,
+    hasAccessibilityPermission,
+    checkAccessibilityPermission,
+  } = useOnboarding();
 
   // Sync ref to avoid closure issues in listeners
   useEffect(() => {
@@ -29,6 +39,22 @@ export default function App() {
   // Check for updates
   useUpdater();
 
+  // Transition to a hard error screen if the backend hasn't responded within 15 s.
+  // Cancels immediately if backendStatus reaches "ready" before the timer fires.
+  useEffect(() => {
+    if (backendStatus === "ready") return;
+    const timeout = setTimeout(() => setStartupErrored(true), 15_000);
+    return () => clearTimeout(timeout);
+  }, [backendStatus]);
+
+  // Poll for accessibility permission every 5 s while the banner is visible so
+  // it auto-dismisses when the user grants the permission from System Settings.
+  useEffect(() => {
+    if (!onboardingCompleted || hasAccessibilityPermission || accessibilityBannerDismissed) return;
+    const interval = setInterval(() => { checkAccessibilityPermission(); }, 5_000);
+    return () => clearInterval(interval);
+  }, [onboardingCompleted, hasAccessibilityPermission, accessibilityBannerDismissed, checkAccessibilityPermission]);
+
   // Resize Tauri window helper
   const setCollapsedState = async (collapsed: boolean) => {
     setIsCollapsed(collapsed);
@@ -37,11 +63,11 @@ export default function App() {
       if (collapsed) {
         // Pill mode size: compact capsule
         await appWindow.setSize(new LogicalSize(230, 60));
-        await invoke("position_window", { mode: "collapsed" });
+        await positionWindow("collapsed");
       } else {
         // Expanded panel size
         await appWindow.setSize(new LogicalSize(500, 650));
-        await invoke("position_window", { mode: "expanded" });
+        await positionWindow("expanded");
       }
     } catch (err) {
       console.error("Failed to resize/position Tauri window:", err);
@@ -100,6 +126,7 @@ export default function App() {
     // Listen for backend health events emitted by the Rust startup probe
     const unlistenUnavailablePromise = listen("backend-unavailable", () => {
       setBackendStatus("unavailable");
+      setStartupErrored(true);
     });
     const unlistenReadyPromise = listen("backend-ready", () => {
       setBackendStatus("ready");
@@ -143,7 +170,7 @@ export default function App() {
     if (!onboardingLoading && !onboardingCompleted) {
       const appWindow = getCurrentWindow();
       appWindow.setSize(new LogicalSize(500, 650))
-        .then(() => invoke("position_window", { mode: "center" }))
+        .then(() => positionWindow("center"))
         .catch((err) => console.error("Failed to center onboarding window:", err));
     }
   }, [onboardingLoading, onboardingCompleted]);
@@ -153,7 +180,7 @@ export default function App() {
     if (backendStatus === "unavailable") {
       const appWindow = getCurrentWindow();
       appWindow.setSize(new LogicalSize(500, 650))
-        .then(() => invoke("position_window", { mode: "center" }))
+        .then(() => positionWindow("center"))
         .catch((err) => console.error("Failed to center startup window:", err));
     }
   }, [backendStatus]);
@@ -165,9 +192,41 @@ export default function App() {
     }
   }, [backendStatus, onboardingCompleted]);
 
-  // Show a full-screen message while the FastAPI backend is starting up.
-  // Auto-dismisses once the health poll succeeds (backendStatus → "ready").
+  // Backend startup screens — spinner while waiting, hard error after 15 s.
   if (backendStatus !== "ready") {
+    if (startupErrored) {
+      return (
+        <ErrorBoundary>
+          <div className="fixed inset-0 flex items-center justify-center bg-white dark:bg-black p-6 select-none">
+            <div className="flex flex-col items-center gap-6 text-center max-w-[280px]">
+              <div className="relative w-16 h-16 rounded-2xl bg-zinc-100 dark:bg-zinc-900 flex items-center justify-center shadow-lg overflow-hidden p-2.5">
+                <img
+                  src="/logo.png"
+                  className="w-full h-full object-contain select-none pointer-events-none opacity-50"
+                  draggable="false"
+                  alt="Orbit Logo"
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <h1 className="text-xl font-bold text-zinc-900 dark:text-white tracking-tight">
+                  Orbit couldn't start
+                </h1>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed font-light">
+                  Try quitting and reopening the app. If this keeps happening, restart your computer.
+                </p>
+              </div>
+              <button
+                onClick={() => invoke("quit_app")}
+                className="w-full py-3 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-sm font-semibold hover:opacity-90 transition-all cursor-pointer"
+              >
+                Quit Orbit
+              </button>
+            </div>
+          </div>
+        </ErrorBoundary>
+      );
+    }
+
     return (
       <ErrorBoundary>
         <div className="fixed inset-0 flex items-center justify-center bg-white dark:bg-black p-6 select-none">
@@ -180,7 +239,6 @@ export default function App() {
                 draggable="false"
                 alt="Orbit Logo"
               />
-              {/* Subtle spinning glow/border effect around the logo */}
               <div className="absolute inset-0 rounded-2xl border border-zinc-400/20 dark:border-zinc-800/50 pointer-events-none" />
             </div>
 
@@ -351,6 +409,31 @@ export default function App() {
               </svg>
             </button>
           </header>
+
+          {/* Accessibility permission banner — shown until granted or dismissed */}
+          {onboardingCompleted && !hasAccessibilityPermission && !accessibilityBannerDismissed && (
+            <div className="flex items-center justify-between gap-2 px-4 py-2 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-100 dark:border-amber-800/30 shrink-0">
+              <p className="text-[11px] text-amber-700 dark:text-amber-400 font-medium leading-tight flex-1 min-w-0">
+                Orbit needs one permission to start learning →
+              </p>
+              <button
+                onClick={() => invoke("open_accessibility_system_settings")}
+                className="shrink-0 text-[11px] font-semibold text-amber-700 dark:text-amber-400 underline underline-offset-2 cursor-pointer hover:opacity-70 transition-opacity"
+              >
+                Open Settings
+              </button>
+              <button
+                onClick={() => setAccessibilityBannerDismissed(true)}
+                className="shrink-0 p-0.5 text-amber-500 dark:text-amber-600 hover:opacity-70 transition-opacity cursor-pointer"
+                aria-label="Dismiss"
+              >
+                <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                  <line x1="3" y1="3" x2="13" y2="13" />
+                  <line x1="13" y1="3" x2="3" y2="13" />
+                </svg>
+              </button>
+            </div>
+          )}
 
           {/* Content Area */}
           <div className="flex-1 overflow-hidden p-4 bg-white dark:bg-black flex flex-col min-h-0">

@@ -88,7 +88,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.22.1" },
-    { name = "apscheduler", specifier = ">=3.10" },
+    { name = "apscheduler", specifier = ">=3.10,<4.0" },
     { name = "fastapi", specifier = ">=0.136.3" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "posthog", specifier = ">=7.18.0" },

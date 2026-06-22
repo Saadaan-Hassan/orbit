@@ -29,13 +29,24 @@ async def _migrate_schema() -> None:
       next INSERT/UPDATE via the triggers recreated here.
     """
     async with _async_engine.begin() as connection:
-        # Add screen_text to events if this is an existing database.
-        try:
-            await connection.execute(
-                text("ALTER TABLE events ADD COLUMN screen_text TEXT")
-            )
-        except Exception:
-            pass  # Column already present — ALTER TABLE fails on duplicates.
+        # Belt-and-suspenders: add any columns that were missing from the
+        # initial 7-column Rust DDL in main.rs (Phase 1–2.9 additions).
+        # Each ALTER TABLE is wrapped individually so a pre-existing column
+        # is a silent no-op rather than aborting the whole migration block.
+        for _column_ddl in [
+            "ALTER TABLE events ADD COLUMN session_id TEXT",
+            "ALTER TABLE events ADD COLUMN category TEXT",
+            "ALTER TABLE events ADD COLUMN page_text TEXT",
+            "ALTER TABLE events ADD COLUMN link_target TEXT",
+            "ALTER TABLE events ADD COLUMN metadata TEXT",
+            "ALTER TABLE events ADD COLUMN file_path TEXT",
+            "ALTER TABLE events ADD COLUMN is_user_active INTEGER",
+            "ALTER TABLE events ADD COLUMN screen_text TEXT",
+        ]:
+            try:
+                await connection.execute(text(_column_ddl))
+            except Exception:
+                pass  # Column already present — ALTER TABLE fails on duplicates.
 
         # Rebuild FTS5 if screen_text is not yet in the index.
         # PRAGMA table_info returns one row per column; we collect the names.
@@ -63,6 +74,15 @@ async def create_all_tables() -> None:
     await _migrate_schema()
 
     async with _async_engine.begin() as connection:
+        # WAL mode allows concurrent readers during writes and eliminates the
+        # exclusive-lock contention between the 7 Rust capture tasks and FastAPI.
+        # synchronous=NORMAL is safe under WAL (fsync on checkpoint, not every
+        # write). cache_size and temp_store reduce disk I/O on long sessions.
+        await connection.execute(text("PRAGMA journal_mode = WAL"))
+        await connection.execute(text("PRAGMA synchronous = NORMAL"))
+        await connection.execute(text("PRAGMA cache_size = -64000"))
+        await connection.execute(text("PRAGMA temp_store = MEMORY"))
+
         await connection.execute(text("""
             CREATE TABLE IF NOT EXISTS events (
                 id             TEXT PRIMARY KEY,
@@ -136,6 +156,22 @@ async def create_all_tables() -> None:
             ON events(url, timestamp)
         """))
 
+        # The scheduler's primary query filters on timestamp and session_id;
+        # recall filters on type. Without these, every 30-minute scheduler run
+        # and every recall query performs a full table scan.
+        await connection.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_events_timestamp
+            ON events(timestamp)
+        """))
+        await connection.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_events_session_id
+            ON events(session_id)
+        """))
+        await connection.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_events_type_timestamp
+            ON events(type, timestamp)
+        """))
+
         await connection.execute(text("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id            TEXT PRIMARY KEY,
@@ -148,11 +184,21 @@ async def create_all_tables() -> None:
                 next_step     TEXT,
                 blockers      TEXT,
                 last_action   TEXT,
-                key_resources TEXT,
-                topics        TEXT,
-                embedding_id  TEXT
+                key_resources  TEXT,
+                topics         TEXT,
+                active_minutes INTEGER,
+                category       TEXT,
+                embedding_id   TEXT
             )
         """))
+
+        # GET /memory/sessions and the scheduler's session-lookup queries both
+        # ORDER BY start_time DESC. Without this index SQLite sorts the full table.
+        await connection.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_sessions_start_time
+            ON sessions(start_time)
+        """))
+
         await connection.execute(text("""
             CREATE TABLE IF NOT EXISTS memory_objects (
                 id           TEXT PRIMARY KEY,
@@ -273,6 +319,7 @@ async def create_all_tables() -> None:
 
 
 _DEFAULT_EXCLUDED_APPS: list[str] = [
+    "Orbit",              # suppress screen_content noise from Orbit's own UI
     "1Password",
     "Bitwarden",
     "Keychain Access",

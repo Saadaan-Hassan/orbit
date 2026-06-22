@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Orbit browser activity capture",
   "permissions": ["tabs", "activeTab", "storage"],
+  "host_permissions": ["http://localhost/*"],
   "background": {
     "service_worker": "src/background.ts",
     "type": "module"

@@ -196,7 +196,7 @@ function CaptureStatusSection({
           </span>
           <div>
             <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-              {isCapturing ? "Active Logging" : "Paused"}
+              {isCapturing ? "Orbit is watching" : "Paused"}
             </p>
             {!isCapturing && (
               <p className="text-[10px] text-zinc-400 dark:text-zinc-500 mt-0.5 font-medium leading-none">
@@ -473,7 +473,7 @@ function BrowserTrackingSection({
       {/* Enable / disable toggle */}
       <div className="flex items-center justify-between px-3.5 py-2.5 bg-zinc-50/20 dark:bg-zinc-900/10 rounded-2xl">
         <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-          Track browser tabs (native)
+          Track browser tabs
         </span>
         <button
           onClick={handleToggle}
@@ -683,7 +683,7 @@ function DangerZoneSection({ isWiping, onWipe }: DangerZoneSectionProps) {
           <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">Wipe All Memory</p>
             <p className="text-[10px] text-zinc-400 dark:text-zinc-500 font-light leading-relaxed mt-0.5">
-              Permanently deletes all events, sessions, and database search histories. This cannot be undone.
+              Permanently deletes everything Orbit has learned — your captured activity, all summaries, and your search history. This cannot be undone.
             </p>
           </div>
 

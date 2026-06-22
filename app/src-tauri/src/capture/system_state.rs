@@ -1,19 +1,21 @@
 use chrono::Utc;
 use sqlx::SqlitePool;
-use tokio::sync::mpsc;
+use std::time::{Duration, SystemTime};
+use tokio::time::sleep;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Subscribes to macOS system state notifications (screen lock / unlock /
-/// sleep / wake) and writes a `system_state` event row to SQLite for each
-/// transition.
+/// Polls screen lock state every 5 seconds via CGSessionCopyCurrentDictionary
+/// and detects sleep/wake via wall-clock time jumps.
 ///
-/// macOS-only: on other platforms this function returns immediately without
-/// doing anything. macOS implementation uses Darwin's `notify.h` C API
-/// (`notify_register_file_descriptor`) — no Objective-C or new crates needed.
+/// Replaces the previous Darwin notify_register_file_descriptor approach which
+/// required a CoreFoundation run loop on the registering thread — a requirement
+/// not met in a tokio async context, causing zero events in practice.
+///
+/// macOS-only: on other platforms this function returns immediately.
 pub async fn start_system_state_monitor(sqlx_connection_pool: SqlitePool) {
     #[cfg(target_os = "macos")]
     run_macos_system_state_monitor(sqlx_connection_pool).await;
@@ -26,140 +28,165 @@ pub async fn start_system_state_monitor(sqlx_connection_pool: SqlitePool) {
 // macOS implementation
 // ---------------------------------------------------------------------------
 
-/// Four Darwin notification names and the state string each maps to.
-#[cfg(target_os = "macos")]
-const NOTIFICATIONS: &[(&str, &str)] = &[
-    // Null-terminated so the pointer can be passed directly to the C API.
-    ("com.apple.screenIsLocked\0", "lock"),
-    ("com.apple.screenIsUnlocked\0", "unlock"),
-    // willsleep fires before the system suspends; we try but may not always
-    // receive it in time since the process can be suspended immediately after.
-    ("com.apple.system.willsleep\0", "sleep"),
-    // didwake fires reliably after the system resumes from sleep.
-    ("com.apple.system.didwake\0", "wake"),
-];
-
 #[cfg(target_os = "macos")]
 async fn run_macos_system_state_monitor(pool: SqlitePool) {
-    // Darwin low-level notification C API (notify.h in libSystem, always linked
-    // on macOS — no #[link] attribute or new crate required).
-    //
-    // notify_register_file_descriptor() creates a pipe internally and returns
-    // the read end. The kernel writes 4 bytes (the notification token) every
-    // time the named Darwin notification fires. A blocking read() on this fd
-    // is the idiomatic way to wait for the next notification.
+    let mut previous_locked: Option<bool> = None;
+
+    loop {
+        // Capture wall clock time before sleeping so we can detect if the
+        // system suspended during the sleep interval.  SystemTime uses the
+        // real-time clock which advances during system sleep, unlike
+        // std::time::Instant / tokio::time::Instant which use mach_absolute_time
+        // and stop when the machine is suspended.
+        let wall_before = SystemTime::now();
+
+        sleep(Duration::from_secs(5)).await;
+
+        // Sleep/wake detection: if more than 30 s of wall time passed while we
+        // were sleeping for 5 s, the machine was suspended and just woke.
+        if let Ok(wall_elapsed) = SystemTime::now().duration_since(wall_before) {
+            if wall_elapsed.as_secs() > 30 {
+                let gap_secs = wall_elapsed.as_secs();
+                write_system_state_event(
+                    &pool,
+                    "wake",
+                    &format!(r#"{{"state":"wake","gap_seconds":{gap_secs}}}"#),
+                )
+                .await;
+            }
+        }
+
+        // Lock/unlock detection: CGSessionCopyCurrentDictionary is a
+        // CoreGraphics C call.  Run it in spawn_blocking to avoid stalling
+        // the async runtime (same pattern as screen_content.rs AX calls).
+        let now_locked = tokio::task::spawn_blocking(read_screen_lock_state)
+            .await
+            .unwrap_or(false);
+
+        match previous_locked {
+            None => {
+                // First poll — record initial state without emitting an event.
+                previous_locked = Some(now_locked);
+            }
+            Some(was_locked) if was_locked != now_locked => {
+                let state = if now_locked { "lock" } else { "unlock" };
+                write_system_state_event(
+                    &pool,
+                    state,
+                    &format!(r#"{{"state":"{state}"}}"#),
+                )
+                .await;
+                previous_locked = Some(now_locked);
+            }
+            _ => {} // No change
+        }
+    }
+}
+
+/// Reads the screen lock state from the CoreGraphics session dictionary.
+///
+/// CGSessionCopyCurrentDictionary() returns a CFDictionary containing session
+/// metadata including "CGSSessionScreenIsLocked" (CFBoolean).  All CF memory
+/// management is manual here since we use raw extern "C" bindings rather than
+/// the core-foundation crate wrappers, keeping this self-contained.
+///
+/// Returns false on any failure (dictioary unavailable, key absent, etc.).
+#[cfg(target_os = "macos")]
+fn read_screen_lock_state() -> bool {
+    use std::ffi::c_void;
+
+    // Raw CF opaque pointer aliases.  CFDictionary, CFString, CFBoolean, and
+    // CFType are all just pointers to opaque C structs on macOS.
+    // Declared as *mut to match screen_content.rs and avoid clashing_extern_declarations.
+    type CFTypeRef = *mut c_void;
+    type CFDictionaryRef = *mut c_void;
+    type CFStringRef = *mut c_void;
+
+    // kCFStringEncodingUTF8 = 0x08000100 (from CFString.h).
+    const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
-        fn notify_register_file_descriptor(
-            name: *const std::ffi::c_char,
-            fd: *mut i32,
-            flags: i32,
-            out_token: *mut i32,
-        ) -> i32;
-
-        fn read(fd: i32, buf: *mut std::ffi::c_void, count: usize) -> isize;
-
-        // macOS errno accessor (replaces the POSIX errno macro which is not a
-        // simple global on macOS — it's a function returning a thread-local ptr).
-        fn __error() -> *mut i32;
+        // Returns a +1-retained CFDictionary with session information.
+        // Caller must CFRelease.
+        fn CGSessionCopyCurrentDictionary() -> CFDictionaryRef;
     }
 
-    // POSIX EINTR constant on macOS/Darwin.
-    const EINTR: i32 = 4;
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        // Returns the value for key, or NULL if absent.  Does NOT retain.
+        fn CFDictionaryGetValue(dict: CFDictionaryRef, key: CFTypeRef) -> CFTypeRef;
 
-    let (state_event_sender, mut state_event_receiver) =
-        mpsc::unbounded_channel::<&'static str>();
+        // Creates a +1-retained CFString from a C string.  Caller must CFRelease.
+        fn CFStringCreateWithCString(
+            alloc: *mut c_void,
+            c_str: *const i8,
+            encoding: u32,
+        ) -> CFStringRef;
 
-    for &(notification_name, state_string) in NOTIFICATIONS {
-        let mut notify_fd: i32 = -1;
-        let mut notify_token: i32 = 0;
+        // Extracts the Boolean value from a CFBoolean object.
+        fn CFBooleanGetValue(boolean: CFTypeRef) -> bool;
 
-        let register_result = unsafe {
-            notify_register_file_descriptor(
-                notification_name.as_ptr() as *const std::ffi::c_char,
-                &mut notify_fd,
-                0,
-                &mut notify_token,
-            )
+        fn CFRelease(cf: CFTypeRef);
+    }
+
+    unsafe {
+        let dict = CGSessionCopyCurrentDictionary();
+        if dict.is_null() {
+            return false;
+        }
+
+        // Build a CFString for the key name.
+        let key_cstr = b"CGSSessionScreenIsLocked\0";
+        let key_cf = CFStringCreateWithCString(
+            std::ptr::null_mut(),
+            key_cstr.as_ptr() as *const i8,
+            CF_STRING_ENCODING_UTF8,
+        );
+        if key_cf.is_null() {
+            CFRelease(dict);
+            return false;
+        }
+
+        // Look up the value.  Returns NULL if the key is absent (screen
+        // unlocked — the key is only present when the screen is locked).
+        let value = CFDictionaryGetValue(dict, key_cf as CFTypeRef);
+
+        let locked = if value.is_null() {
+            false
+        } else {
+            CFBooleanGetValue(value)
         };
 
-        if register_result != 0 || notify_fd < 0 {
-            eprintln!(
-                "System state monitor: failed to register Darwin notification '{}' \
-                 (result={register_result})",
-                notification_name.trim_end_matches('\0')
-            );
-            continue;
-        }
-
-        // A dedicated blocking OS thread per fd — not a tokio task — because
-        // a synchronous blocking read() on these pipe-based fds is required.
-        // State changes arrive infrequently (lock/sleep/wake) so the thread cost
-        // is negligible.
-        let sender_for_thread = state_event_sender.clone();
-        std::thread::spawn(move || {
-            let mut token_buffer = [0u8; 4];
-            loop {
-                let bytes_read = unsafe {
-                    read(
-                        notify_fd,
-                        token_buffer.as_mut_ptr() as *mut std::ffi::c_void,
-                        4,
-                    )
-                };
-
-                if bytes_read < 0 {
-                    let errno_value = unsafe { *__error() };
-                    if errno_value == EINTR {
-                        // Signal interrupted the read — retry.
-                        continue;
-                    }
-                    eprintln!(
-                        "System state monitor: read error on notify fd for '{}' \
-                         (errno={errno_value})",
-                        notification_name.trim_end_matches('\0')
-                    );
-                    break;
-                }
-
-                if bytes_read == 0 {
-                    // EOF — fd closed, stop this listener.
-                    break;
-                }
-
-                // Ignore send errors: they only occur when the receiver has been
-                // dropped, which means the monitor task is shutting down.
-                let _ = sender_for_thread.send(state_string);
-            }
-        });
+        CFRelease(key_cf as CFTypeRef);
+        CFRelease(dict);
+        locked
     }
+}
 
-    // Drop the original sender so the channel closes when all listener threads
-    // exit (i.e. when every cloned sender is dropped).
-    drop(state_event_sender);
+// ---------------------------------------------------------------------------
+// SQLite write helper
+// ---------------------------------------------------------------------------
 
-    // Async receive loop — write a SQLite event for each state transition.
-    while let Some(state_string) = state_event_receiver.recv().await {
-        let event_id = Uuid::new_v4().to_string();
-        let event_timestamp_milliseconds = Utc::now().timestamp_millis();
-        // state_string is always a short ASCII literal — inline JSON is safe.
-        let metadata_json = format!(r#"{{"state":"{}"}}"#, state_string);
+#[cfg(target_os = "macos")]
+async fn write_system_state_event(pool: &SqlitePool, state: &str, metadata_json: &str) {
+    let event_id = Uuid::new_v4().to_string();
+    let event_timestamp_milliseconds = Utc::now().timestamp_millis();
 
-        if let Err(database_error) = sqlx::query(
-            "INSERT INTO events \
-                 (id, timestamp, type, raw_content, app_name, url, source, metadata) \
-             VALUES (?, ?, 'system_state', ?, NULL, NULL, 'rust', ?)",
-        )
-        .bind(&event_id)
-        .bind(event_timestamp_milliseconds)
-        .bind(state_string)
-        .bind(&metadata_json)
-        .execute(&pool)
-        .await
-        {
-            eprintln!(
-                "System state monitor: failed to write '{state_string}' event \
-                 to SQLite: {database_error}"
-            );
-        }
+    if let Err(database_error) = sqlx::query(
+        "INSERT INTO events \
+             (id, timestamp, type, raw_content, app_name, url, source, metadata) \
+         VALUES (?, ?, 'system_state', ?, NULL, NULL, 'rust', ?)",
+    )
+    .bind(&event_id)
+    .bind(event_timestamp_milliseconds)
+    .bind(state)
+    .bind(metadata_json)
+    .execute(pool)
+    .await
+    {
+        eprintln!(
+            "System state monitor: failed to write '{state}' event to SQLite: {database_error}"
+        );
     }
 }

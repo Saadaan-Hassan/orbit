@@ -5,15 +5,10 @@ import { ConversationMessage } from "../types";
 // Older messages are dropped from the front to keep the token cost bounded.
 const MAX_MESSAGES = 8;
 
-type CaptureStatus = "capturing" | "paused";
-
 interface OrbitState {
   conversationHistory: ConversationMessage[];
   addMessage: (message: ConversationMessage) => void;
   clearConversation: () => void;
-
-  captureStatus: CaptureStatus;
-  setCaptureStatus: (status: CaptureStatus) => void;
 }
 
 export const useOrbitStore = create<OrbitState>((set) => ({
@@ -30,7 +25,4 @@ export const useOrbitStore = create<OrbitState>((set) => ({
     }),
 
   clearConversation: () => set({ conversationHistory: [] }),
-
-  captureStatus: "capturing",
-  setCaptureStatus: (status) => set({ captureStatus: status }),
 }));

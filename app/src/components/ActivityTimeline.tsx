@@ -99,7 +99,7 @@ export function ActivityTimeline() {
   return (
     <div className="flex flex-col gap-2.5">
       <h3 className="text-[11px] uppercase font-bold tracking-wider text-zinc-400 dark:text-zinc-500 mb-1">
-        Recent Context
+        Your recent activity
       </h3>
 
       {isLoading && (
@@ -111,7 +111,9 @@ export function ActivityTimeline() {
       )}
 
       {!isLoading && !fetchError && captureEvents.length === 0 && (
-        <p className="text-xs text-zinc-400 dark:text-zinc-500 italic">No activity captured yet.</p>
+        <p className="text-xs text-zinc-400 dark:text-zinc-500 leading-relaxed">
+          Use your computer normally and I'll start building your timeline — usually takes a minute or two.
+        </p>
       )}
 
       <div className="flex flex-col gap-1 max-h-56 overflow-y-auto pr-1">

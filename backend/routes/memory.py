@@ -6,9 +6,9 @@ frontend never needs to load the full history into memory at once.
 """
 
 import logging
-from typing import Literal
+from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
 from database import _async_engine
@@ -23,12 +23,21 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+_VALID_EVENT_TYPES = {
+    "all", "clipboard", "window", "url", "page_content",
+    "search_query", "link_click", "file_activity", "system_state",
+    "app_lifecycle", "screen_content",
+}
+
+
 @router.get("/events")
 async def get_events_paginated(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    type: Literal["all", "clipboard", "window", "url"] = Query(default="all"),
+    type: Optional[str] = Query(default="all"),
 ) -> dict:
+    if type not in _VALID_EVENT_TYPES:
+        raise HTTPException(status_code=422, detail=f"Invalid event type: {type!r}")
     async with _async_engine.connect() as connection:
         # Build the optional WHERE clause once so both the data query and
         # the count query stay consistent with each other.
@@ -90,6 +99,13 @@ async def get_sessions_paginated(
                        s.project_name,
                        s.goal,
                        s.ai_summary,
+                       s.activity,
+                       s.next_step,
+                       s.blockers,
+                       s.last_action,
+                       s.key_resources,
+                       s.topics,
+                       s.active_minutes,
                        s.embedding_id,
                        COUNT(e.id) AS event_count
                 FROM   sessions s

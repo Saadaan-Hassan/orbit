@@ -51,8 +51,18 @@ type ReceivedContentMessage =
   | ReceivedSearchQuery
   | ReceivedLinkClick;
 
-// URL schemes that are browser-internal and should never be sent to Orbit.
-const BLOCKED_URL_PREFIXES = ["chrome://", "chrome-extension://", "about:", "edge://", "brave://"];
+// URL schemes that are browser-internal or local-filesystem and must never be
+// sent to Orbit. "file://" covers local HTML files; the extension:// variants
+// cover browser-internal extension pages across Chrome, Safari, and Chromium forks.
+const BLOCKED_URL_PREFIXES = [
+  "chrome://",
+  "chrome-extension://",
+  "safari-extension://",
+  "about:",
+  "edge://",
+  "brave://",
+  "file://",
+];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -131,11 +141,14 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, updatedTab) => {
 
 async function postToCaptureEndpoint(payload: Record<string, unknown>): Promise<void> {
   try {
-    await fetch(ORBIT_CAPTURE_ENDPOINT, {
+    const response = await fetch(ORBIT_CAPTURE_ENDPOINT, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify(payload),
     });
+    if (!response.ok) {
+      console.debug(`Orbit capture failed: ${response.status}`);
+    }
   } catch {
     // Orbit backend is not running — fail silently.
   }

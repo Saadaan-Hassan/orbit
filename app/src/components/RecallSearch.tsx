@@ -3,6 +3,20 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useRecall } from "../hooks/useRecall";
 
+const RECALL_RESPONSE_PROSE_CLASSES =
+  "prose prose-sm prose-zinc dark:prose-invert max-w-none " +
+  "prose-p:leading-relaxed prose-p:my-1.5 " +
+  "prose-headings:font-semibold prose-headings:my-2 " +
+  "prose-h1:text-base prose-h2:text-sm prose-h3:text-sm " +
+  "prose-strong:text-zinc-900 dark:prose-strong:text-zinc-100 " +
+  "prose-code:text-xs prose-code:bg-zinc-100 dark:prose-code:bg-zinc-800 " +
+  "prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:font-mono " +
+  "prose-code:before:content-none prose-code:after:content-none " +
+  "prose-pre:bg-zinc-100 dark:prose-pre:bg-zinc-800/80 prose-pre:rounded-lg prose-pre:overflow-x-auto " +
+  "prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 " +
+  "prose-hr:border-zinc-200 dark:prose-hr:border-zinc-700 prose-hr:my-3 " +
+  "prose-a:text-blue-600 dark:prose-a:text-blue-400";
+
 interface RecallSearchProps {
   children?: React.ReactNode;
 }
@@ -39,6 +53,17 @@ export function RecallSearch({ children }: RecallSearchProps) {
 
   const hasConversation = conversationHistory.length > 0;
 
+  const EXAMPLE_QUERIES = [
+    "What was I reading yesterday?",
+    "What code was I working on this morning?",
+    "What did I search for this week?",
+  ];
+
+  function handleChipClick(query: string): void {
+    setInputValue(query);
+    askOrbit(query);
+  }
+
   return (
     <div className="flex flex-col h-full min-h-0 select-none bg-white dark:bg-black">
       {/* ── Scrollable conversation area ──────────────────────────────────── */}
@@ -57,18 +82,7 @@ export function RecallSearch({ children }: RecallSearchProps) {
           ) : (
             <div key={index} className="flex justify-start">
               <div className="max-w-[95%] px-4 py-3 rounded-xl bg-zinc-50/50 dark:bg-zinc-900/30 select-text">
-                <div className="prose prose-sm prose-zinc dark:prose-invert max-w-none
-                  prose-p:leading-relaxed prose-p:my-1.5
-                  prose-headings:font-semibold prose-headings:my-2
-                  prose-h1:text-base prose-h2:text-sm prose-h3:text-sm
-                  prose-strong:text-zinc-900 dark:prose-strong:text-zinc-100
-                  prose-code:text-xs prose-code:bg-zinc-100 dark:prose-code:bg-zinc-800
-                  prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:font-mono
-                  prose-code:before:content-none prose-code:after:content-none
-                  prose-pre:bg-zinc-100 dark:prose-pre:bg-zinc-800/80 prose-pre:rounded-lg
-                  prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5
-                  prose-hr:border-zinc-200 dark:prose-hr:border-zinc-700 prose-hr:my-3
-                  prose-a:text-blue-600 dark:prose-a:text-blue-400">
+                <div className={RECALL_RESPONSE_PROSE_CLASSES}>
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
                     {message.content}
                   </ReactMarkdown>
@@ -95,18 +109,7 @@ export function RecallSearch({ children }: RecallSearchProps) {
         {isStreaming && currentResponse && (
           <div className="flex justify-start">
             <div className="max-w-[95%] px-4 py-3 rounded-xl bg-zinc-50/50 dark:bg-zinc-900/30 select-text">
-              <div className="prose prose-sm prose-zinc dark:prose-invert max-w-none
-                prose-p:leading-relaxed prose-p:my-1.5
-                prose-headings:font-semibold prose-headings:my-2
-                prose-h1:text-base prose-h2:text-sm prose-h3:text-sm
-                prose-strong:text-zinc-900 dark:prose-strong:text-zinc-100
-                prose-code:text-xs prose-code:bg-zinc-100 dark:prose-code:bg-zinc-800
-                prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:font-mono
-                prose-code:before:content-none prose-code:after:content-none
-                prose-pre:bg-zinc-100 dark:prose-pre:bg-zinc-800/80 prose-pre:rounded-lg
-                prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5
-                prose-hr:border-zinc-200 dark:prose-hr:border-zinc-700 prose-hr:my-3
-                prose-a:text-blue-600 dark:prose-a:text-blue-400">
+              <div className={RECALL_RESPONSE_PROSE_CLASSES}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {currentResponse}
                 </ReactMarkdown>
@@ -136,6 +139,21 @@ export function RecallSearch({ children }: RecallSearchProps) {
           >
             ↺ New conversation
           </button>
+        )}
+
+        {/* Example chips — only before the first query */}
+        {!hasConversation && !isStreaming && (
+          <div className="flex flex-wrap gap-1.5 pb-1">
+            {EXAMPLE_QUERIES.map((query) => (
+              <button
+                key={query}
+                onClick={() => handleChipClick(query)}
+                className="px-2.5 py-1.5 rounded-full bg-zinc-100 dark:bg-zinc-900 text-[11px] text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors cursor-pointer font-medium"
+              >
+                {query}
+              </button>
+            ))}
+          </div>
         )}
 
         <div className="relative flex items-center">

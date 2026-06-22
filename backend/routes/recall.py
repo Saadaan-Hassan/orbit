@@ -637,6 +637,17 @@ async def _stream_sse_recall(
                 )
             ]
 
+        # Exclude personal sessions from work-intent queries. Semantic
+        # similarity can surface leisure-browsing sessions alongside work
+        # sessions (e.g. a Netflix search embedding near a coding search).
+        # The category stored in the Qdrant payload matches the dominant
+        # Gemini category written by the scheduler at session-generation time.
+        if intent == "work":
+            semantic_matched_sessions = [
+                s for s in semantic_matched_sessions
+                if s.get("category") != "personal"
+            ]
+
         # Re-rank by combined semantic + recency score.
         semantic_matched_sessions = _rerank_sessions_by_combined_score(
             semantic_matched_sessions,
@@ -677,11 +688,13 @@ async def _stream_sse_recall(
         ):
             yield f"data: {json.dumps({'chunk': text_delta})}\n\n"
 
-    except (httpx.ConnectError, httpx.TimeoutException) as offline_error:
-        # Worker is unreachable — stream the local FTS5 results as plain text
-        # so the user can still see their recent activity while offline.
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as offline_error:
+        # Worker unreachable or returned 5xx (deploy, rate-limit, Anthropic outage).
+        # Stream the local FTS5 results as plain text so the user always gets
+        # something useful — a 503 from the Worker is treated the same as no
+        # network connection from the user's perspective.
         logger.warning(
-            "Recall: Worker unreachable (%s). Falling back to local FTS5 results.",
+            "Recall: Worker unavailable (%s). Falling back to local FTS5 results.",
             type(offline_error).__name__,
         )
         capture_analytics_event("recall_offline_fallback", {
@@ -707,8 +720,12 @@ from typing import AsyncGenerator  # noqa: E402  (placed after helper defs for r
 
 @router.post("/recall")
 async def recall(request: RecallRequest) -> StreamingResponse:
+    # Enforce the 4-turn (8-message) max server-side regardless of client behaviour.
+    # The frontend also caps at 4 turns, but a buggy or modified client must not
+    # be able to send unbounded history and inflate token costs.
+    conversation_history = (request.conversation_history or [])[-8:]
     return StreamingResponse(
-        _stream_sse_recall(request.query, request.conversation_history),
+        _stream_sse_recall(request.query, conversation_history),
         media_type="text/event-stream",
         headers={
             # Prevent any proxy or browser from buffering the SSE stream.
