@@ -14,6 +14,8 @@ from routes.feedback import router as feedback_router
 from routes.memory import router as memory_router
 from routes.privacy import router as privacy_router
 from routes.recall import router as recall_router
+from routes.projects import router as projects_router
+from routes.timeline import router as timeline_router
 from scheduler import create_session_scheduler
 from services.qdrant_service import initialize_qdrant_collection, _get_client as get_qdrant_client
 from services.analytics_service import capture_analytics_event
@@ -59,6 +61,8 @@ app.include_router(recall_router)
 app.include_router(privacy_router)
 app.include_router(memory_router)
 app.include_router(feedback_router)
+app.include_router(projects_router)
+app.include_router(timeline_router)
 
 
 @app.get("/health")

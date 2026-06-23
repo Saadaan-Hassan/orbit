@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useRecall } from "../hooks/useRecall";
+import { useOrbitStore } from "../store/orbitStore";
+import { ProjectCards } from "./ProjectCards";
 
 const RECALL_RESPONSE_PROSE_CLASSES =
   "prose prose-sm prose-zinc dark:prose-invert max-w-none " +
@@ -17,11 +19,7 @@ const RECALL_RESPONSE_PROSE_CLASSES =
   "prose-hr:border-zinc-200 dark:prose-hr:border-zinc-700 prose-hr:my-3 " +
   "prose-a:text-blue-600 dark:prose-a:text-blue-400";
 
-interface RecallSearchProps {
-  children?: React.ReactNode;
-}
-
-export function RecallSearch({ children }: RecallSearchProps) {
+export function RecallSearch() {
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -35,9 +33,21 @@ export function RecallSearch({ children }: RecallSearchProps) {
     errorMessage,
   } = useRecall();
 
+  const { pendingQuery, clearPendingQuery } = useOrbitStore();
+
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // When Timeline's "Ask Orbit about this" sets a pending query, submit it
+  // automatically and clear it so it doesn't fire again on the next render.
+  useEffect(() => {
+    if (pendingQuery && !isStreaming) {
+      const queryToSubmit = pendingQuery;
+      clearPendingQuery();
+      askOrbit(queryToSubmit);
+    }
+  }, [pendingQuery]);
 
   // Scroll to the bottom when new content arrives.
   useEffect(() => {
@@ -52,6 +62,8 @@ export function RecallSearch({ children }: RecallSearchProps) {
   }
 
   const hasConversation = conversationHistory.length > 0;
+  // True while the user has text in the input — used to fade out project cards.
+  const isTyping = inputValue.length > 0;
 
   const EXAMPLE_QUERIES = [
     "What was I reading yesterday?",
@@ -68,8 +80,23 @@ export function RecallSearch({ children }: RecallSearchProps) {
     <div className="flex flex-col h-full min-h-0 select-none bg-white dark:bg-black">
       {/* ── Scrollable conversation area ──────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-3 min-h-0 py-2">
-        {/* Show the timeline slot when there is no conversation yet */}
-        {!hasConversation && !isStreaming && children}
+        {/* Project cards dashboard — shown when no conversation has started.
+            Fades out as the user types; hidden entirely once a conversation exists. */}
+        {!hasConversation && !isStreaming && (
+          <ProjectCards
+            isVisible={!isTyping}
+            onPrefill={(query) => {
+              setInputValue(query);
+              inputRef.current?.focus();
+            }}
+            onSubmit={(query) => {
+              setInputValue("");
+              askOrbit(query);
+            }}
+          />
+        )}
+
+
 
         {/* Full conversation history rendered as a chat */}
         {conversationHistory.map((message, index) =>

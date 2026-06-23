@@ -9,6 +9,10 @@ interface OrbitState {
   conversationHistory: ConversationMessage[];
   addMessage: (message: ConversationMessage) => void;
   clearConversation: () => void;
+  // Set by Timeline "Ask Orbit about this" button; cleared by RecallSearch after submission.
+  pendingQuery: string | null;
+  setPendingQuery: (query: string) => void;
+  clearPendingQuery: () => void;
 }
 
 export const useOrbitStore = create<OrbitState>((set) => ({
@@ -25,4 +29,8 @@ export const useOrbitStore = create<OrbitState>((set) => ({
     }),
 
   clearConversation: () => set({ conversationHistory: [] }),
+
+  pendingQuery: null,
+  setPendingQuery: (query) => set({ pendingQuery: query }),
+  clearPendingQuery: () => set({ pendingQuery: null }),
 }));

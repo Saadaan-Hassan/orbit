@@ -374,11 +374,11 @@ function SessionRow({ session, onDelete }: SessionRowProps) {
         {/* Expanded detail — Phase 2.9 rich fields */}
         {isExpanded && hasRichContent && (
           <div className="bg-zinc-50/50 dark:bg-zinc-900/20 px-4 py-3 space-y-3 text-xs leading-relaxed">
-            {/* next_step is the product's core value — most prominent */}
+            {/* next_step shows where the user was, not what they should do */}
             {session.next_step && (
               <div className="bg-zinc-900 dark:bg-white rounded-xl px-3.5 py-2.5">
                 <p className="text-[9px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-1">
-                  Continue →
+                  Mid-way through
                 </p>
                 <p className="font-semibold text-white dark:text-zinc-950 leading-snug">
                   {session.next_step}

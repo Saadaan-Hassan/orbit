@@ -41,8 +41,10 @@ Rules:
 - Connect the dots. If the question relates to a previous session, say so:
   "This looks related to what you were debugging on Tuesday."
 - Keep it concise. One structured answer, not an essay.
-- If they seem to be resuming a task, proactively remind them where they
-  left off — even if they didn't explicitly ask.
+- If they seem to be resuming a task, describe where they were — what they
+  were mid-way through, what was left open, what state things were in when
+  they stopped. Do NOT prescribe what they should do next. Describe where
+  they were, even if they didn't explicitly ask.
 - Never use developer-specific language. Respond in plain language anyone
   can understand, adapted to the context of what the user was actually doing.
 - When the user asks about things they watched, read, or browsed for leisure,
@@ -450,7 +452,7 @@ def _build_context_block(
             if goal:
                 context_lines.append(f"    Goal: {goal}")
             if next_step:
-                context_lines.append(f"    Next step: {next_step}")
+                context_lines.append(f"    Where they left off: {next_step}")
             if last_action:
                 context_lines.append(f"    Left off: {last_action}")
             if blockers:

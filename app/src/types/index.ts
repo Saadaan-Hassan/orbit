@@ -1,3 +1,42 @@
+export interface TimelineSession {
+  id: string;
+  start_time: number;
+  end_time: number;
+  project_name: string | null;
+  goal: string | null;
+  ai_summary: string | null;
+  activity: string | null;
+  next_step: string | null;
+  blockers: string | null;
+  last_action: string | null;
+  key_resources: string | null;
+  topics: string | null;
+  active_minutes: number | null;
+  embedding_id: string | null;
+  category?: string | null;
+}
+
+export interface TimelineDayData {
+  sessions: TimelineSession[];
+  total_active_minutes: number;
+  total_duration_minutes: number;
+  project_count: number;
+}
+
+export interface ProjectCard {
+  project_name: string;
+  last_active_ms: number;
+  activity: string | null;
+  ai_summary: string | null;
+  weekly_active_minutes: number;
+  session_count: number;
+}
+
+export interface ProjectsData {
+  projects: ProjectCard[];
+  today_active_minutes: number;
+}
+
 export type ConversationMessage = {
   role: "user" | "assistant";
   content: string;

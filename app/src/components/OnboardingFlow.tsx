@@ -209,12 +209,10 @@ function AccessibilityStep({
 function BrowserAutomationStep({
   isGranted,
   onRequestAccess,
-  onOpenSettings,
   onNext,
 }: {
   isGranted: boolean;
   onRequestAccess: () => Promise<void>;
-  onOpenSettings: () => Promise<void>;
   onNext: () => void;
 }) {
   const [isWaiting, setIsWaiting] = useState(false);
@@ -521,7 +519,6 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
     checkAccessibilityPermission,
     openAccessibilitySettings,
     requestBrowserAutomation,
-    openAutomationSettings,
     completeOnboarding,
   } = useOnboarding();
 
@@ -569,7 +566,6 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
             <BrowserAutomationStep
               isGranted={browserAutomationGranted}
               onRequestAccess={requestBrowserAutomation}
-              onOpenSettings={openAutomationSettings}
               onNext={goToNextStep}
             />
           )}

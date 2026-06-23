@@ -480,7 +480,7 @@ fn position_window_on_active_monitor(window: &tauri::WebviewWindow, mode: Positi
     let scale_factor = window.scale_factor().unwrap_or(1.0);
     let (logical_w, logical_h) = match mode {
         PositionMode::Collapsed => (230.0, 60.0),
-        PositionMode::Expanded | PositionMode::Center => (500.0, 650.0),
+        PositionMode::Expanded | PositionMode::Center => (720.0, 800.0),
     };
     let size = tauri::PhysicalSize::new((logical_w * scale_factor) as u32, (logical_h * scale_factor) as u32);
     
