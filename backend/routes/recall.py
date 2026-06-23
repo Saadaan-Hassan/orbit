@@ -15,7 +15,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from database import fetch_system_state_events, search_events_fts
+from database import fetch_sessions_by_time_range, fetch_system_state_events, search_events_fts
 from services.analytics_service import capture_analytics_event
 from services.claude_service import stream_recall_response
 from services.qdrant_service import search_sessions_semantic
@@ -654,6 +654,49 @@ async def _stream_sse_recall(
             now_ms=now_ms,
             time_range_active=time_range is not None,
         )
+
+        # For time-range queries ("yesterday", "today", etc.), Qdrant semantic
+        # similarity is the wrong tool — it returns sessions similar to the query
+        # text, not all sessions from the day. A "what did I work on yesterday?"
+        # query will over-represent whichever project matches semantically (e.g.
+        # Orbit for an Orbit developer) and silently omit every other project.
+        #
+        # Fix: use the DB scan as the PRIMARY source for time-range queries —
+        # it returns the best session per distinct project_name within the window,
+        # guaranteeing comprehensive coverage. Qdrant results are merged in
+        # only if their project is not already covered.
+        if time_range:
+            db_sessions = await fetch_sessions_by_time_range(
+                start_ms=time_range["start_ms"],
+                end_ms=time_range["end_ms"],
+            )
+            # Build the final list: one session per project, DB-first so every
+            # project in the window is represented. Qdrant sessions fill any
+            # remaining slots (up to 12) for projects the DB scan missed.
+            seen_projects: set[str] = set()
+            merged: list[dict] = []
+
+            for db_session in db_sessions:
+                if len(merged) >= 12:
+                    break
+                project = (db_session.get("project_name") or "").strip().lower()
+                if project and project in seen_projects:
+                    continue
+                if project:
+                    seen_projects.add(project)
+                merged.append(db_session)
+
+            for session in semantic_matched_sessions:
+                if len(merged) >= 12:
+                    break
+                project = (session.get("project_name") or "").strip().lower()
+                if project and project in seen_projects:
+                    continue
+                if project:
+                    seen_projects.add(project)
+                merged.append(session)
+
+            semantic_matched_sessions = merged
 
         logger.info(
             "Recall: Qdrant returned %d session(s) after filtering and re-ranking.",

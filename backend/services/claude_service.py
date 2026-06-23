@@ -22,16 +22,15 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Two separate models — chosen by task, not by default.
+# Two separate models -- chosen by task, not by default.
 #
-# RECALL_MODEL  — user-facing recall and signal fusion. Sonnet 4.6 is used
-#   for both: recall synthesis (streaming) and the background fusion step,
-#   which is reasoning-heavy (detective triangulation across many signals)
-#   and runs only every 30 min, so the cost is fine.
+# RECALL_MODEL  -- user-facing recall synthesis (streaming). Sonnet 4.6 gives
+#   the best quality for answering user questions where response quality is
+#   directly visible and matters most.
 #
-# SUMMARY_MODEL — reserved for lightweight extraction tasks that genuinely
-#   don't need reasoning (e.g. future classification micro-tasks). Currently
-#   unused in the hot path but kept as a named constant for future callers.
+# SUMMARY_MODEL -- background session fusion (every 30 min). Haiku 4.5 handles
+#   the structured extraction task (signals -> JSON) well and is 3x cheaper than
+#   Sonnet. Upgrade to RECALL_MODEL here if fusion quality needs improvement.
 RECALL_MODEL  = "claude-sonnet-4-6"
 SUMMARY_MODEL = "claude-haiku-4-5-20251001"
 

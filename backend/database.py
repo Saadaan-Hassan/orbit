@@ -529,6 +529,56 @@ async def fetch_system_state_events(
         return [dict(row._mapping) for row in result.fetchall()]
 
 
+async def fetch_sessions_by_time_range(
+    start_ms: int,
+    end_ms: int,
+    max_per_project: int = 1,
+) -> list[dict]:
+    """
+    Returns the best session per distinct project_name within a time window.
+
+    Used by recall when a time-range query ("yesterday", "today") is detected.
+    Qdrant semantic search only returns sessions similar to the query text, so
+    a "what did I work on yesterday?" query can miss projects that don't match
+    semantically. This query supplements Qdrant with a direct DB scan, ensuring
+    every project worked on during the window appears at least once.
+
+    Sessions with no project_name are included under an empty-string key and
+    limited to max_per_project entries. Sessions are ordered by active_minutes
+    DESC then duration DESC so the most substantive session per project wins.
+    """
+    async with _async_engine.connect() as connection:
+        result = await connection.execute(
+            text(
+                """
+                SELECT
+                    id, start_time, end_time, project_name, goal, activity,
+                    ai_summary, last_action, next_step, blockers, topics,
+                    key_resources, active_minutes, embedding_id
+                FROM sessions
+                WHERE start_time >= :start_ms
+                  AND end_time   <= :end_ms
+                ORDER BY
+                    COALESCE(project_name, '') ASC,
+                    active_minutes DESC,
+                    (end_time - start_time) DESC
+                """
+            ),
+            {"start_ms": start_ms, "end_ms": end_ms},
+        )
+        rows = [dict(row._mapping) for row in result.fetchall()]
+
+    # Keep up to max_per_project sessions per project_name.
+    counts: dict[str, int] = {}
+    selected: list[dict] = []
+    for row in rows:
+        key = (row.get("project_name") or "").strip().lower()
+        counts[key] = counts.get(key, 0) + 1
+        if counts[key] <= max_per_project:
+            selected.append(row)
+    return selected
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with _async_session_factory() as session:
         yield session

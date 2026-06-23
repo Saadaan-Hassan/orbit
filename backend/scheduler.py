@@ -18,7 +18,7 @@ from sqlalchemy import text
 
 from database import _async_engine
 from services.analytics_service import capture_analytics_event
-from services.claude_service import RECALL_MODEL, generate_session_summary
+from services.claude_service import SUMMARY_MODEL, generate_session_summary
 from services.gemini_service import classify_events_batch
 from services.qdrant_service import add_session_embedding, initialize_qdrant_collection
 
@@ -413,7 +413,7 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
         raw_claude_response = await generate_session_summary(
             system_prompt=FUSION_SESSION_SYSTEM_PROMPT,
             user_prompt=user_prompt,
-            model=RECALL_MODEL,  # Sonnet — fusion is reasoning-heavy, runs only every 30 min
+            model=SUMMARY_MODEL,  # Haiku — fast structured extraction, 3x cheaper than Sonnet
         )
     except Exception as claude_error:
         logger.error(

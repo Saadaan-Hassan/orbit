@@ -26,6 +26,17 @@ const BLOCKED_DIRECTORY_NAMES: &[&str] = &[
     ".cache",
     "venv",
     ".venv",
+    // Xcode / iOS / Android build artifacts — a single Capacitor/Xcode build
+    // can write hundreds of files into these directories in seconds, flooding
+    // the session generator with identical low-signal sessions.
+    "DerivedData",
+    "Pods",
+    "xcuserdata",
+    "xcshareddata",
+    "capacitor-cordova-ios-plugins",
+    "capacitor-cordova-android-plugins",
+    ".gradle",
+    ".android",
 ];
 
 // File suffixes that identify transient or editor-internal files. Events on
