@@ -429,7 +429,17 @@ def _sanitize_fts5_query(raw_query: str) -> str:
     # contractions like "don't") and discard everything else.
     sanitized = re.sub(r'[^\w\s\-\']', ' ', raw_query)
     # Collapse runs of whitespace so the FTS5 parser sees clean token gaps.
-    return re.sub(r'\s+', ' ', sanitized).strip()
+    collapsed = re.sub(r'\s+', ' ', sanitized).strip()
+    
+    # Split by whitespace, wrap each token containing alphanumeric characters
+    # in double quotes to prevent FTS5 parser operator interpretation errors (e.g. hyphens).
+    tokens = collapsed.split(' ')
+    quoted_tokens = []
+    for token in tokens:
+        if any(c.isalnum() for c in token):
+            quoted_tokens.append(f'"{token}"')
+            
+    return ' '.join(quoted_tokens)
 
 
 async def search_events_fts(

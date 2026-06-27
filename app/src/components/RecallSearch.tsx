@@ -34,6 +34,7 @@ export function RecallSearch() {
   } = useRecall();
 
   const { pendingQuery, clearPendingQuery } = useOrbitStore();
+  const lastSubmittedQueryRef = useRef<string | null>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -42,12 +43,18 @@ export function RecallSearch() {
   // When Timeline's "Ask Orbit about this" sets a pending query, submit it
   // automatically and clear it so it doesn't fire again on the next render.
   useEffect(() => {
-    if (pendingQuery && !isStreaming) {
+    if (!pendingQuery) {
+      lastSubmittedQueryRef.current = null;
+      return;
+    }
+
+    if (pendingQuery && !isStreaming && lastSubmittedQueryRef.current !== pendingQuery) {
       const queryToSubmit = pendingQuery;
+      lastSubmittedQueryRef.current = queryToSubmit;
       clearPendingQuery();
       askOrbit(queryToSubmit);
     }
-  }, [pendingQuery]);
+  }, [pendingQuery, isStreaming]);
 
   // Scroll to the bottom when new content arrives.
   useEffect(() => {
