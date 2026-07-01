@@ -113,8 +113,8 @@ Each line is one signal. Fields may be empty when a signal type doesn't apply.
 Reconstruct what this person was doing and return EXACTLY this JSON structure:
 
 {{
-  "project_name": "the project/context name, or null if unclear",
-  "activity": "WHAT they were primarily building or creating, inferred from file edits, localhost activity, and IDE/terminal signals. Name real files and topics. If they were also reviewing external content (other people's repos, submitted apps, external URLs), note it as secondary: 'while also reviewing [X] submissions'. Never describe reviewed-but-not-built projects as the primary work.",
+  "project_name": "REQUIRED — never null or empty. One short noun phrase that names what this session was about. Rules by activity type: (1) Code / design work → the project or repo name (e.g. 'orbit', 'lain-dain', 'bits-pakistan'). (2) Research / learning → the topic (e.g. 'Arabic Learning', 'System Design Research', 'Arcflow Tutorial'). (3) Communication / outreach → the context (e.g. 'LinkedIn Outreach', 'Haseeb Account Setup', 'Ehtisham Intro Message'). (4) Job search → 'Job Applications'. (5) General browsing → name the primary topic visited. When signals are thin, pick the most specific label the evidence supports rather than returning null.",
+  "activity": "WHAT they were primarily doing — building, researching, communicating, or learning — inferred from file edits, localhost activity, IDE/terminal signals, browser content, and screen text. Name real files, topics, contacts, or URLs. If they were also reviewing external content (other people's repos, submitted apps), note it as secondary: 'while also reviewing [X]'. Never describe reviewed-but-not-built projects as the primary work.",
   "evidence": "one short sentence: which signals support this conclusion (e.g. 'file edits to billing.ts + clipboard showing constructEvent + open Stripe webhooks docs')",
   "goal": "one sentence: what they appeared to be trying to accomplish",
   "summary": "2-3 sentences describing how the session unfolded",
@@ -467,7 +467,16 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     session_start_timestamp = project_events[0]["timestamp"]
     session_end_timestamp   = project_events[-1]["timestamp"]
 
-    project_name  = session_data.get("project_name")
+    project_name  = session_data.get("project_name") or None
+    # Fallback: if Claude returned null despite the prompt instruction, derive
+    # a label from goal (truncated) so no session ever lands without a name.
+    if not project_name:
+        goal_text = session_data.get("goal") or ""
+        first_topic = (session_data.get("topics") or [None])[0]
+        project_name = (
+            first_topic
+            or (goal_text.rstrip(".").split(".")[0].strip()[:50] if goal_text else None)
+        )
     goal          = session_data.get("goal")
     ai_summary    = session_data.get("summary", "")
     activity      = session_data.get("activity")      # what they were specifically doing

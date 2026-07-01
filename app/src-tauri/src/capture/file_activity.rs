@@ -37,6 +37,13 @@ const BLOCKED_DIRECTORY_NAMES: &[&str] = &[
     "capacitor-cordova-android-plugins",
     ".gradle",
     ".android",
+    // Capacitor/Ionic native platform directories — `npx cap sync` writes
+    // the entire compiled web bundle (HTML, JS, CSS, fonts, images) into
+    // these paths in one shot, generating hundreds of file events per build.
+    // Blocking the top-level platform dirs catches all sub-paths
+    // (assets/public, res/, java/, etc.) without needing to enumerate them.
+    "android",
+    "ios",
 ];
 
 // File suffixes that identify transient or editor-internal files. Events on
