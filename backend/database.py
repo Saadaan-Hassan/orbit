@@ -311,6 +311,20 @@ async def create_all_tables() -> None:
             VALUES (1, 1)
         """))
 
+        # Generic key/value store for user-configurable settings (e.g. BYOK keys).
+        await connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL DEFAULT ''
+            )
+        """))
+
+        # Pre-create known setting rows so reads never need to INSERT.
+        await connection.execute(text("""
+            INSERT OR IGNORE INTO app_settings (key, value)
+            VALUES ('groq_api_key', '')
+        """))
+
     # Seed default lists outside the schema transaction so INSERT OR IGNORE
     # checks work against a fully committed table state.
     await _seed_default_excluded_apps()
@@ -592,3 +606,31 @@ async def fetch_sessions_by_time_range(
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with _async_session_factory() as session:
         yield session
+
+
+async def get_setting(key: str) -> str | None:
+    async with _async_engine.connect() as connection:
+        result = await connection.execute(
+            text("SELECT value FROM app_settings WHERE key = :key"),
+            {"key": key},
+        )
+        row = result.fetchone()
+        if row is None:
+            return None
+        value = row[0]
+        return value if value else None
+
+
+async def set_setting(key: str, value: str) -> None:
+    async with _async_engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT OR REPLACE INTO app_settings (key, value) "
+                "VALUES (:key, :value)"
+            ),
+            {"key": key, "value": value},
+        )
+
+
+async def get_groq_api_key() -> str | None:
+    return await get_setting("groq_api_key")

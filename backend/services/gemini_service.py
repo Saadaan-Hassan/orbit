@@ -157,7 +157,12 @@ def _parse_classification_response(
                 if raw_category in VALID_EVENT_CATEGORIES
                 else DEFAULT_CATEGORY_ON_PARSE_FAILURE
             )
-            event_copy["project"] = classification.get("project") or None
+            raw_project = classification.get("project")
+            event_copy["project"] = (
+                raw_project
+                if isinstance(raw_project, str) and raw_project.strip().lower() != "null"
+                else None
+            )
 
             annotated_events.append(event_copy)
 

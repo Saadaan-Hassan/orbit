@@ -7,7 +7,7 @@ export interface WorkerEnvironment {
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Groq-Api-Key",
 };
 
 // Default model names — the backend can override via query param if needed.
@@ -142,6 +142,38 @@ async function handleEmbedRequest(
   });
 }
 
+// ── /chat-groq ───────────────────────────────────────────────────────────────
+// Thin proxy to the Groq chat completions API. The user's Groq API key travels
+// in the X-Groq-Api-Key request header — it is never stored in Worker secrets.
+// This route is only reached when the user has configured their own Groq key.
+
+async function handleChatGroqRequest(request: Request): Promise<Response> {
+  const groqApiKey = request.headers.get("X-Groq-Api-Key");
+  if (!groqApiKey) {
+    return corsResponse(JSON.stringify({ error: "X-Groq-Api-Key header is required" }), 400);
+  }
+
+  const requestBodyText = await request.text();
+
+  const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${groqApiKey}`,
+      "content-type": "application/json",
+    },
+    body: requestBodyText,
+  });
+
+  const responseText = await groqResponse.text();
+  return new Response(responseText, {
+    status: groqResponse.status,
+    headers: {
+      "Content-Type": groqResponse.headers.get("Content-Type") ?? "application/json",
+      ...CORS_HEADERS,
+    },
+  });
+}
+
 // ── stubs ─────────────────────────────────────────────────────────────────────
 
 function handleTtsRequest(): Response {
@@ -177,10 +209,11 @@ export default {
     if (method === "OPTIONS") return handlePreflightRequest();
 
     if (method === "POST") {
-      if (path === "/chat")     return handleChatRequest(request, env);
-      if (path === "/classify") return handleClassifyRequest(request, requestUrl, env);
-      if (path === "/embed")    return handleEmbedRequest(request, env);
-      if (path === "/tts")      return handleTtsRequest();
+      if (path === "/chat")      return handleChatRequest(request, env);
+      if (path === "/chat-groq") return handleChatGroqRequest(request);
+      if (path === "/classify")  return handleClassifyRequest(request, requestUrl, env);
+      if (path === "/embed")     return handleEmbedRequest(request, env);
+      if (path === "/tts")       return handleTtsRequest();
       if (path === "/stt-token") return handleSttTokenRequest();
     }
 
