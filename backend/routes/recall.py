@@ -2,7 +2,12 @@
 POST /recall — the core recall endpoint.
 
 Runs FTS5 keyword search and Qdrant semantic search in parallel, merges the
-results into a context block, then streams Claude's response back as SSE.
+results into a context block, then streams the AI response back as SSE.
+
+Recall runs on Groq (llama-3.3-70b-versatile via the Cloudflare Worker's
+shared key) rather than Claude — during the beta, Claude and Gemini are
+disabled centrally via the Worker's admin kill switch for cost control, so
+Groq is the sole AI provider across the whole app, recall included.
 """
 
 import json
@@ -17,7 +22,7 @@ from pydantic import BaseModel
 
 from database import fetch_sessions_by_time_range, fetch_system_state_events, search_events_fts
 from services.analytics_service import capture_analytics_event
-from services.claude_service import stream_recall_response
+from services.groq_service import stream_recall_response_groq
 from services.qdrant_service import search_sessions_semantic
 from services.time_parser import extract_time_range_from_query
 
@@ -726,7 +731,7 @@ async def _stream_sse_recall(
             f"Context from their activity:\n{context_block}"
         )
 
-        async for text_delta in stream_recall_response(
+        async for text_delta in stream_recall_response_groq(
             system_prompt=RECALL_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             conversation_history=conversation_history,

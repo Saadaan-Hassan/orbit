@@ -16,10 +16,14 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-from database import _async_engine, get_groq_api_key
+from database import _async_engine
 from services.analytics_service import capture_analytics_event
-from services.claude_service import SUMMARY_MODEL, generate_session_summary
-from services.gemini_service import classify_events_batch
+# Claude (services.claude_service) and Gemini (services.gemini_service) are
+# unused here during the beta — Groq is the sole provider for session
+# generation and classification, disabled/re-enabled via the Worker's admin
+# kill switch rather than in this file. Re-import SUMMARY_MODEL /
+# generate_session_summary / classify_events_batch if reinstating them as a
+# fallback.
 from services.groq_service import classify_events_batch_groq, generate_session_summary_groq
 from services.qdrant_service import add_session_embedding, initialize_qdrant_collection
 
@@ -349,30 +353,27 @@ def estimate_fused_signal_char_count(events: list[dict]) -> int:
 
 async def _classify_events_with_configured_provider(events: list[dict]) -> list[dict]:
     """
-    Classifies a batch of events using whichever provider is configured.
+    Classifies a batch of events using Groq — Orbit's centrally-funded
+    default provider during the beta (no per-user key required; the Worker
+    supplies its own shared GROQ_API_KEY when the user hasn't configured a
+    personal one).
 
-    If the user has set up their own Groq key, Groq is the sole classifier —
-    same policy as session generation: on failure (rate limit, bad request,
-    network error) events are defaulted to category 'work' rather than
-    silently falling back to Gemini and spending Orbit's API budget.
-
-    If no Groq key is set, Gemini is used as before (Orbit's default provider).
+    On failure (rate limit, bad request, network error, or the admin kill
+    switch disabling the Groq proxy) events are defaulted to category 'work'
+    rather than falling back to Gemini — Gemini is also disabled centrally
+    for cost control during the beta, so a fallback call would just fail the
+    same way while wasting a request.
     """
-    groq_api_key = await get_groq_api_key()
+    classified = await classify_events_batch_groq(events)
+    if classified is not None:
+        return classified
 
-    if groq_api_key:
-        classified = await classify_events_batch_groq(events)
-        if classified is not None:
-            return classified
-
-        logger.warning(
-            "Session generator: Groq key is configured but classification failed "
-            "— defaulting %d event(s) to category 'work'.",
-            len(events),
-        )
-        return [{**event, "category": "work", "project": None} for event in events]
-
-    return await classify_events_batch(events)
+    logger.warning(
+        "Session generator: Groq classification failed "
+        "— defaulting %d event(s) to category 'work'.",
+        len(events),
+    )
+    return [{**event, "category": "work", "project": None} for event in events]
 
 
 async def _generate_session_for_events(project_events: list[dict]) -> None:
@@ -441,124 +442,59 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     # ------------------------------------------------------------------
     # AI provider selection for session generation.
     #
-    # If the user has a Groq key configured, Groq is the sole provider for
-    # background session generation. When Groq fails (rate limit, bad request,
-    # network error) we skip this batch entirely — we do NOT silently fall back
-    # to Claude and spend Orbit's API budget without the user knowing.
+    # Groq is the sole provider during the beta — Claude is disabled
+    # centrally via the Worker's admin kill switch for cost control, so a
+    # fallback call here would just fail the same way while wasting a
+    # request. To restore Claude as a fallback later, re-add the branch that
+    # used to sit here (git history has it) or flip CLAUDE_ENABLED back on
+    # and reintroduce the `else` path.
     #
-    # When no Groq key is set, Claude Haiku is used as before (the default
-    # path for users who have not set up their own Groq key).
+    # Groq receives the exact same user_prompt Claude used to — no
+    # truncation — so output quality doesn't regress purely from missing
+    # context.
     #
-    # Groq receives the exact same user_prompt Claude would — no truncation —
-    # so the two providers are directly comparable and neither ever produces
-    # a worse answer purely from missing context.
-    #
-    # Note: Claude in recall.py (user-facing chat) is completely separate
-    # and is always used regardless of this setting.
+    # Note: recall.py (user-facing chat) now also runs on Groq — see
+    # services/groq_service.py's stream_recall_response_groq.
     # ------------------------------------------------------------------
-    groq_api_key = await get_groq_api_key()
+    session_data = await generate_session_summary_groq(
+        user_prompt=user_prompt,
+        system_prompt=FUSION_SESSION_SYSTEM_PROMPT,
+    )
 
-    if groq_api_key:
-        session_data = await generate_session_summary_groq(
-            user_prompt=user_prompt,
-            system_prompt=FUSION_SESSION_SYSTEM_PROMPT,
-        )
-
-        if session_data is None:
-            # Groq key is set but the request failed (rate limit, bad request,
-            # network error). Skip this batch — do not fall back to Claude.
-            #
-            # Circuit breaker: stamp the batch with the same 'parse_failed'
-            # sentinel used for Claude JSON-parse failures below. Without this,
-            # these events keep matching the main "unprocessed events" query
-            # every 30-minute cycle forever — observed in production as the
-            # same ~60,000-token backlog being reclassified and resubmitted to
-            # Groq dozens of times over 7+ hours, burning real tokens without
-            # ever producing a session. The existing parse_failed recovery
-            # lane (_retry_parse_failed_events, ≤20 events/cycle) already
-            # retries these on future runs — much cheaper than reprocessing
-            # the whole growing backlog every time.
-            logger.warning(
-                "Session generator: Groq key is configured but the request failed "
-                "— marking %d event(s) as 'parse_failed' for bounded retry via the "
-                "recovery lane. Check your Groq key in Settings or wait for the "
-                "rate limit to reset.",
-                len(project_events),
-            )
-            event_ids       = [event["id"] for event in project_events]
-            id_placeholders = ", ".join(f":id_{i}" for i in range(len(event_ids)))
-            id_bindings     = {f"id_{i}": eid for i, eid in enumerate(event_ids)}
-            async with _async_engine.begin() as connection:
-                await connection.execute(
-                    text(
-                        f"UPDATE events SET session_id = 'parse_failed' "
-                        f"WHERE id IN ({id_placeholders})"
-                    ),
-                    id_bindings,
-                )
-            return
-
-        logger.info(
-            "Session generator: Groq used for session summary (%d events).",
+    if session_data is None:
+        # Circuit breaker: stamp the batch with the same 'parse_failed'
+        # sentinel used for JSON-parse failures elsewhere. Without this,
+        # these events keep matching the main "unprocessed events" query
+        # every 30-minute cycle forever — observed in production as the
+        # same ~60,000-token backlog being reclassified and resubmitted to
+        # Groq dozens of times over 7+ hours, burning real tokens without
+        # ever producing a session. The existing parse_failed recovery lane
+        # (_retry_parse_failed_events, ≤20 events/cycle) already retries
+        # these on future runs — much cheaper than reprocessing the whole
+        # growing backlog every time.
+        logger.warning(
+            "Session generator: Groq request failed "
+            "— marking %d event(s) as 'parse_failed' for bounded retry via the "
+            "recovery lane.",
             len(project_events),
         )
-
-    else:
-        # No Groq key — use Claude Haiku (Orbit's default provider).
-        logger.info(
-            "Session generator: no Groq key configured, using Claude Haiku (%d events).",
-            len(project_events),
-        )
-        try:
-            raw_claude_response = await generate_session_summary(
-                system_prompt=FUSION_SESSION_SYSTEM_PROMPT,
-                user_prompt=user_prompt,
-                model=SUMMARY_MODEL,
+        event_ids       = [event["id"] for event in project_events]
+        id_placeholders = ", ".join(f":id_{i}" for i in range(len(event_ids)))
+        id_bindings     = {f"id_{i}": eid for i, eid in enumerate(event_ids)}
+        async with _async_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    f"UPDATE events SET session_id = 'parse_failed' "
+                    f"WHERE id IN ({id_placeholders})"
+                ),
+                id_bindings,
             )
-        except Exception as claude_error:
-            logger.error(
-                "Session generator: Claude request failed: %s. Skipping this group.",
-                claude_error,
-            )
-            return
+        return
 
-        # ------------------------------------------------------------------
-        # Parse Claude's JSON response
-        # ------------------------------------------------------------------
-        cleaned_response = raw_claude_response.strip()
-        if cleaned_response.startswith("```"):
-            cleaned_response = cleaned_response.split("\n", 1)[-1]
-            cleaned_response = cleaned_response.rsplit("```", 1)[0].strip()
-
-        try:
-            session_data = json.loads(cleaned_response)
-        except json.JSONDecodeError as json_parse_error:
-            logger.warning(
-                "Session generator: Claude JSON parse failure — "
-                "%d events, ~%d signal chars. "
-                "Error: %s. "
-                "Claude response (first 200 chars): %.200s. "
-                "Marking as 'parse_failed' to prevent infinite retry.",
-                len(project_events),
-                estimate_fused_signal_char_count(project_events),
-                json_parse_error,
-                raw_claude_response,
-            )
-            # Circuit breaker: stamp the batch with a sentinel session_id so these
-            # events are not reprocessed on the next scheduler run. A permanent retry
-            # loop would burn API credits without ever producing a session.
-            event_ids         = [event["id"] for event in project_events]
-            id_placeholders   = ", ".join(f":id_{i}" for i in range(len(event_ids)))
-            id_bindings       = {f"id_{i}": eid for i, eid in enumerate(event_ids)}
-            async with _async_engine.begin() as connection:
-                await connection.execute(
-                    text(
-                        f"UPDATE events SET session_id = 'parse_failed' "
-                        f"WHERE id IN ({id_placeholders})"
-                    ),
-                    id_bindings,
-                )
-            return
+    logger.info(
+        "Session generator: Groq used for session summary (%d events).",
+        len(project_events),
+    )
 
     # ------------------------------------------------------------------
     # Persist the Session row

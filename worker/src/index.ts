@@ -2,6 +2,20 @@ export interface WorkerEnvironment {
   ANTHROPIC_API_KEY: string;
   GEMINI_API_KEY: string;
   VOYAGE_AI_API_KEY: string;
+  // Orbit-held shared Groq key, used when the caller doesn't supply its own
+  // via the X-Groq-Api-Key header. During the beta, Groq is the sole AI
+  // provider (Claude and Gemini disabled via the kill switch below), funded
+  // centrally rather than requiring each beta tester to create a Groq
+  // account — the per-user BYOK path still works if a header is present,
+  // for whenever that's re-enabled in the app UI.
+  GROQ_API_KEY: string;
+  // Admin kill switch — plain Worker secrets, not bound to any AI provider's
+  // own credentials. Absent/unset means enabled (fail-open). Flip with
+  // `npx wrangler secret put CLAUDE_ENABLED` (value "false") — takes effect
+  // on the next request, no redeploy needed.
+  CLAUDE_ENABLED?: string;
+  GEMINI_ENABLED?: string;
+  GROQ_PROXY_ENABLED?: string;
 }
 
 const CORS_HEADERS: Record<string, string> = {
@@ -30,6 +44,35 @@ function corsResponse(
   });
 }
 
+// ── Admin kill switch ────────────────────────────────────────────────────────
+// Each flag defaults to enabled (fail-open) unless explicitly set to the
+// string "false". Flip with `npx wrangler secret put <NAME>` — takes effect
+// on the next request, no redeploy needed.
+
+function isEnabled(flag: string | undefined): boolean {
+  return flag !== "false";
+}
+
+function providerDisabledResponse(providerName: string): Response {
+  return corsResponse(
+    JSON.stringify({
+      error: `${providerName} is temporarily disabled by the admin. Try again later.`,
+    }),
+    503
+  );
+}
+
+async function handleProviderStatusRequest(env: WorkerEnvironment): Promise<Response> {
+  return corsResponse(
+    JSON.stringify({
+      claude: isEnabled(env.CLAUDE_ENABLED),
+      gemini: isEnabled(env.GEMINI_ENABLED),
+      groq: isEnabled(env.GROQ_PROXY_ENABLED),
+    }),
+    200
+  );
+}
+
 // ── /chat ─────────────────────────────────────────────────────────────────────
 // Thin proxy to Anthropic Messages API. Pipes the body straight through so
 // SSE streaming works without buffering.
@@ -38,6 +81,8 @@ async function handleChatRequest(
   request: Request,
   env: WorkerEnvironment
 ): Promise<Response> {
+  if (!isEnabled(env.CLAUDE_ENABLED)) return providerDisabledResponse("Claude");
+
   const requestBodyText = await request.text();
 
   const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
@@ -77,6 +122,8 @@ async function handleClassifyRequest(
   requestUrl: URL,
   env: WorkerEnvironment
 ): Promise<Response> {
+  if (!isEnabled(env.GEMINI_ENABLED)) return providerDisabledResponse("Gemini");
+
   const requestBodyText = await request.text();
 
   const modelName =
@@ -143,14 +190,25 @@ async function handleEmbedRequest(
 }
 
 // ── /chat-groq ───────────────────────────────────────────────────────────────
-// Thin proxy to the Groq chat completions API. The user's Groq API key travels
-// in the X-Groq-Api-Key request header — it is never stored in Worker secrets.
-// This route is only reached when the user has configured their own Groq key.
+// Thin proxy to the Groq chat completions API. Uses the caller-supplied
+// X-Groq-Api-Key header if present (per-user BYOK), otherwise falls back to
+// the Orbit-held GROQ_API_KEY secret — this is what powers session
+// generation, classification, and recall during the beta, without requiring
+// each user to bring their own key.
+//
+// Pipes the response body straight through (not buffered) so streaming
+// requests — recall uses stream: true, OpenAI/Groq-compatible SSE — reach
+// the caller incrementally instead of arriving all at once at the end.
 
-async function handleChatGroqRequest(request: Request): Promise<Response> {
-  const groqApiKey = request.headers.get("X-Groq-Api-Key");
+async function handleChatGroqRequest(
+  request: Request,
+  env: WorkerEnvironment
+): Promise<Response> {
+  if (!isEnabled(env.GROQ_PROXY_ENABLED)) return providerDisabledResponse("Groq");
+
+  const groqApiKey = request.headers.get("X-Groq-Api-Key") ?? env.GROQ_API_KEY;
   if (!groqApiKey) {
-    return corsResponse(JSON.stringify({ error: "X-Groq-Api-Key header is required" }), 400);
+    return corsResponse(JSON.stringify({ error: "No Groq API key available" }), 400);
   }
 
   const requestBodyText = await request.text();
@@ -164,8 +222,7 @@ async function handleChatGroqRequest(request: Request): Promise<Response> {
     body: requestBodyText,
   });
 
-  const responseText = await groqResponse.text();
-  return new Response(responseText, {
+  return new Response(groqResponse.body, {
     status: groqResponse.status,
     headers: {
       "Content-Type": groqResponse.headers.get("Content-Type") ?? "application/json",
@@ -208,9 +265,13 @@ export default {
 
     if (method === "OPTIONS") return handlePreflightRequest();
 
+    if (method === "GET") {
+      if (path === "/provider-status") return handleProviderStatusRequest(env);
+    }
+
     if (method === "POST") {
       if (path === "/chat")      return handleChatRequest(request, env);
-      if (path === "/chat-groq") return handleChatGroqRequest(request);
+      if (path === "/chat-groq") return handleChatGroqRequest(request, env);
       if (path === "/classify")  return handleClassifyRequest(request, requestUrl, env);
       if (path === "/embed")     return handleEmbedRequest(request, env);
       if (path === "/tts")       return handleTtsRequest();

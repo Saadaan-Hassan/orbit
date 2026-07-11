@@ -1,16 +1,13 @@
 import { useState, useEffect, useRef } from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { useOnboarding } from "../hooks/useOnboarding";
-import { useGroqSettings } from "../hooks/useGroqSettings";
 
 // Step indices
 const STEP_WELCOME = 0;
 const STEP_ACCESSIBILITY = 1;
 const STEP_BROWSER_AUTOMATION = 2;
-const STEP_GROQ_KEY = 3;
-const STEP_EXTENSION = 4;
-const STEP_WHAT_TO_EXPECT = 5;
-const TOTAL_STEPS = 6;
+const STEP_EXTENSION = 3;
+const STEP_WHAT_TO_EXPECT = 4;
+const TOTAL_STEPS = 5;
 
 // ─── Progress Dots ────────────────────────────────────────────────────────────
 function ProgressDots({ currentStep }: { currentStep: number }) {
@@ -358,110 +355,7 @@ function BrowserAutomationStep({
   );
 }
 
-// ─── Step 3 — Groq API Key ────────────────────────────────────────────────────
-function GroqKeyStep({ onNext }: { onNext: () => void }) {
-  const { isConfigured, isLoading, isSaving, saveKey } = useGroqSettings();
-  const [inputValue, setInputValue] = useState("");
-  const [saveError, setSaveError] = useState<string | null>(null);
-
-  async function handleSave(): Promise<void> {
-    setSaveError(null);
-    try {
-      await saveKey(inputValue.trim());
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Failed to save key.");
-    }
-  }
-
-  async function handleOpenConsole(): Promise<void> {
-    await openUrl("https://console.groq.com");
-  }
-
-  function handleInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>): void {
-    if (event.key === "Enter") void handleSave();
-  }
-
-  return (
-    <div className="flex flex-col gap-5 px-2">
-      <div className="flex flex-col gap-1.5">
-        <div className="text-2xl mb-0.5">✨</div>
-        <h2 className="text-lg font-bold text-zinc-900 dark:text-white tracking-tight">
-          Connect AI — it's free
-        </h2>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed font-light">
-          Orbit uses Groq for AI features. Create a free account at{" "}
-          <button
-            onClick={handleOpenConsole}
-            className="text-zinc-800 dark:text-zinc-200 underline decoration-zinc-400 hover:decoration-zinc-600 transition-colors cursor-pointer"
-          >
-            console.groq.com
-          </button>{" "}
-          (no credit card needed), then paste your API key below.
-        </p>
-      </div>
-
-      {isLoading ? (
-        <div className="h-10 bg-zinc-100 dark:bg-zinc-900 rounded-xl animate-pulse" />
-      ) : isConfigured ? (
-        <div className="rounded-2xl p-4 bg-emerald-500/10 flex items-center gap-3">
-          <svg viewBox="0 0 16 16" width="16" height="16" fill="none">
-            <path d="M3 8l3.5 3.5L13 5" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          <div>
-            <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400">Groq key connected</p>
-            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">AI features are ready to go.</p>
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          <input
-            type="password"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={handleInputKeyDown}
-            placeholder="gsk_..."
-            className="w-full text-xs bg-zinc-100 dark:bg-zinc-900 rounded-xl px-3.5 py-3 focus:outline-none focus:ring-2 focus:ring-zinc-400/20 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 border-0"
-          />
-          {saveError && (
-            <p className="text-xs text-red-500 font-medium px-1">{saveError}</p>
-          )}
-          <button
-            onClick={() => void handleSave()}
-            disabled={!inputValue.trim() || isSaving}
-            className="w-full py-3 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-sm font-semibold hover:opacity-90 transition-all cursor-pointer disabled:opacity-50"
-          >
-            {isSaving ? "Saving…" : "Save Key"}
-          </button>
-          <button
-            onClick={handleOpenConsole}
-            className="w-full py-2 text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors cursor-pointer"
-          >
-            Get free key →
-          </button>
-        </div>
-      )}
-
-      <div className="flex flex-col gap-2 mt-1">
-        {isConfigured && (
-          <button
-            onClick={onNext}
-            className="w-full py-3 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-sm font-semibold hover:opacity-90 transition-all cursor-pointer"
-          >
-            Continue →
-          </button>
-        )}
-        <button
-          onClick={onNext}
-          className="w-full py-2 text-xs text-zinc-400 dark:text-zinc-600 hover:text-zinc-600 dark:hover:text-zinc-400 transition-colors cursor-pointer"
-        >
-          Skip for now (advances without saving — Orbit works with reduced AI quality, falls back to Claude for session gen)
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Step 4 — Chrome Extension (coming soon) ─────────────────────────────────
+// ─── Step 3 — Chrome Extension (coming soon) ─────────────────────────────────
 function ChromeExtensionStep({ onNext }: { onNext: () => void }) {
   const [showManualInstructions, setShowManualInstructions] = useState(false);
 
@@ -674,9 +568,6 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
               onRequestAccess={requestBrowserAutomation}
               onNext={goToNextStep}
             />
-          )}
-          {currentStep === STEP_GROQ_KEY && (
-            <GroqKeyStep onNext={goToNextStep} />
           )}
           {currentStep === STEP_EXTENSION && (
             <ChromeExtensionStep onNext={goToNextStep} />

@@ -25,7 +25,21 @@ jobs:
   # the asset is always served from the latest release automatically.
   # ---------------------------------------------------------------------------
   build-and-release:
-    runs-on: macos-latest   # Apple Silicon (M-series) runner
+    # Two legs, one per Mac architecture. Sequential (max-parallel: 1) rather
+    # than parallel — both legs upload a same-named `latest.json` release
+    # asset via tauri-action, and running them one at a time lets each leg's
+    # "capture what I just uploaded" step below run without a race against
+    # the other leg overwriting it first. Slower, but correct — this can't be
+    # verified without a real CI run, so race-free trumps race-fast here.
+    strategy:
+      max-parallel: 1
+      matrix:
+        include:
+          - runner: macos-latest       # Apple Silicon (M-series)
+            arch: aarch64
+          - runner: macos-15-intel     # Intel — macos-13 was retired Dec 2025;
+            arch: x86_64                # this is the current GitHub-hosted x86_64 label
+    runs-on: ${{ matrix.runner }}
     environment: dev
 
     steps:
@@ -37,6 +51,10 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      # Cache key includes matrix.arch — both legs build into the same
+      # app/src-tauri/target path (Rust defaults to the host triple, no
+      # explicit --target is passed), so an unscoped key would let one
+      # architecture's cached build artifacts corrupt the other's.
       - name: Cache Cargo registry + build artefacts
         uses: actions/cache@v4
         with:
@@ -45,8 +63,8 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             app/src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('app/src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('app/src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-cargo-
 
       # ── Node + pnpm ────────────────────────────────────────────────────────
       # Pin pnpm to match the major version used locally (11.x) so the
@@ -124,10 +142,19 @@ jobs:
       # tauri-apps/tauri-action@v0 is the stable major-version-pinned tag.
       # includeUpdaterJson: true uploads latest.json as a release asset so the
       # in-app updater can fetch it from the GitHub Release download URL.
+      #
+      # The source repo (this one) is private, so beta testers without
+      # collaborator access can't download release assets from it — GitHub
+      # doesn't support "public release assets on a private repo". Instead,
+      # this publishes to Saadaan-Hassan/orbit-releases, a separate PUBLIC
+      # repo that holds nothing but built .dmg downloads. owner/repo tell
+      # tauri-action to target that repo; RELEASES_REPO_TOKEN must be a PAT
+      # with write access to it (the default secrets.GITHUB_TOKEN only has
+      # access to the repo running the workflow).
       - name: Build, sign, and publish Tauri release
         uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
           # Raw base64 key content — Tauri v2 decodes this natively.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -155,22 +182,75 @@ jobs:
           # instead of falling back to `npm run tauri`.
           tauriScript: pnpm tauri
 
+          # Publish to the public releases-only companion repo, not this
+          # (private) source repo. releaseCommitish must reference a ref
+          # that exists in the TARGET repo — its main branch, not this one's.
+          owner: Saadaan-Hassan
+          repo: orbit-releases
+          releaseCommitish: main
+
           # GitHub Release metadata — __VERSION__ is replaced by the action
           # with the version string from tauri.conf.json.
           tagName: ${{ github.ref_name }}
           releaseName: "Orbit v__VERSION__"
           releaseBody: |
             Download **Orbit.dmg** below to install on macOS 13+.
-
-            Full changelog: https://github.com/saadaanhassan/orbit/releases/tag/__VERSION__
           releaseDraft: false
           prerelease: false
 
           # Upload latest.json as a GitHub Release asset.
           # The in-app updater fetches it from the permanent release download URL:
-          #   github.com/saadaanhassan/orbit/releases/latest/download/latest.json
+          #   github.com/Saadaan-Hassan/orbit-releases/releases/latest/download/latest.json
           includeUpdaterJson: true
 
           # false = write separate platform keys (darwin-aarch64, darwin-x86_64)
           # rather than collapsing everything into a single "universal" entry.
           updaterJsonKeepUniversal: false
+
+      # tauri-action just uploaded a latest.json containing ONLY this leg's
+      # platform entry — the other matrix leg will overwrite that same-named
+      # release asset with ITS single-platform version. Capture this leg's
+      # copy now (before that happens) as a build artifact so the final
+      # merge-latest-json job can combine both into one file with both
+      # platform keys.
+      - name: Capture this leg's latest.json before the other leg overwrites it
+        run: |
+          gh release download ${{ github.ref_name }} \
+            --repo Saadaan-Hassan/orbit-releases \
+            -p latest.json -O leg-latest-${{ matrix.arch }}.json --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+
+      - name: Upload this leg's latest.json as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-json-${{ matrix.arch }}
+          path: leg-latest-${{ matrix.arch }}.json
+
+  # ---------------------------------------------------------------------------
+  # Merge the two single-platform latest.json files (one per architecture)
+  # into one file with both platform keys, then republish it as the release's
+  # latest.json asset. Without this, the second matrix leg's upload silently
+  # clobbers the first leg's platform entry and the updater would only ever
+  # offer updates to whichever architecture built last.
+  # ---------------------------------------------------------------------------
+  merge-latest-json:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download both platform latest.json artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: latest-json-*
+          merge-multiple: true
+
+      - name: Merge platform entries and republish latest.json
+        run: |
+          jq -s '.[0] * {platforms: (.[0].platforms + .[1].platforms)}' \
+            leg-latest-aarch64.json leg-latest-x86_64.json > latest.json
+          echo "Merged latest.json:"
+          cat latest.json
+          gh release upload ${{ github.ref_name }} latest.json \
+            --repo Saadaan-Hassan/orbit-releases --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}

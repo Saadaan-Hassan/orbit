@@ -339,7 +339,6 @@ _DEFAULT_EXCLUDED_APPS: list[str] = [
     "Keychain Access",
     "LastPass",
     "Dashlane",
-    "Safari",
     "System Preferences",
     "System Settings",
 ]
@@ -632,5 +631,21 @@ async def set_setting(key: str, value: str) -> None:
         )
 
 
+async def get_groq_key_enabled() -> bool:
+    """Defaults to enabled (True) unless the user has explicitly disabled it —
+    keeps existing configured keys active without requiring a migration."""
+    value = await get_setting("groq_key_enabled")
+    return value != "0"
+
+
+async def set_groq_key_enabled(enabled: bool) -> None:
+    await set_setting("groq_key_enabled", "1" if enabled else "0")
+
+
 async def get_groq_api_key() -> str | None:
+    """Returns None when disabled, even if a key is stored — every caller
+    already treats "no key" as "fall back to the default provider", so a
+    disabled key needs no extra plumbing at the call sites."""
+    if not await get_groq_key_enabled():
+        return None
     return await get_setting("groq_api_key")

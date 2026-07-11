@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import time
+from typing import AsyncGenerator
 
 import httpx
 
@@ -68,17 +69,19 @@ async def _call_groq_chat(
     extraction tasks that don't need deep reasoning. Omitted for non-reasoning
     models (e.g. llama-3.1-8b-instant), which don't support this parameter.
 
+    Groq is Orbit's centrally-funded default provider — no personal key is
+    required. If the user has configured their own key (a per-user override,
+    currently not exposed in the app UI), it's sent via X-Groq-Api-Key and
+    takes precedence at the Worker; otherwise the Worker uses its own shared
+    GROQ_API_KEY secret.
+
     Returns the raw text content of the model's reply, or None when:
-    - No Groq key is configured.
     - This model is in a rate-limit cooldown (429 received recently).
-    - The request fails for any reason (network error, non-2xx, bad shape).
+    - The request fails for any reason (network error, non-2xx, bad shape),
+      including the admin kill switch returning 503 (GROQ_PROXY_ENABLED=false).
 
     Never raises — callers treat None as "Groq unavailable for this call".
     """
-    api_key = await get_groq_api_key()
-    if not api_key:
-        return None
-
     # Skip immediately if this model is inside a rate-limit cooldown window
     # so subsequent batches in the same scheduler run don't all hit the API.
     if time.monotonic() < _groq_rate_limited_until.get(model, 0.0):
@@ -99,11 +102,16 @@ async def _call_groq_chat(
     if reasoning_effort is not None:
         request_body["reasoning_effort"] = reasoning_effort
 
+    request_headers = {}
+    personal_api_key = await get_groq_api_key()
+    if personal_api_key:
+        request_headers["X-Groq-Api-Key"] = personal_api_key
+
     try:
         response = await _get_http_client().post(
             f"{_WORKER_URL}/chat-groq",
             json=request_body,
-            headers={"X-Groq-Api-Key": api_key},
+            headers=request_headers,
             timeout=_GROQ_REQUEST_TIMEOUT_SECONDS,
         )
     except Exception as network_error:
@@ -515,3 +523,90 @@ async def classify_events_batch_groq(events: list[dict]) -> list[dict] | None:
             )
 
     return annotated_events if any_group_succeeded else None
+
+
+# ---------------------------------------------------------------------------
+# Recall streaming
+# ---------------------------------------------------------------------------
+
+# User-facing chat, unlike classification/session-summary — a shorter
+# timeout matches the user's expectation of a live, responsive answer rather
+# than a background job that can afford to wait.
+_GROQ_RECALL_TIMEOUT_SECONDS = 30.0
+
+
+async def stream_recall_response_groq(
+    system_prompt: str,
+    user_prompt: str,
+    conversation_history: list[dict] | None = None,
+) -> AsyncGenerator[str, None]:
+    """
+    Streams a recall answer from Groq via the Cloudflare Worker and yields
+    raw text delta strings as they arrive.
+
+    Mirrors claude_service.stream_recall_response's signature and yield
+    shape exactly, so recall.py's caller doesn't need to know which provider
+    is behind it. Groq's Chat Completions API is OpenAI-compatible: the
+    system prompt is a "system"-role message (not a separate top-level field
+    like Anthropic's), and streaming chunks arrive as
+    `data: {"choices":[{"delta":{"content":"..."}}]}` lines, terminated by
+    `data: [DONE]` — a different wire format from Anthropic's
+    content_block_delta events, so this cannot reuse Claude's parser.
+
+    Raises httpx.HTTPStatusError / ConnectError / TimeoutException on
+    failure — recall.py's existing exception handling around the Claude
+    call already catches exactly these and falls back to the offline FTS5
+    message, so no new error handling is needed there.
+    """
+    prior_messages = [
+        {"role": msg["role"], "content": msg["content"]}
+        for msg in (conversation_history or [])
+        if msg.get("role") in ("user", "assistant") and msg.get("content")
+    ]
+
+    request_body = {
+        "model": GROQ_RECALL_MODEL,
+        "stream": True,
+        "temperature": 0.3,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            *prior_messages,
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+
+    request_headers = {}
+    personal_api_key = await get_groq_api_key()
+    if personal_api_key:
+        request_headers["X-Groq-Api-Key"] = personal_api_key
+
+    async with _get_http_client().stream(
+        "POST",
+        f"{_WORKER_URL}/chat-groq",
+        json=request_body,
+        headers=request_headers,
+        timeout=_GROQ_RECALL_TIMEOUT_SECONDS,
+    ) as streaming_response:
+        streaming_response.raise_for_status()
+
+        async for raw_line in streaming_response.aiter_lines():
+            if not raw_line.startswith("data: "):
+                continue
+
+            raw_json_payload = raw_line[len("data: "):]
+
+            if raw_json_payload.strip() == "[DONE]":
+                break
+
+            try:
+                event_data = json.loads(raw_json_payload)
+            except json.JSONDecodeError:
+                continue
+
+            try:
+                delta_text = event_data["choices"][0]["delta"].get("content")
+            except (KeyError, IndexError, TypeError):
+                continue
+
+            if delta_text:
+                yield delta_text
