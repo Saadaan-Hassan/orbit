@@ -25,3 +25,8 @@ target/
 
 # Cloudflare build output (optional depending setup)
 .dev.vars
+
+# Claude Code — per-developer local settings (permission allowlist etc.),
+# not meant for the shared repo. .claude/launch.json (dev-server preview
+# config) IS meant to be shared and is committed.
+.claude/settings.local.json

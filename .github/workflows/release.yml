@@ -207,6 +207,29 @@ jobs:
           # rather than collapsing everything into a single "universal" entry.
           updaterJsonKeepUniversal: false
 
+      # Also publish a version-agnostic copy of the .dmg (e.g. Orbit-latest-
+      # aarch64.dmg, no version number) alongside the versioned one tauri-
+      # action already uploaded (e.g. Orbit_0.2.0_aarch64.dmg). This filename
+      # is attached fresh to each new release, but the landing page links to
+      # it via GitHub's .../releases/latest/download/<filename> pattern,
+      # which always resolves to whatever release is currently marked
+      # "Latest" — so the /beta page never needs updating after a new
+      # release. --clobber only guards against a retried step re-uploading
+      # within the same release.
+      - name: Publish version-agnostic .dmg for stable download links
+        run: |
+          DMG_PATH=$(find app/src-tauri/target -name "*.dmg" -print -quit)
+          if [ -z "$DMG_PATH" ]; then
+            echo "ERROR: no .dmg found under app/src-tauri/target"
+            exit 1
+          fi
+          echo "Found: $DMG_PATH"
+          cp "$DMG_PATH" "Orbit-latest-${{ matrix.arch }}.dmg"
+          gh release upload ${{ github.ref_name }} "Orbit-latest-${{ matrix.arch }}.dmg" \
+            --repo Saadaan-Hassan/orbit-releases --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+
       # tauri-action just uploaded a latest.json containing ONLY this leg's
       # platform entry — the other matrix leg will overwrite that same-named
       # release asset with ITS single-platform version. Capture this leg's

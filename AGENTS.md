@@ -929,9 +929,28 @@ git tag v0.2.0 && git push origin v0.2.0
 ```
 Triggers `.github/workflows/release.yml`, which builds a sequential two-leg matrix — `macos-latest` (Apple Silicon, `aarch64`) and `macos-15-intel` (Intel, `x86_64`; `macos-13` was retired by GitHub in Dec 2025) — then a `merge-latest-json` job combines both legs' single-platform `latest.json` into one file with both platform keys and republishes it. This merge step exists because both matrix legs upload a same-named `latest.json` release asset — without the merge, the second leg to finish silently overwrites the first leg's platform entry and the updater only ever offers updates to whichever architecture built last. **This entire matrix + merge flow has not been verified by a real CI run** (as of when it was written) — check the Actions run after pushing a tag before relying on it, especially the Intel leg and the final merged `latest.json`'s `platforms` object having both `darwin-aarch64` and `darwin-x86_64` keys.
 
-**Not yet done:** Apple code-signing / notarization. `signingIdentity: null` in `tauri.conf.json`, no `APPLE_ID`/`APPLE_TEAM_ID`/`APPLE_CERTIFICATE` step in the workflow despite those being documented as expected secrets. Beta testers will see a Gatekeeper "Apple could not verify this app is free of malware" warning until this is set up — needs an Apple Developer Program membership.
+Each matrix leg also publishes a **version-agnostic copy** of its `.dmg` (`Orbit-latest-aarch64.dmg` / `Orbit-latest-x86_64.dmg`, `--clobber`-uploaded fresh on every release). The `/beta` landing page links directly to these via `github.com/Saadaan-Hassan/orbit-releases/releases/latest/download/<filename>` — that URL pattern always resolves to whatever release is currently "Latest", so **the landing page never needs updating after a new release**. Only the versioned filenames (e.g. `Orbit_0.2.0_aarch64.dmg`, which tauri-action uploads itself) change per release; the fixed-name copies exist purely so the beta page has something stable to link to.
 
-**Sharing with beta testers:** `/beta` landing page link (not indexed, install instructions) + the `orbit-releases` release download link +, optionally, the Chrome extension. The extension isn't on the Web Store — share a zip of `extension/dist` (rebuild first: `cd extension && pnpm build`) with Load Unpacked instructions (`chrome://extensions` → enable Developer mode → Load unpacked). Submitting as **Unlisted** on the Chrome Web Store would remove that friction but needs a one-time review.
+**Not yet done:** Apple code-signing / notarization. `signingIdentity: null` in `tauri.conf.json`, no `APPLE_ID`/`APPLE_TEAM_ID`/`APPLE_CERTIFICATE` step in the workflow despite those being documented as expected secrets. Beta testers will see a Gatekeeper "Apple could not verify this app is free of malware" warning until this is set up — needs an Apple Developer Program membership. The `/beta` page's "What to expect" list warns testers about this and gives the right-click-Open workaround in the meantime.
+
+**Sharing with beta testers:** the `/beta` landing page link is the entire flow now — it's not indexed and only shared with invitees, but it hosts real download buttons (Apple Silicon / Intel) directly, no per-user emailed link needed. Nothing to do per-tester; nothing to re-share per-release.
+
+### Chrome extension distribution
+
+**Do not distribute the extension as a zip for "Load Unpacked" beyond an initial/temporary stopgap.** Chrome does not auto-update developer-mode (unpacked) extensions, and as of Chrome 149 (2026) actively disables sideloaded/unpacked extensions periodically as a trust measure — every future code change would need manual re-sharing, and some testers' copies will silently stop working over time regardless. `extension/orbit-extension-v0.1.0.zip` is exactly this kind of stopgap artifact, not a real distribution channel.
+
+**The real fix is the Chrome Web Store (Unlisted visibility)** — Chrome auto-updates Web Store extensions in the background (checks roughly every 5-6 hours), with zero action from beta testers. `.github/workflows/publish-extension.yml` automates every update *after* a one-time manual setup (full instructions in the workflow's header comment):
+1. Register as a Chrome Web Store developer (one-time $5 fee).
+2. Submit the extension **once manually** through the Web Store Developer Dashboard as Unlisted — first submissions always need human review, there's no API for the very first listing.
+3. Create Google Cloud OAuth credentials (Desktop app type) and a refresh token for the Chrome Web Store API.
+4. Add `CHROME_EXTENSION_ID`, `CHROME_OAUTH_CLIENT_ID`, `CHROME_OAUTH_CLIENT_SECRET`, `CHROME_OAUTH_REFRESH_TOKEN` as secrets on the private repo.
+
+After that, ship an update with its own tag (separate from the app's `v*` tags):
+```bash
+# bump "version" in extension/manifest.json first — Web Store rejects a
+# re-upload at the same version number
+git tag ext-v0.1.1 && git push origin ext-v0.1.1
+```
 
 ---
 

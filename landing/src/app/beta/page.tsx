@@ -45,17 +45,37 @@ export default function BetaPage() {
           {/* Headline */}
           <div className="flex flex-col gap-3">
             <h1 className="text-2xl font-bold tracking-tight text-white">
-              Your access is being prepared.
+              You&apos;re in. Download Orbit below.
             </h1>
             <p className="text-sm text-zinc-400 font-light leading-relaxed">
-              Thank you for joining the Orbit waitlist. We&apos;re rolling out
-              access in small batches to make sure everyone gets a great
-              first experience.
+              Thanks for joining the Orbit waitlist — this page is your
+              early access. Pick the download that matches your Mac, then
+              follow the guided setup when you open the app.
             </p>
-            <p className="text-sm text-zinc-400 font-light leading-relaxed">
-              When your slot is ready, you&apos;ll receive an email with a
-              download link and step-by-step installation instructions for
-              macOS. Keep an eye on your inbox.
+          </div>
+
+          {/* Download buttons */}
+          <div className="flex flex-col gap-2.5">
+            <a
+              href="https://github.com/Saadaan-Hassan/orbit-releases/releases/latest/download/Orbit-latest-aarch64.dmg"
+              className="w-full py-3.5 rounded-xl bg-white text-zinc-950 text-sm font-semibold text-center hover:opacity-90 transition-all"
+            >
+              Download for Apple Silicon (M1/M2/M3/M4)
+            </a>
+            <a
+              href="https://github.com/Saadaan-Hassan/orbit-releases/releases/latest/download/Orbit-latest-x86_64.dmg"
+              className="w-full py-3 rounded-xl border border-white/10 text-zinc-300 text-xs font-semibold text-center hover:bg-white/5 transition-all"
+            >
+              Download for Intel Mac
+            </a>
+            <p className="text-[11px] text-zinc-600 text-center">
+              Not sure which chip you have? — Apple menu → About This Mac.{" "}
+              <a
+                href="https://github.com/Saadaan-Hassan/orbit-releases/releases/latest"
+                className="underline underline-offset-2 hover:text-zinc-400 transition-colors"
+              >
+                See all release files
+              </a>
             </p>
           </div>
 
@@ -66,8 +86,8 @@ export default function BetaPage() {
             </p>
             <ul className="flex flex-col gap-2.5">
               {[
-                "A .dmg download link sent directly to your email",
                 "macOS 13 Ventura or later required",
+                "The .dmg isn't notarized yet — macOS will warn you on first open; right-click the app and choose \"Open\" to proceed",
                 "Accessibility permission needed (you'll be guided through it)",
                 "No account creation — Orbit runs entirely on your Mac",
               ].map((item) => (
