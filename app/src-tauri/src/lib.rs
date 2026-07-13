@@ -37,6 +37,39 @@ const SIDECAR_SENTRY_DSN: &str = match option_env!("SENTRY_DSN_BACKEND") {
 #[cfg(not(debug_assertions))]
 struct SidecarHandle(std::sync::Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
 
+/// Holds the exit hook (kills the dev-mode uv-spawned FastAPI process) as
+/// managed Tauri state, boxed as a trait object since run_with_exit_hook is
+/// generic per call but state needs one concrete type. Storing it in state
+/// (rather than a closure-local variable reachable only from the tray's
+/// on_menu_event handler) is what lets every exit path share one cleanup
+/// path instead of only the tray's "Quit" item cleaning up.
+struct ExitHookState(std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>);
+
+/// Kills the backend — the bundled PyInstaller sidecar in release builds,
+/// the uv-spawned uvicorn process in dev — so nothing is left holding the
+/// Qdrant file lock or port 47821. Call this before every exit/restart path,
+/// not just the tray menu's "Quit" item.
+fn kill_backend_process(app_handle: &tauri::AppHandle) {
+    #[cfg(not(debug_assertions))]
+    {
+        if let Some(sidecar_state) = app_handle.try_state::<SidecarHandle>() {
+            if let Ok(mut guard) = sidecar_state.0.lock() {
+                if let Some(child) = guard.take() {
+                    let _ = child.kill();
+                }
+            }
+        }
+    }
+
+    if let Some(exit_hook_state) = app_handle.try_state::<ExitHookState>() {
+        if let Ok(mut guard) = exit_hook_state.0.lock() {
+            if let Some(hook) = guard.take() {
+                hook();
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
@@ -72,14 +105,20 @@ fn get_onboarding_completed() -> bool {
 }
 
 /// Restarts the Tauri application using tauri-plugin-process.
+///
+/// Kills the backend first — without this, the old backend process would
+/// keep running after restart() relaunches the app, and the new backend
+/// spawn would fail to bind port 47821 / acquire the Qdrant file lock.
 #[tauri::command]
 fn restart_app(app_handle: tauri::AppHandle) {
+    kill_backend_process(&app_handle);
     app_handle.restart();
 }
 
 /// Exits the application cleanly. Used by the startup-failure error screen.
 #[tauri::command]
 fn quit_app(app_handle: tauri::AppHandle) {
+    kill_backend_process(&app_handle);
     app_handle.exit(0);
 }
 
@@ -197,10 +236,6 @@ pub fn run_with_exit_hook<ExitHook>(on_exit_hook: ExitHook)
 where
     ExitHook: FnOnce() + Send + 'static,
 {
-    // Wrap the hook in Option so it can be consumed exactly once inside the
-    // move closure that Tauri requires for on_window_event.
-    let exit_hook_cell = std::sync::Mutex::new(Some(on_exit_hook));
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         // Shell plugin — provides the sidecar() API used in production builds
@@ -212,7 +247,14 @@ where
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
-        .setup(|app| {
+        .setup(move |app| {
+            // Managed state (not a closure-local variable) so quit_app and
+            // restart_app can also run this cleanup — previously only the
+            // tray menu's "Quit" item could reach it.
+            app.manage(ExitHookState(std::sync::Mutex::new(Some(
+                Box::new(on_exit_hook) as Box<dyn FnOnce() + Send>
+            ))));
+
             // Removes dock icon and Cmd+Tab entry on macOS.
             // Info.plist handles bundled builds; this covers dev mode.
             #[cfg(target_os = "macos")]
@@ -335,28 +377,7 @@ where
                             let _ = app_handle.emit("navigate", panel_name);
                         }
                         "quit" => {
-                            // In production, kill the bundled sidecar process
-                            // before exiting so port 47821 is not left occupied.
-                            #[cfg(not(debug_assertions))]
-                            {
-                                if let Some(sidecar_state) =
-                                    app_handle.try_state::<SidecarHandle>()
-                                {
-                                    if let Ok(mut guard) = sidecar_state.0.lock() {
-                                        if let Some(child) = guard.take() {
-                                            let _ = child.kill();
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Run the exit hook (kills FastAPI in dev) before
-                            // telling Tauri to terminate the process.
-                            if let Ok(mut guard) = exit_hook_cell.lock() {
-                                if let Some(hook) = guard.take() {
-                                    hook();
-                                }
-                            }
+                            kill_backend_process(app_handle);
                             app_handle.exit(0);
                         }
                         _ => {}
