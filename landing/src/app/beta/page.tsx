@@ -87,7 +87,7 @@ export default function BetaPage() {
             <ul className="flex flex-col gap-2.5">
               {[
                 "macOS 13 Ventura or later required",
-                "The .dmg isn't notarized yet — macOS will warn you on first open; right-click the app and choose \"Open\" to proceed",
+                "The app isn't notarized yet, so macOS will block it the first time you open it — click Done (not Move to Bin), then go to System Settings → Privacy & Security, scroll to the bottom, and click \"Open Anyway\" next to Orbit. Open it once more to confirm.",
                 "Accessibility permission needed (you'll be guided through it)",
                 "No account creation — Orbit runs entirely on your Mac",
               ].map((item) => (
