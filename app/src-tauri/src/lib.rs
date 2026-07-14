@@ -74,18 +74,29 @@ fn kill_backend_process(app_handle: &tauri::AppHandle) {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrusted() -> u8;
+}
+
 /// Returns true if the app has been granted Accessibility permission.
 ///
-/// Runs a quick osascript probe — if it succeeds, the OS has granted access.
-/// If it fails with an error 1743 / "not allowed assistive access" the
-/// permission has not been granted yet.
+/// Calls the native AXIsProcessTrusted() API directly. This previously ran
+/// an osascript probe against System Events, but that only tests Automation
+/// (Apple Events) permission for controlling System Events -- a separate TCC
+/// grant this onboarding step never prompts for -- so it could report
+/// "not granted" forever even after the user enabled Accessibility.
 #[tauri::command]
 fn check_accessibility_permission_granted() -> bool {
-    std::process::Command::new("osascript")
-        .args(["-e", "tell application \"System Events\" to get name of processes"])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    #[cfg(target_os = "macos")]
+    {
+        unsafe { AXIsProcessTrusted() != 0 }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
 }
 
 /// Opens System Settings directly to the Accessibility privacy pane.

@@ -355,21 +355,21 @@ function BrowserAutomationStep({
   );
 }
 
-// ─── Step 3 — Chrome Extension (coming soon) ─────────────────────────────────
+// ─── Step 3 — Chrome Extension ────────────────────────────────────────────────
 function ChromeExtensionStep({ onNext }: { onNext: () => void }) {
-  const [showManualInstructions, setShowManualInstructions] = useState(false);
+  const [showManualInstructions, setShowManualInstructions] = useState(true);
 
   return (
     <div className="flex flex-col gap-5 px-2">
       <div className="flex flex-col gap-1.5">
         <h2 className="text-lg font-bold text-zinc-900 dark:text-white tracking-tight">
           Browser extension{" "}
-          <span className="font-normal text-zinc-400 dark:text-zinc-500">(coming soon)</span>
+          <span className="font-normal text-zinc-400 dark:text-zinc-500">(not yet on the Web Store)</span>
         </h2>
         <p className="text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed font-light">
           For even deeper memory — the content of articles you read and searches
-          you do — install the Orbit Chrome extension. We'll notify you when
-          it's available on the Web Store.
+          you do — install the Orbit Chrome extension. It's ready to use today
+          via manual install below; we'll notify you when it's on the Web Store.
         </p>
       </div>
 
@@ -379,7 +379,7 @@ function ChromeExtensionStep({ onNext }: { onNext: () => void }) {
           onClick={() => setShowManualInstructions((prev) => !prev)}
           className="w-full flex items-center justify-between px-4 py-3 text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors cursor-pointer"
         >
-          <span>Already have it?</span>
+          <span>Install now</span>
           <svg
             viewBox="0 0 16 16"
             width="12"

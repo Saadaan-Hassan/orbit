@@ -915,6 +915,29 @@ from scheduler import generate_sessions_from_recent_events
 import asyncio; asyncio.run(generate_sessions_from_recent_events())"
 ```
 
+**Reset onboarding + permissions for testing (dev):**
+Use this to re-run the first-launch onboarding flow (Welcome → Accessibility →
+Browser Automation → Chrome Extension → What to Expect) and the macOS
+permission prompts, without touching captured memory data.
+
+```bash
+# Onboarding-completed flag only (plain file, safe to delete directly —
+# does NOT touch orbit.db, orbit.db-shm/-wal, qdrant/, or qdrant_storage/)
+rm ~/.orbit/onboarding_done
+
+# Accessibility permission (window tracking, AXIsProcessTrusted check)
+tccutil reset Accessibility com.saadaan.orbit
+
+# Automation permission (osascript control of System Events + browsers for
+# native browser URL capture) — resets every "Orbit wants to control X"
+# grant for this bundle ID in one call, regardless of target app
+tccutil reset AppleEvents com.saadaan.orbit
+```
+
+Quit Orbit via the tray icon's "Quit" item (not Cmd+Q — there's no app menu)
+before running these, then relaunch to see onboarding and the permission
+prompts again from a clean state.
+
 ---
 
 ## Release & Distribution
