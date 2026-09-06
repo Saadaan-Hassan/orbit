@@ -165,7 +165,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | MAN-005 | Maintainer | TODO | Verify code, asset, name, and trademark ownership | — |
 | REP-001 | Agent | DONE | Harden ignores and complete repository secret scan | MAN-001 |
 | REP-002 | Agent | TODO | Remove generated artifacts and normalize lockfiles | REP-001 |
-| SEC-001 | Agent | TODO | Document the local trust boundary and authentication protocol | MAN-000 |
+| SEC-001 | Agent | DONE | Document the local trust boundary and authentication protocol | MAN-000 |
 | SEC-002 | Agent | TODO | Add authenticated, restrictive FastAPI middleware | SEC-001 |
 | SEC-003 | Agent | TODO | Integrate Tauri token lifecycle and authenticated frontend client | SEC-002 |
 | SEC-004 | Agent | TODO | Add secure extension pairing and restrictive extension CORS | SEC-003 |
@@ -381,10 +381,10 @@ The design must specify:
 
 Acceptance criteria:
 
-- [ ] ADR status is `Accepted` only after implementation direction is unambiguous.
-- [ ] Threats include hostile local processes, malicious websites, malicious
+- [x] ADR status is `Accepted` only after implementation direction is unambiguous.
+- [x] Threats include hostile local processes, malicious websites, malicious
       extensions, token leakage, port squatting and replay.
-- [ ] The ADR maps directly to `SEC-002`, `SEC-003`, and `SEC-004`.
+- [x] The ADR maps directly to `SEC-002`, `SEC-003`, and `SEC-004`.
 
 ### SEC-002 — Add FastAPI authentication and restrictive middleware
 
@@ -1218,6 +1218,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-06 | ROADMAP | CREATED | `OPEN_SOURCE_ROADMAP.md` | Created from the pre-public architecture, cost, privacy, repository and release audit | Begin with `MAN-000` and `MAN-001` |
 | 2026-09-06 | MAN-000 | DONE | `OPEN_SOURCE_ROADMAP.md` | Maintainer accepted ADR-000: BYOK + local FTS5 baseline; no shared provider credentials or anonymous sponsor-funded AI at launch | Next: MAN-001 backup/service inventory, then MAN-002 license choice |
 | 2026-09-06 | REP-001 | DONE | `.gitignore`, `.gitleaksignore`, `app/src-tauri/src/capture/clipboard.rs` | Gitleaks 8.30.1: full reachable history scan passed with 0 findings after six exact old clipboard-test fixture fingerprints were allowlisted; changed source/config files scanned clean. `cargo test capture::clipboard::tests` passed 23/23. `git diff --check` and sensitive-path/example-file ignore checks passed. The ignored local `.env.sentry-build-plugin` correctly scans as one Sentry build credential; value was not read or recorded. | `cargo fmt --check` still reports pre-existing formatting drift across unrelated Rust files; deliberately not reformatted in this scoped task. Keep the local Sentry credential uncommitted; rotate/remove it in `OBS-001`/`MAN-008`. |
+| 2026-09-06 | SEC-001 | DONE | `docs/adr/ADR-001-local-api-authentication.md`, `OPEN_SOURCE_ROADMAP.md` | Accepted ADR defines per-session sidecar authentication, extension-only paired credentials, exact production/paired origins, a protected stable-port model, restart/revocation behavior, threat model, target data flow, and direct implementation mapping. `git diff --check` passed. | Implement `SEC-002` before changing callers; current local API remains unauthenticated until then. |
 
 ---
 
