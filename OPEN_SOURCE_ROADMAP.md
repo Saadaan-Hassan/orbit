@@ -106,7 +106,7 @@ The source repository must remain private until all gates below are checked.
 
 ### Decision ADR-000: Zero-maintainer-cost operation
 
-**Status:** Proposed; accept in `MAN-000`.
+**Status:** Accepted — 2026-09-06.
 
 **Context:** The current desktop binaries call an unauthenticated Cloudflare
 Worker that can spend maintainer-owned Groq, Voyage, Anthropic, and Gemini keys.
@@ -157,13 +157,13 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 
 | ID | Owner | Status | Task | Depends on |
 |---|---|---|---|---|
-| MAN-000 | Maintainer | TODO | Accept or replace ADR-000 target architecture | — |
+| MAN-000 | Maintainer | DONE | Accept or replace ADR-000 target architecture | — |
 | MAN-001 | Maintainer | TODO | Create private backup and external-service inventory | — |
 | MAN-002 | Maintainer | TODO | Choose the source license | — |
 | MAN-003 | Maintainer | TODO | Decide whether to expose or rewrite commit email/history | MAN-001 |
 | MAN-004 | Maintainer | TODO | Choose public security/privacy contact | — |
 | MAN-005 | Maintainer | TODO | Verify code, asset, name, and trademark ownership | — |
-| REP-001 | Agent | TODO | Harden ignores and complete repository secret scan | MAN-001 |
+| REP-001 | Agent | DONE | Harden ignores and complete repository secret scan | MAN-001 |
 | REP-002 | Agent | TODO | Remove generated artifacts and normalize lockfiles | REP-001 |
 | SEC-001 | Agent | TODO | Document the local trust boundary and authentication protocol | MAN-000 |
 | SEC-002 | Agent | TODO | Add authenticated, restrictive FastAPI middleware | SEC-001 |
@@ -213,12 +213,12 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 
 Maintainer actions:
 
-- [ ] Confirm BYOK + FTS5 as the baseline, or write the replacement decision in
+- [x] Confirm BYOK + FTS5 as the baseline, or write the replacement decision in
       this file before agents start `COST-*` tasks.
-- [ ] Confirm that zero **maintainer** cost is the requirement; users may incur
+- [x] Confirm that zero **maintainer** cost is the requirement; users may incur
       provider charges only after explicit setup and disclosure.
-- [ ] Confirm that no anonymous sponsor-funded AI service will remain at launch.
-- [ ] Record any approved deviations in the Completion Log.
+- [x] Confirm that no anonymous sponsor-funded AI service will remain at launch.
+- [x] Record any approved deviations in the Completion Log. No deviations.
 
 ### MAN-001 — Create backup and service inventory
 
@@ -315,13 +315,19 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] `git check-ignore` confirms all named sensitive filename classes are ignored.
-- [ ] `.env.example`/`.dev.vars.example` files remain trackable.
-- [ ] Full-history scan exits cleanly or every finding is documented privately and
-      remediated/queued for maintainer revocation.
-- [ ] No broad scanner exclusion hides application source or all test fixtures.
-- [ ] Completion Log contains scanner names, versions, commands and redacted result
+- [x] `git check-ignore` confirms all named sensitive filename classes are ignored.
+- [x] `.env.example`/`.dev.vars.example` files remain trackable.
+- [x] Full-history scan exits cleanly after six exact historical test-fixture
+      fingerprints are documented in `.gitleaksignore`.
+- [x] No broad scanner exclusion hides application source or all test fixtures.
+- [x] Completion Log contains scanner names, versions, commands and redacted result
       counts.
+- [x] Clipboard-redaction tests pass with the installed Rust toolchain.
+
+Manual follow-up: `.env.sentry-build-plugin` is intentionally ignored but the
+current worktree scan correctly identifies it as a Sentry build credential. Do
+not commit, share, or suppress that finding. Rotate/revoke it or remove it after
+the telemetry/release migration in `OBS-001` and `MAN-008`.
 
 ### REP-002 — Remove generated artifacts and normalize lockfiles
 
@@ -1210,6 +1216,8 @@ Append one row per task attempt. Do not include secret values or captured user d
 | Date | Task | Result | Files/areas changed | Verification/evidence | Follow-up/blocker |
 |---|---|---|---|---|---|
 | 2026-09-06 | ROADMAP | CREATED | `OPEN_SOURCE_ROADMAP.md` | Created from the pre-public architecture, cost, privacy, repository and release audit | Begin with `MAN-000` and `MAN-001` |
+| 2026-09-06 | MAN-000 | DONE | `OPEN_SOURCE_ROADMAP.md` | Maintainer accepted ADR-000: BYOK + local FTS5 baseline; no shared provider credentials or anonymous sponsor-funded AI at launch | Next: MAN-001 backup/service inventory, then MAN-002 license choice |
+| 2026-09-06 | REP-001 | DONE | `.gitignore`, `.gitleaksignore`, `app/src-tauri/src/capture/clipboard.rs` | Gitleaks 8.30.1: full reachable history scan passed with 0 findings after six exact old clipboard-test fixture fingerprints were allowlisted; changed source/config files scanned clean. `cargo test capture::clipboard::tests` passed 23/23. `git diff --check` and sensitive-path/example-file ignore checks passed. The ignored local `.env.sentry-build-plugin` correctly scans as one Sentry build credential; value was not read or recorded. | `cargo fmt --check` still reports pre-existing formatting drift across unrelated Rust files; deliberately not reformatted in this scoped task. Keep the local Sentry credential uncommitted; rotate/remove it in `OBS-001`/`MAN-008`. |
 
 ---
 
@@ -1225,4 +1233,3 @@ These must not distract agents from the ordered launch work:
 - Apple notarization when funded.
 - Chrome Web Store distribution when funded.
 - Formal external penetration test/privacy legal review.
-

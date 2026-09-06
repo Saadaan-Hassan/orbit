@@ -1,0 +1,10 @@
+# Historical test fixtures in app/src-tauri/src/capture/clipboard.rs.
+# These fingerprints are limited to old commits that cannot be removed without a
+# history rewrite. Current fixtures are constructed at runtime so new findings
+# remain visible to Gitleaks.
+2e87318e0de3a8fb195d0bf5e8ba859fde7923b3:app/src-tauri/src/capture/clipboard.rs:gitlab-pat:496
+a00ebb99d2bf04315bfdc09edc36b54ac99f5328:app/src-tauri/src/capture/clipboard.rs:jwt:253
+a00ebb99d2bf04315bfdc09edc36b54ac99f5328:app/src-tauri/src/capture/clipboard.rs:github-pat:248
+a00ebb99d2bf04315bfdc09edc36b54ac99f5328:app/src-tauri/src/capture/clipboard.rs:gcp-api-key:293
+a00ebb99d2bf04315bfdc09edc36b54ac99f5328:app/src-tauri/src/capture/clipboard.rs:generic-api-key:297
+a00ebb99d2bf04315bfdc09edc36b54ac99f5328:app/src-tauri/src/capture/clipboard.rs:stripe-access-token:301

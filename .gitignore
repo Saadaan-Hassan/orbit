@@ -10,23 +10,44 @@ dist/
 !backend/dist/orbit-backend-aarch64-apple-darwin
 !backend/dist/orbit-backend-x86_64-apple-darwin
 .DS_Store
-.env
-.env.local
-*.env
-backend/.env
+
+# Environment files and local credentials. Keep only explicitly safe examples.
+.env*
+!.env.example
+!**/.env.example
+!**/.env.*.example
+
+# Cloudflare local secrets. Keep only explicitly safe examples.
+**/.dev.vars*
+!**/.dev.vars.example
+
+# Private signing, certificate, service-account, and mobile provisioning files.
+*.key
+*.pem
+*.p12
+*.p8
+*.mobileprovision
+**/service-account*.json
+**/google-services.json
 __pycache__/
 .venv/
 target/
 *.db
-~/.orbit/
+*.db-*
+*.sqlite
+*.sqlite-*
+.orbit/
 
 # Wrangler local state
 .wrangler/
-
-# Cloudflare build output (optional depending setup)
-.dev.vars
 
 # Claude Code — per-developer local settings (permission allowlist etc.),
 # not meant for the shared repo. .claude/launch.json (dev-server preview
 # config) IS meant to be shared and is committed.
 .claude/settings.local.json
+
+# Local editor state.
+.idea/
+.vscode/*.local.*
+*.swp
+*.swo
