@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { BACKEND_BASE_URL } from "@/lib/config";
+import { orbitApiFetch } from "@/lib/local-api";
 import type { EventTypeFilter, MemoryEvent, MemorySession } from "../types";
 
 const EVENTS_PAGE_SIZE = 50;
@@ -61,8 +61,8 @@ export function useMemoryData(): UseMemoryDataReturn {
   ): Promise<void> {
     setIsLoadingEvents(true);
     try {
-      const response = await fetch(
-        `${BACKEND_BASE_URL}/memory/events?limit=${EVENTS_PAGE_SIZE}&offset=${offset}&type=${filter}`
+      const response = await orbitApiFetch(
+        `/memory/events?limit=${EVENTS_PAGE_SIZE}&offset=${offset}&type=${filter}`
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data: {
@@ -84,8 +84,8 @@ export function useMemoryData(): UseMemoryDataReturn {
   async function fetchSessions(offset: number, append: boolean): Promise<void> {
     setIsLoadingSessions(true);
     try {
-      const response = await fetch(
-        `${BACKEND_BASE_URL}/memory/sessions?limit=${SESSIONS_PAGE_SIZE}&offset=${offset}`
+      const response = await orbitApiFetch(
+        `/memory/sessions?limit=${SESSIONS_PAGE_SIZE}&offset=${offset}`
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data: { sessions: MemorySession[]; total: number } =
@@ -137,8 +137,8 @@ export function useMemoryData(): UseMemoryDataReturn {
   }, [sessionsOffset]);
 
   const deleteEvent = useCallback(async (eventId: string): Promise<void> => {
-    const response = await fetch(
-      `${BACKEND_BASE_URL}/memory/events/${encodeURIComponent(eventId)}`,
+    const response = await orbitApiFetch(
+      `/memory/events/${encodeURIComponent(eventId)}`,
       { method: "DELETE" }
     );
     if (!response.ok) throw new Error("Failed to delete event.");
@@ -151,8 +151,8 @@ export function useMemoryData(): UseMemoryDataReturn {
 
   const deleteSession = useCallback(
     async (sessionId: string): Promise<void> => {
-      const response = await fetch(
-        `${BACKEND_BASE_URL}/memory/sessions/${encodeURIComponent(sessionId)}`,
+      const response = await orbitApiFetch(
+        `/memory/sessions/${encodeURIComponent(sessionId)}`,
         { method: "DELETE" }
       );
       if (!response.ok) throw new Error("Failed to delete session.");
@@ -170,7 +170,7 @@ export function useMemoryData(): UseMemoryDataReturn {
       comment: string | null,
       context: string | null
     ): Promise<void> => {
-      const response = await fetch(`${BACKEND_BASE_URL}/feedback`, {
+      const response = await orbitApiFetch("/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rating, comment, context }),

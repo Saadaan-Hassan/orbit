@@ -22,6 +22,7 @@ from starlette.types import ASGIApp
 SESSION_TOKEN_ENV: Final = "ORBIT_LOCAL_API_SESSION_TOKEN"
 PRODUCTION_ENVIRONMENTS: Final = frozenset({"production", "prod"})
 TAURI_WEBVIEW_ORIGIN: Final = "tauri://localhost"
+DEVELOPMENT_WEBVIEW_ORIGIN: Final = "http://localhost:1420"
 LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1:47821", "localhost:47821"})
 ALLOWED_CORS_METHODS: Final = frozenset({"DELETE", "GET", "POST"})
 ALLOWED_CORS_HEADERS: Final = frozenset({"authorization", "content-type"})
@@ -55,9 +56,18 @@ class LocalApiSecurityConfig:
                 f"{SESSION_TOKEN_ENV} must be a base64url token containing at least 256 bits in production."
             )
 
+        allowed_origins = frozenset({TAURI_WEBVIEW_ORIGIN})
+        if environment not in PRODUCTION_ENVIRONMENTS:
+            # Tauri development loads the local Vite server. This origin is
+            # deliberately unavailable in a release build.
+            allowed_origins = allowed_origins | {DEVELOPMENT_WEBVIEW_ORIGIN}
+
         # A development process without a token still starts for diagnostics, but
         # the middleware returns 503 for every request instead of weakening auth.
-        return cls(session_token=token if _is_valid_session_token(token) else None)
+        return cls(
+            session_token=token if _is_valid_session_token(token) else None,
+            allowed_origins=allowed_origins,
+        )
 
 
 class LocalApiSecurityMiddleware(BaseHTTPMiddleware):

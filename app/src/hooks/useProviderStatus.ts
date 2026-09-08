@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { BACKEND_BASE_URL } from "../lib/config";
+import { orbitApiFetch } from "../lib/local-api";
 
 export interface ProviderStatusState {
   claudeEnabled: boolean;
@@ -24,7 +24,7 @@ export function useProviderStatus(): ProviderStatusState {
 
     async function fetchStatus(): Promise<void> {
       try {
-        const response = await fetch(`${BACKEND_BASE_URL}/settings/provider-status`);
+        const response = await orbitApiFetch("/settings/provider-status");
         if (!response.ok) throw new Error("Failed to load provider status.");
         const data = await response.json() as { claude: boolean; gemini: boolean; groq: boolean };
         if (cancelled) return;

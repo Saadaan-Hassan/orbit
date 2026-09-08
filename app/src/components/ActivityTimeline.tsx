@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { BACKEND_BASE_URL } from "@/lib/config";
-
-const BACKEND_EVENTS_URL = `${BACKEND_BASE_URL}/events?limit=50`;
+import { orbitApiFetch } from "@/lib/local-api";
 const REFRESH_INTERVAL_MS = 30_000; // Refresh every 30s to keep timeline active
 
 interface CaptureEvent {
@@ -78,7 +76,7 @@ export function ActivityTimeline() {
 
   async function fetchEvents() {
     try {
-      const response = await fetch(BACKEND_EVENTS_URL);
+      const response = await orbitApiFetch("/events?limit=50");
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const eventsData: CaptureEvent[] = await response.json();
       setCaptureEvents(eventsData);

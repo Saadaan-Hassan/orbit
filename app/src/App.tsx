@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import { BACKEND_BASE_URL } from "@/lib/config";
+import { clearOrbitApiSession } from "@/lib/local-api";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MemoryViewer } from "./components/MemoryViewer";
 import { OnboardingFlow } from "./components/OnboardingFlow";
@@ -148,30 +148,9 @@ export default function App() {
     };
   }, []);
 
-  // When the backend was unreachable at startup, keep polling every 2s until it responds.
-  // Also runs a one-off check at mount (when status is "unknown") to prevent missing early "backend-ready" events.
-  useEffect(() => {
-    if (backendStatus === "ready") return;
-
-    if (backendStatus === "unknown") {
-      fetch(`${BACKEND_BASE_URL}/health`)
-        .then((res) => {
-          if (res.ok) setBackendStatus("ready");
-        })
-        .catch(() => { });
-      return;
-    }
-
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${BACKEND_BASE_URL}/health`);
-        if (res.ok) setBackendStatus("ready");
-      } catch {
-        // still unavailable — keep polling
-      }
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [backendStatus]);
+  // Rust owns authenticated readiness checks. The webview must never probe
+  // /health directly because its shared token belongs in the API wrapper only.
+  useEffect(() => () => clearOrbitApiSession(), []);
 
   // Resize and center the window for onboarding
   useEffect(() => {

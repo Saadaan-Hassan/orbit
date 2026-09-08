@@ -12,6 +12,7 @@ from fastapi.routing import APIRoute
 from local_api_security import (
     LocalApiSecurityConfig,
     LocalApiSecurityMiddleware,
+    DEVELOPMENT_WEBVIEW_ORIGIN,
     SESSION_TOKEN_ENV,
     TAURI_WEBVIEW_ORIGIN,
 )
@@ -43,7 +44,15 @@ class LocalApiSecurityTests(unittest.TestCase):
             {"APP_ENVIRONMENT": "production", SESSION_TOKEN_ENV: secrets.token_urlsafe(32)},
             clear=True,
         ):
-            self.assertIsNotNone(LocalApiSecurityConfig.from_environment().session_token)
+            config = LocalApiSecurityConfig.from_environment()
+            self.assertIsNotNone(config.session_token)
+            self.assertNotIn(DEVELOPMENT_WEBVIEW_ORIGIN, config.allowed_origins)
+
+        with patch.dict("os.environ", {SESSION_TOKEN_ENV: secrets.token_urlsafe(32)}, clear=True):
+            self.assertIn(
+                DEVELOPMENT_WEBVIEW_ORIGIN,
+                LocalApiSecurityConfig.from_environment().allowed_origins,
+            )
 
     def test_sensitive_route_requires_a_valid_bearer_token(self) -> None:
         client, token = _client()

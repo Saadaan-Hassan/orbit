@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { BACKEND_BASE_URL } from "@/lib/config";
+import { orbitApiFetch } from "@/lib/local-api";
 import type { TimelineDayData, TimelineSession } from "../types";
 
 function buildTodayDateString(): string {
@@ -51,8 +51,8 @@ export function useTimeline(initialDate?: string): UseTimelineResult {
     setError(null);
 
     try {
-      const response = await fetch(
-        `${BACKEND_BASE_URL}/timeline/day?date=${encodeURIComponent(dateString)}`
+      const response = await orbitApiFetch(
+        `/timeline/day?date=${encodeURIComponent(dateString)}`
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data: TimelineDayData = await response.json();
@@ -67,7 +67,7 @@ export function useTimeline(initialDate?: string): UseTimelineResult {
 
   async function fetchAvailableDates(): Promise<void> {
     try {
-      const response = await fetch(`${BACKEND_BASE_URL}/timeline/dates`);
+      const response = await orbitApiFetch("/timeline/dates");
       if (!response.ok) return;
       const data: { dates: string[] } = await response.json();
       setAvailableDates(data.dates);

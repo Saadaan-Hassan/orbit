@@ -3,6 +3,18 @@ use tauri::{
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use rand::{rngs::OsRng, RngCore};
+
+/// Kept in Rust application state only. It is generated for each sidecar
+/// lifecycle and never written to a file, Vite variable, URL, or analytics.
+struct LocalApiSessionToken(String);
+
+pub fn generate_local_api_session_token() -> String {
+    let mut token_bytes = [0_u8; 32];
+    OsRng.fill_bytes(&mut token_bytes);
+    URL_SAFE_NO_PAD.encode(token_bytes)
+}
 
 // ---------------------------------------------------------------------------
 // Production sidecar state
@@ -113,6 +125,14 @@ fn open_accessibility_system_settings() {
 fn get_onboarding_completed() -> bool {
     let home = std::env::var("HOME").unwrap_or_default();
     std::path::Path::new(&format!("{}/.orbit/onboarding_done", home)).exists()
+}
+
+/// Returns the current in-memory sidecar credential to Orbit's main webview.
+/// The Tauri capability is restricted to the `main` window; the frontend keeps
+/// the result only inside its shared API-client module.
+#[tauri::command]
+fn get_local_api_session_token(token: tauri::State<'_, LocalApiSessionToken>) -> String {
+    token.0.clone()
 }
 
 /// Restarts the Tauri application using tauri-plugin-process.
@@ -238,12 +258,12 @@ fn open_automation_system_settings() {
 /// Entry point used by main.rs when no exit hook is needed (mobile / tests).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    run_with_exit_hook(|| {});
+    run_with_exit_hook(generate_local_api_session_token(), || {});
 }
 
 /// Entry point that calls `on_exit_hook` just before the process terminates.
 /// main.rs uses this to kill the FastAPI child process on quit.
-pub fn run_with_exit_hook<ExitHook>(on_exit_hook: ExitHook)
+pub fn run_with_exit_hook<ExitHook>(local_api_session_token: String, on_exit_hook: ExitHook)
 where
     ExitHook: FnOnce() + Send + 'static,
 {
@@ -265,6 +285,7 @@ where
             app.manage(ExitHookState(std::sync::Mutex::new(Some(
                 Box::new(on_exit_hook) as Box<dyn FnOnce() + Send>
             ))));
+            app.manage(LocalApiSessionToken(local_api_session_token.clone()));
 
             // Removes dock icon and Cmd+Tab entry on macOS.
             // Info.plist handles bundled builds; this covers dev mode.
@@ -432,6 +453,7 @@ where
                     .env("POSTHOG_API_KEY", SIDECAR_POSTHOG_API_KEY)
                     .env("SENTRY_DSN", SIDECAR_SENTRY_DSN)
                     .env("APP_ENVIRONMENT", "production")
+                    .env("ORBIT_LOCAL_API_SESSION_TOKEN", &local_api_session_token)
                     .spawn()
                     .expect("Failed to spawn orbit-backend sidecar");
 
@@ -444,6 +466,7 @@ where
             // Once the backend is confirmed up, emit "backend-ready" so the UI
             // can dismiss any loading overlay.
             let health_check_app_handle = app.handle().clone();
+            let health_check_token = local_api_session_token;
             tauri::async_runtime::spawn(async move {
                 let http_client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(1))
@@ -454,6 +477,7 @@ where
                 for _ in 0..10 {
                     if http_client
                         .get("http://localhost:47821/health")
+                        .bearer_auth(&health_check_token)
                         .send()
                         .await
                         .map(|r| r.status().is_success())
@@ -478,6 +502,7 @@ where
             check_accessibility_permission_granted,
             open_accessibility_system_settings,
             get_onboarding_completed,
+            get_local_api_session_token,
             mark_onboarding_completed,
             restart_app,
             quit_app,
@@ -562,5 +587,20 @@ fn position_window_on_active_monitor(window: &tauri::WebviewWindow, mode: Positi
             PositionMode::Center => monitor.position().y + (monitor.size().height as i32 - size.height as i32) / 2,
         };
         let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+    }
+}
+
+#[cfg(test)]
+mod local_api_session_token_tests {
+    use super::*;
+
+    #[test]
+    fn generates_distinct_256_bit_base64url_tokens() {
+        let first = generate_local_api_session_token();
+        let second = generate_local_api_session_token();
+
+        assert_ne!(first, second);
+        assert_eq!(URL_SAFE_NO_PAD.decode(first).unwrap().len(), 32);
+        assert_eq!(URL_SAFE_NO_PAD.decode(second).unwrap().len(), 32);
     }
 }

@@ -44,32 +44,15 @@ fn resolve_uv_executable_path() -> String {
 }
 
 #[cfg(debug_assertions)]
-/// Kills any process already bound to port 47821.
-///
-/// During Tauri hot-reload the old binary is killed abruptly, which means the
-/// exit hook that calls child.kill() never runs. The old FastAPI process stays
-/// alive, holds the Qdrant file lock, and causes the new FastAPI spawn to crash
-/// on import. Running this before every spawn ensures we always start clean.
-fn kill_stale_process_on_port_47821() {
-    // `lsof -ti:47821` prints the PID of whatever owns the port, or exits
-    // non-zero / prints nothing if the port is free. We pipe straight to
-    // `kill` and ignore all errors — if the port is free this is a no-op.
-    let _ = Command::new("sh")
-        .args(["-c", "lsof -ti:47821 | xargs kill -9 2>/dev/null"])
-        .output();
-
-    // Give the OS a moment to release the port and the Qdrant lock file
-    // before we start the new FastAPI process.
-    std::thread::sleep(std::time::Duration::from_millis(500));
-}
-
-#[cfg(debug_assertions)]
-fn spawn_fastapi_backend(backend_directory_path: &str) -> Child {
+fn spawn_fastapi_backend(backend_directory_path: &str, session_token: &str) -> Child {
     let uv_executable_path = resolve_uv_executable_path();
 
     Command::new(&uv_executable_path)
         .args(["run", "uvicorn", "main:app", "--port", "47821", "--no-access-log"])
         .current_dir(backend_directory_path)
+        // This avoids disclosure through process arguments, URLs, and normal
+        // access logs. The token is never written to persistent storage.
+        .env("ORBIT_LOCAL_API_SESSION_TOKEN", session_token)
         // Inherit stdout and stderr so FastAPI logs appear in the same terminal.
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -174,6 +157,7 @@ fn main() {
     // Enter the runtime context so Tauri's internal async commands can use
     // tokio::spawn without needing their own runtime.
     let _tokio_runtime_guard = tokio_runtime.enter();
+    let local_api_session_token = app_lib::generate_local_api_session_token();
 
     // ── Development only: spawn the uv-based FastAPI backend ────────────────
     // In release builds the backend is bundled as a PyInstaller sidecar and
@@ -190,12 +174,10 @@ fn main() {
                 format!("{}/../../backend", src_tauri_directory)
             });
 
-        // Evict any stale FastAPI process left over from a previous hot-reload
-        // cycle before spawning the new one. This releases the Qdrant file lock
-        // that would otherwise cause the new process to crash on startup.
-        kill_stale_process_on_port_47821();
-
-        let fastapi_child_process = spawn_fastapi_backend(&backend_directory_path);
+        // A port collision is handled by the authenticated readiness probe; do
+        // not kill or trust an arbitrary process that owns the shared port.
+        let fastapi_child_process =
+            spawn_fastapi_backend(&backend_directory_path, &local_api_session_token);
 
         // Wrap the child handle in Arc<Mutex<Option<Child>>> so it can be moved
         // into the Tauri exit hook.
@@ -208,7 +190,7 @@ fn main() {
 
         let fastapi_child_process_handle_for_exit = Arc::clone(&fastapi_child_process_handle);
 
-        app_lib::run_with_exit_hook(move || {
+        app_lib::run_with_exit_hook(local_api_session_token, move || {
             // Kill the FastAPI subprocess cleanly when the Tauri app exits so
             // that port 47821 is not left occupied on subsequent launches.
             if let Ok(mut guard) = fastapi_child_process_handle_for_exit.lock() {
@@ -224,5 +206,5 @@ fn main() {
 
     // ── Production: no FastAPI to manage — sidecar is handled by lib.rs ─────
     #[cfg(not(debug_assertions))]
-    app_lib::run_with_exit_hook(|| {});
+    app_lib::run_with_exit_hook(local_api_session_token, || {});
 }

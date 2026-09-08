@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useOrbitStore } from "../store/orbitStore";
 import { useAnalytics } from "./useAnalytics";
 
-import { BACKEND_BASE_URL } from "@/lib/config";
+import { orbitApiFetch } from "@/lib/local-api";
 
 function classifyNetworkError(rawError: unknown): string {
   const message = rawError instanceof Error ? rawError.message.toLowerCase() : "";
@@ -55,7 +55,7 @@ export function useRecall() {
     setIsStreaming(true);
 
     try {
-      const fetchResponse = await fetch(`${BACKEND_BASE_URL}/recall`, {
+      const fetchResponse = await orbitApiFetch("/recall", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

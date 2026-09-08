@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { BACKEND_BASE_URL } from "@/lib/config";
+import { orbitApiFetch } from "@/lib/local-api";
 import type { ProjectCard, ProjectsData } from "../types";
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -45,7 +45,7 @@ export function useProjects(): UseProjectsResult {
     }
 
     try {
-      const response = await fetch(`${BACKEND_BASE_URL}/projects`);
+      const response = await orbitApiFetch("/projects");
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data: ProjectsData = await response.json();
 

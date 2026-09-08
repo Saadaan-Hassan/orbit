@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { BACKEND_BASE_URL } from "@/lib/config";
+import { orbitApiFetch } from "@/lib/local-api";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -99,12 +99,12 @@ export function usePrivacySettings(): PrivacySettings {
           fileWatchResponse,
           screenContentResponse,
         ] = await Promise.all([
-          fetch(`${BACKEND_BASE_URL}/privacy/capture-status`),
-          fetch(`${BACKEND_BASE_URL}/privacy/excluded-apps`),
-          fetch(`${BACKEND_BASE_URL}/privacy/excluded-domains`),
-          fetch(`${BACKEND_BASE_URL}/privacy/browser-capture`),
-          fetch(`${BACKEND_BASE_URL}/privacy/file-watching`),
-          fetch(`${BACKEND_BASE_URL}/privacy/screen-content`),
+          orbitApiFetch("/privacy/capture-status"),
+          orbitApiFetch("/privacy/excluded-apps"),
+          orbitApiFetch("/privacy/excluded-domains"),
+          orbitApiFetch("/privacy/browser-capture"),
+          orbitApiFetch("/privacy/file-watching"),
+          orbitApiFetch("/privacy/screen-content"),
         ]);
 
         if (
@@ -153,7 +153,7 @@ export function usePrivacySettings(): PrivacySettings {
     const trimmedName = appName.trim();
     if (!trimmedName) return;
 
-    const response = await fetch(`${BACKEND_BASE_URL}/privacy/excluded-apps`, {
+    const response = await orbitApiFetch("/privacy/excluded-apps", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ app_name: trimmedName }),
@@ -170,8 +170,8 @@ export function usePrivacySettings(): PrivacySettings {
   const removeExcludedApp = useCallback(
     async (appName: string): Promise<void> => {
       const encodedName = encodeURIComponent(appName);
-      const response = await fetch(
-        `${BACKEND_BASE_URL}/privacy/excluded-apps/${encodedName}`,
+      const response = await orbitApiFetch(
+        `/privacy/excluded-apps/${encodedName}`,
         { method: "DELETE" }
       );
 
@@ -189,8 +189,8 @@ export function usePrivacySettings(): PrivacySettings {
       const normalizedDomain = normalizeDomain(domain);
       if (!normalizedDomain) return;
 
-      const response = await fetch(
-        `${BACKEND_BASE_URL}/privacy/excluded-domains`,
+      const response = await orbitApiFetch(
+        "/privacy/excluded-domains",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -212,8 +212,8 @@ export function usePrivacySettings(): PrivacySettings {
   const removeExcludedDomain = useCallback(
     async (domain: string): Promise<void> => {
       const encodedDomain = encodeURIComponent(domain);
-      const response = await fetch(
-        `${BACKEND_BASE_URL}/privacy/excluded-domains/${encodedDomain}`,
+      const response = await orbitApiFetch(
+        `/privacy/excluded-domains/${encodedDomain}`,
         { method: "DELETE" }
       );
 
@@ -228,7 +228,7 @@ export function usePrivacySettings(): PrivacySettings {
 
   const setNativeBrowserEnabled = useCallback(
     async (enabled: boolean): Promise<void> => {
-      const response = await fetch(`${BACKEND_BASE_URL}/privacy/browser-capture`, {
+      const response = await orbitApiFetch("/privacy/browser-capture", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ native_enabled: enabled }),
@@ -241,7 +241,7 @@ export function usePrivacySettings(): PrivacySettings {
 
   const setFileWatchEnabled = useCallback(
     async (enabled: boolean): Promise<void> => {
-      const response = await fetch(`${BACKEND_BASE_URL}/privacy/file-watching`, {
+      const response = await orbitApiFetch("/privacy/file-watching", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
@@ -254,7 +254,7 @@ export function usePrivacySettings(): PrivacySettings {
 
   const setScreenContentEnabled = useCallback(
     async (enabled: boolean): Promise<void> => {
-      const response = await fetch(`${BACKEND_BASE_URL}/privacy/screen-content`, {
+      const response = await orbitApiFetch("/privacy/screen-content", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
@@ -267,7 +267,7 @@ export function usePrivacySettings(): PrivacySettings {
 
   const addWatchedFolder = useCallback(
     async (folder: string): Promise<void> => {
-      const response = await fetch(`${BACKEND_BASE_URL}/privacy/watched-folders`, {
+      const response = await orbitApiFetch("/privacy/watched-folders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ folder }),
@@ -282,7 +282,7 @@ export function usePrivacySettings(): PrivacySettings {
 
   const removeWatchedFolder = useCallback(
     async (folder: string): Promise<void> => {
-      const response = await fetch(`${BACKEND_BASE_URL}/privacy/watched-folders`, {
+      const response = await orbitApiFetch("/privacy/watched-folders", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ folder }),
@@ -303,7 +303,7 @@ export function usePrivacySettings(): PrivacySettings {
           ? Date.now() + durationMinutes * 60 * 1000
           : null;
 
-      const response = await fetch(`${BACKEND_BASE_URL}/privacy/pause`, {
+      const response = await orbitApiFetch("/privacy/pause", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ paused_until_timestamp: pausedUntilTimestamp }),
@@ -318,7 +318,7 @@ export function usePrivacySettings(): PrivacySettings {
   );
 
   const resumeCapture = useCallback(async (): Promise<void> => {
-    const response = await fetch(`${BACKEND_BASE_URL}/privacy/resume`, {
+    const response = await orbitApiFetch("/privacy/resume", {
       method: "POST",
     });
 
@@ -331,7 +331,7 @@ export function usePrivacySettings(): PrivacySettings {
   const wipeAllMemory = useCallback(async (): Promise<void> => {
     setIsWiping(true);
     try {
-      const response = await fetch(`${BACKEND_BASE_URL}/privacy/all-data`, {
+      const response = await orbitApiFetch("/privacy/all-data", {
         method: "DELETE",
       });
       if (!response.ok) throw new Error("Wipe failed.");
