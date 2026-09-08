@@ -18,7 +18,7 @@ import httpx
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from database import fetch_sessions_by_time_range, fetch_system_state_events, search_events_fts
 from services.analytics_service import capture_analytics_event
@@ -141,8 +141,8 @@ def _query_asks_about_time_or_breaks(query: str) -> bool:
 # ---------------------------------------------------------------------------
 
 class RecallRequest(BaseModel):
-    query: str
-    conversation_history: list[dict] | None = None
+    query: str = Field(min_length=1, max_length=4_000)
+    conversation_history: list[dict] | None = Field(default=None, max_length=4)
 
 
 # ---------------------------------------------------------------------------

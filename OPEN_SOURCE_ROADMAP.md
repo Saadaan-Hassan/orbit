@@ -166,7 +166,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | REP-001 | Agent | DONE | Harden ignores and complete repository secret scan | MAN-001 |
 | REP-002 | Agent | TODO | Remove generated artifacts and normalize lockfiles | REP-001 |
 | SEC-001 | Agent | DONE | Document the local trust boundary and authentication protocol | MAN-000 |
-| SEC-002 | Agent | TODO | Add authenticated, restrictive FastAPI middleware | SEC-001 |
+| SEC-002 | Agent | DONE | Add authenticated, restrictive FastAPI middleware | SEC-001 |
 | SEC-003 | Agent | TODO | Integrate Tauri token lifecycle and authenticated frontend client | SEC-002 |
 | SEC-004 | Agent | TODO | Add secure extension pairing and restrictive extension CORS | SEC-003 |
 | PRIV-001 | Agent | TODO | Add versioned capture consent and safe database defaults | SEC-003 |
@@ -411,12 +411,12 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] Missing, malformed and incorrect credentials return 401/403 on every
+- [x] Missing, malformed and incorrect credentials return 401/403 on every
       sensitive route, including wipe, memory, settings, recall and capture.
-- [ ] Unknown browser origins fail preflight/request checks.
-- [ ] Valid Tauri requests pass.
-- [ ] `/health` remains usable by the trusted startup sequence.
-- [ ] Automated route enumeration proves no sensitive router was omitted.
+- [x] Unknown browser origins fail preflight/request checks.
+- [x] Valid Tauri requests pass.
+- [x] `/health` remains usable by the trusted startup sequence.
+- [x] Automated route enumeration proves no sensitive router was omitted.
 
 ### SEC-003 — Integrate Tauri token lifecycle and frontend API wrapper
 
@@ -1219,6 +1219,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-06 | MAN-000 | DONE | `OPEN_SOURCE_ROADMAP.md` | Maintainer accepted ADR-000: BYOK + local FTS5 baseline; no shared provider credentials or anonymous sponsor-funded AI at launch | Next: MAN-001 backup/service inventory, then MAN-002 license choice |
 | 2026-09-06 | REP-001 | DONE | `.gitignore`, `.gitleaksignore`, `app/src-tauri/src/capture/clipboard.rs` | Gitleaks 8.30.1: full reachable history scan passed with 0 findings after six exact old clipboard-test fixture fingerprints were allowlisted; changed source/config files scanned clean. `cargo test capture::clipboard::tests` passed 23/23. `git diff --check` and sensitive-path/example-file ignore checks passed. The ignored local `.env.sentry-build-plugin` correctly scans as one Sentry build credential; value was not read or recorded. | `cargo fmt --check` still reports pre-existing formatting drift across unrelated Rust files; deliberately not reformatted in this scoped task. Keep the local Sentry credential uncommitted; rotate/remove it in `OBS-001`/`MAN-008`. |
 | 2026-09-06 | SEC-001 | DONE | `docs/adr/ADR-001-local-api-authentication.md`, `OPEN_SOURCE_ROADMAP.md` | Accepted ADR defines per-session sidecar authentication, extension-only paired credentials, exact production/paired origins, a protected stable-port model, restart/revocation behavior, threat model, target data flow, and direct implementation mapping. `git diff --check` passed. | Implement `SEC-002` before changing callers; current local API remains unauthenticated until then. |
+| 2026-09-08 | SEC-002 | DONE | `backend/local_api_security.py`, `backend/main.py`, request models, backend security tests, `app/src-tauri/src/main.rs` | Universal middleware requires the 256-bit app-session bearer credential for every registered route; it validates loopback Host and exact Tauri origin, has restrictive preflight/CORS, rejects credential query parameters, limits request/field sizes, removes API schema endpoints, and makes `/health` authenticated/no-content. Production rejects a missing/invalid token. `uv run python -m unittest discover -s tests -v` passed 6/6; compilation and `git diff --check` passed. | SEC-003 must generate/deliver the token and migrate desktop callers. The existing extension intentionally cannot authenticate until SEC-004 adds explicit pairing and capture-only authorization. Rust's full formatter still reports unrelated pre-existing drift outside this task. |
 
 ---
 

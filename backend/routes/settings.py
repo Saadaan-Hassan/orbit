@@ -2,7 +2,7 @@ import os
 
 import httpx
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from database import (
     get_groq_key_enabled,
@@ -18,7 +18,7 @@ _provider_status_http_client = httpx.AsyncClient(timeout=10.0)
 
 
 class GroqKeyRequest(BaseModel):
-    api_key: str
+    api_key: str = Field(max_length=512)
 
 
 class GroqKeyEnabledRequest(BaseModel):

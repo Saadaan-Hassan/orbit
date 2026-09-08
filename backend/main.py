@@ -1,14 +1,12 @@
-import asyncio
 import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text as sqlalchemy_text
+from fastapi import FastAPI, Response
 
-from database import create_all_tables, _async_engine as _db_engine
+from database import create_all_tables
+from local_api_security import LocalApiSecurityConfig, LocalApiSecurityMiddleware
 from routes.capture import router as capture_router
 from routes.feedback import router as feedback_router
 from routes.memory import router as memory_router
@@ -18,7 +16,7 @@ from routes.projects import router as projects_router
 from routes.settings import router as settings_router
 from routes.timeline import router as timeline_router
 from scheduler import create_session_scheduler
-from services.qdrant_service import initialize_qdrant_collection, _get_client as get_qdrant_client
+from services.qdrant_service import initialize_qdrant_collection
 from services.analytics_service import capture_analytics_event
 from services.sentry_service import initialise_sentry_error_reporting
 
@@ -27,6 +25,9 @@ load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # In production, this raises before any database, telemetry, or scheduler
+    # startup when the Tauri parent has not supplied a valid session token.
+    app.state.local_api_security = LocalApiSecurityConfig.from_environment()
     sentry_dsn = os.getenv("SENTRY_DSN", "")
     if sentry_dsn:
         initialise_sentry_error_reporting(
@@ -48,13 +49,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     session_scheduler.shutdown(wait=False)
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
+# Installed before all routers so a future router cannot accidentally become
+# public. The config is read without logging it.
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    LocalApiSecurityMiddleware,
+    config=LocalApiSecurityConfig.from_environment(),
 )
 
 app.include_router(capture_router)
@@ -67,32 +73,7 @@ app.include_router(settings_router)
 app.include_router(timeline_router)
 
 
-@app.get("/health")
-async def health_check() -> dict:
-    """Lightweight liveness + readiness probe used by the Tauri startup check.
-
-    Never raises — returns status flags so the caller can decide what to show.
-    """
-    db_connected = False
-    qdrant_connected = False
-
-    try:
-        async with _db_engine.connect() as conn:
-            await conn.execute(sqlalchemy_text("SELECT 1"))
-        db_connected = True
-    except Exception:
-        pass
-
-    try:
-        client = get_qdrant_client()
-        await asyncio.to_thread(client.get_collections)
-        qdrant_connected = True
-    except Exception:
-        pass
-
-    return {
-        "status": "ok",
-        "version": os.getenv("APP_VERSION", "0.1.0"),
-        "db_connected": db_connected,
-        "qdrant_connected": qdrant_connected,
-    }
+@app.get("/health", status_code=204)
+async def health_check() -> Response:
+    """Authenticated, minimal sidecar readiness probe for the Tauri parent."""
+    return Response(status_code=204)

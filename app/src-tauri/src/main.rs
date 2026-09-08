@@ -68,7 +68,7 @@ fn spawn_fastapi_backend(backend_directory_path: &str) -> Child {
     let uv_executable_path = resolve_uv_executable_path();
 
     Command::new(&uv_executable_path)
-        .args(["run", "uvicorn", "main:app", "--port", "47821"])
+        .args(["run", "uvicorn", "main:app", "--port", "47821", "--no-access-log"])
         .current_dir(backend_directory_path)
         // Inherit stdout and stderr so FastAPI logs appear in the same terminal.
         .stdout(Stdio::inherit())

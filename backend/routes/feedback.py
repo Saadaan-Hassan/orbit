@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from database import _async_engine
@@ -27,10 +27,10 @@ logger = logging.getLogger(__name__)
 
 class FeedbackRequest(BaseModel):
     rating: Literal["positive", "negative"]
-    comment: Optional[str] = None
+    comment: Optional[str] = Field(default=None, max_length=4_000)
     # Caller may attach the recall query or a snippet of the response so the
     # feedback row has enough context to be actionable without a separate join.
-    context: Optional[str] = None
+    context: Optional[str] = Field(default=None, max_length=10_000)
 
 
 # ---------------------------------------------------------------------------
