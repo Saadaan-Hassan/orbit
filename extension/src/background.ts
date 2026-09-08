@@ -8,6 +8,7 @@
  */
 
 const ORBIT_CAPTURE_ENDPOINT = "http://localhost:47821/capture";
+const ORBIT_PAIR_ENDPOINT = "http://localhost:47821/extension/pair";
 
 // ---------------------------------------------------------------------------
 // Message types received from content.ts
@@ -82,6 +83,39 @@ async function writeLastSentUrl(url: string): Promise<void> {
   await chrome.storage.session.set({ lastSentUrl: url });
 }
 
+async function readExtensionToken(): Promise<string | null> {
+  const stored = await chrome.storage.local.get("orbitExtensionToken");
+  return typeof stored["orbitExtensionToken"] === "string" ? stored["orbitExtensionToken"] : null;
+}
+
+async function setPairingState(state: "paired" | "needs-pairing" | "backend-unavailable"): Promise<void> {
+  await chrome.storage.local.set({ orbitPairingState: state });
+  const badge = state === "paired" ? "" : "!";
+  await chrome.action.setBadgeText({ text: badge });
+  await chrome.action.setBadgeBackgroundColor({ color: state === "backend-unavailable" ? "#6b7280" : "#dc2626" });
+}
+
+async function captureHeaders(): Promise<HeadersInit | null> {
+  const token = await readExtensionToken();
+  if (!token) {
+    await setPairingState("needs-pairing");
+    return null;
+  }
+  return { "Content-Type": "application/json", "Authorization": `Bearer ${token}` };
+}
+
+async function handleCaptureResponse(response: Response): Promise<boolean> {
+  if (response.ok) {
+    await setPairingState("paired");
+    return true;
+  }
+  if (response.status === 401 || response.status === 403) {
+    await chrome.storage.local.remove("orbitExtensionToken");
+    await setPairingState("needs-pairing");
+  }
+  return false;
+}
+
 async function sendCaptureEvent(tab: chrome.tabs.Tab): Promise<void> {
   const tabUrl   = tab.url   ?? "";
   const tabTitle = tab.title ?? "";
@@ -102,19 +136,22 @@ async function sendCaptureEvent(tab: chrome.tabs.Tab): Promise<void> {
   };
 
   try {
+    const headers = await captureHeaders();
+    if (!headers) return;
     const response = await fetch(ORBIT_CAPTURE_ENDPOINT, {
       method:  "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body:    JSON.stringify(capturePayload),
     });
 
-    if (response.ok) {
+    if (await handleCaptureResponse(response)) {
       // Only update lastSentUrl after a confirmed successful delivery so
       // transient network failures don't permanently suppress future sends.
       await writeLastSentUrl(tabUrl);
     }
   } catch {
     // Orbit backend is not running — fail silently, no user-visible error.
+    await setPairingState("backend-unavailable");
   }
 }
 
@@ -141,16 +178,17 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, updatedTab) => {
 
 async function postToCaptureEndpoint(payload: Record<string, unknown>): Promise<void> {
   try {
+    const headers = await captureHeaders();
+    if (!headers) return;
     const response = await fetch(ORBIT_CAPTURE_ENDPOINT, {
       method:  "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body:    JSON.stringify(payload),
     });
-    if (!response.ok) {
-      console.debug(`Orbit capture failed: ${response.status}`);
-    }
+    await handleCaptureResponse(response);
   } catch {
     // Orbit backend is not running — fail silently.
+    await setPairingState("backend-unavailable");
   }
 }
 
@@ -224,3 +262,30 @@ chrome.runtime.onMessage.addListener(
     handleContentScriptMessage(message, senderTabUrl).catch(() => {});
   },
 );
+
+chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+  if (!message || typeof message !== "object" || (message as { type?: string }).type !== "pair") return;
+  const code = (message as { code?: unknown }).code;
+  if (typeof code !== "string") {
+    sendResponse({ ok: false, error: "Enter the pairing code from Orbit." });
+    return;
+  }
+  void (async () => {
+    try {
+      const response = await fetch(ORBIT_PAIR_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await response.json() as { token?: string };
+      if (!response.ok || !data.token) throw new Error("Pairing was rejected.");
+      await chrome.storage.local.set({ orbitExtensionToken: data.token });
+      await setPairingState("paired");
+      sendResponse({ ok: true });
+    } catch {
+      await setPairingState("needs-pairing");
+      sendResponse({ ok: false, error: "Pairing failed. Generate a new code in Orbit." });
+    }
+  })();
+  return true;
+});

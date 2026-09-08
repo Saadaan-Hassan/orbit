@@ -23,6 +23,17 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
   );
 }
 
+function BrowserExtensionSection({ createCode, revoke }: { createCode: () => Promise<string>; revoke: () => Promise<void> }) {
+  const [code, setCode] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  return <div className="flex flex-col gap-2"><SectionHeading>Browser Extension</SectionHeading>
+    <p className="text-xs text-zinc-400 dark:text-zinc-500 font-light leading-relaxed">Pair the Orbit extension explicitly. The code expires in five minutes and grants capture-only access. Incognito remains off unless enabled in Chrome.</p>
+    {code ? <code className="rounded-lg bg-zinc-100 dark:bg-zinc-900 px-3 py-2 text-xs break-all select-all">{code}</code> : null}
+    <div className="flex gap-2"><button onClick={async () => { try { setError(null); setCode(await createCode()); } catch { setError("Could not create a pairing code."); } }} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-zinc-900 dark:bg-white text-white dark:text-zinc-950">Generate code</button>
+      <button onClick={async () => { try { await revoke(); setCode(null); } catch { setError("Could not revoke pairing."); } }} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-zinc-100 dark:bg-zinc-900">Revoke extension</button></div>
+    {error ? <p className="text-xs text-red-500">{error}</p> : null}</div>;
+}
+
 // ─── Inline Confirm Dialog ───────────────────────────────────────────────────
 interface ConfirmDialogProps {
   isOpen: boolean;
@@ -793,6 +804,8 @@ export function PrivacyPanel() {
     pauseCapture,
     resumeCapture,
     wipeAllMemory,
+    createExtensionPairingCode,
+    revokeExtensionPairings,
   } = usePrivacySettings();
 
   if (isLoading) {
@@ -847,6 +860,10 @@ export function PrivacyPanel() {
         enabled={nativeBrowserEnabled}
         onToggle={setNativeBrowserEnabled}
       />
+
+      <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
+
+      <BrowserExtensionSection createCode={createExtensionPairingCode} revoke={revokeExtensionPairings} />
 
       <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
 

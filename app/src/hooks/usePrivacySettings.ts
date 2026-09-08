@@ -47,6 +47,8 @@ export interface PrivacySettings {
   pauseCapture: (durationMinutes: number | null) => Promise<void>;
   resumeCapture: () => Promise<void>;
   wipeAllMemory: () => Promise<void>;
+  createExtensionPairingCode: () => Promise<string>;
+  revokeExtensionPairings: () => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -341,6 +343,18 @@ export function usePrivacySettings(): PrivacySettings {
     }
   }, []);
 
+  const createExtensionPairingCode = useCallback(async (): Promise<string> => {
+    const response = await orbitApiFetch("/extension/pairing-code", { method: "POST" });
+    if (!response.ok) throw new Error("Could not create extension pairing code.");
+    const data = await response.json() as { code: string };
+    return data.code;
+  }, []);
+
+  const revokeExtensionPairings = useCallback(async (): Promise<void> => {
+    const response = await orbitApiFetch("/extension/pairing", { method: "DELETE" });
+    if (!response.ok) throw new Error("Could not revoke extension pairing.");
+  }, []);
+
   return {
     isCapturing,
     pausedUntil,
@@ -365,5 +379,7 @@ export function usePrivacySettings(): PrivacySettings {
     pauseCapture,
     resumeCapture,
     wipeAllMemory,
+    createExtensionPairingCode,
+    revokeExtensionPairings,
   };
 }

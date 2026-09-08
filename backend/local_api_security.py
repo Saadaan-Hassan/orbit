@@ -11,6 +11,9 @@ import base64
 import binascii
 import hmac
 import os
+import re
+import secrets
+import time
 from dataclasses import dataclass
 from typing import Final
 
@@ -23,10 +26,50 @@ SESSION_TOKEN_ENV: Final = "ORBIT_LOCAL_API_SESSION_TOKEN"
 PRODUCTION_ENVIRONMENTS: Final = frozenset({"production", "prod"})
 TAURI_WEBVIEW_ORIGIN: Final = "tauri://localhost"
 DEVELOPMENT_WEBVIEW_ORIGIN: Final = "http://localhost:1420"
+EXTENSION_ORIGIN_RE: Final = re.compile(r"^chrome-extension://([a-p]{32})$")
 LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1:47821", "localhost:47821"})
 ALLOWED_CORS_METHODS: Final = frozenset({"DELETE", "GET", "POST"})
 ALLOWED_CORS_HEADERS: Final = frozenset({"authorization", "content-type"})
 MAX_REQUEST_BODY_BYTES: Final = 1_048_576
+
+
+class PairingCodeRegistry:
+    """In-memory, one-use pairing codes; never persisted or logged."""
+
+    def __init__(self) -> None:
+        self._hash: str | None = None
+        self._expires_at = 0.0
+        self._failures = 0
+
+    def issue(self) -> str:
+        code = secrets.token_urlsafe(24)
+        self._hash = self._hash_token(code)
+        self._expires_at = time.monotonic() + 300
+        self._failures = 0
+        return code
+
+    def consume(self, code: str) -> bool:
+        valid = (
+            self._hash is not None
+            and time.monotonic() < self._expires_at
+            and self._failures < 5
+            and hmac.compare_digest(self._hash, self._hash_token(code))
+        )
+        if valid:
+            self._hash = None
+            return True
+        self._failures += 1
+        if self._failures >= 5 or time.monotonic() >= self._expires_at:
+            self._hash = None
+        return False
+
+    @staticmethod
+    def _hash_token(value: str) -> str:
+        import hashlib
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+pairing_codes = PairingCodeRegistry()
 
 
 def _is_valid_session_token(value: str) -> bool:
@@ -83,11 +126,16 @@ class LocalApiSecurityMiddleware(BaseHTTPMiddleware):
             return self._error(400, "Invalid Host header.")
 
         origin = request.headers.get("origin")
-        if origin is not None and origin not in self._config.allowed_origins:
+        is_pairing_request = request.url.path == "/extension/pair"
+        extension_id = self._extension_id(origin)
+        allowed_extension = extension_id is not None and await self._is_active_extension(extension_id)
+        if origin is not None and origin not in self._config.allowed_origins and not (
+            is_pairing_request and extension_id is not None
+        ) and not allowed_extension:
             return self._error(403, "Origin is not allowed.")
 
         if request.method == "OPTIONS":
-            return self._handle_preflight(request, origin)
+            return self._handle_preflight(request, origin, allowed_extension or is_pairing_request)
 
         if self._contains_credential_query_parameter(request):
             return self._error(400, "Credentials in query parameters are not accepted.")
@@ -105,7 +153,19 @@ class LocalApiSecurityMiddleware(BaseHTTPMiddleware):
             return self._error(503, "Local API authentication is not configured.")
 
         provided_token = self._bearer_token(request.headers.get("authorization"))
-        if provided_token is None or not hmac.compare_digest(provided_token, self._config.session_token):
+        if is_pairing_request and extension_id is not None:
+            # Pairing is authorized by a short-lived code in the request body,
+            # not the desktop bearer token. The route can do only that action.
+            return await call_next(request)
+
+        app_token_valid = provided_token is not None and hmac.compare_digest(provided_token, self._config.session_token)
+        extension_token_valid = (
+            request.url.path == "/capture"
+            and extension_id is not None
+            and provided_token is not None
+            and await self._is_active_extension(extension_id, provided_token)
+        )
+        if not app_token_valid and not extension_token_valid:
             return self._error(401, "Authentication is required.")
 
         response = await call_next(request)
@@ -113,9 +173,11 @@ class LocalApiSecurityMiddleware(BaseHTTPMiddleware):
             self._add_cors_headers(response, origin)
         return response
 
-    def _handle_preflight(self, request: Request, origin: str | None) -> Response:
+    def _handle_preflight(self, request: Request, origin: str | None, extension_allowed: bool) -> Response:
         if origin is None:
             return self._error(400, "CORS preflight requires an Origin header.")
+        if origin not in self._config.allowed_origins and not extension_allowed:
+            return self._error(403, "Origin is not allowed.")
 
         requested_method = request.headers.get("access-control-request-method", "").upper()
         if requested_method not in ALLOWED_CORS_METHODS:
@@ -159,3 +221,25 @@ class LocalApiSecurityMiddleware(BaseHTTPMiddleware):
     def _error(status_code: int, detail: str) -> JSONResponse:
         # Never include request headers, tokens, or request body in this response.
         return JSONResponse(status_code=status_code, content={"detail": detail})
+
+    @staticmethod
+    def _extension_id(origin: str | None) -> str | None:
+        match = EXTENSION_ORIGIN_RE.fullmatch(origin or "")
+        return match.group(1) if match else None
+
+    @staticmethod
+    async def _is_active_extension(extension_id: str, token: str | None = None) -> bool:
+        from sqlalchemy import text
+        from database import _async_engine
+
+        async with _async_engine.connect() as connection:
+            result = await connection.execute(
+                text("SELECT token_hash FROM paired_extensions WHERE extension_id = :id AND revoked_at IS NULL"),
+                {"id": extension_id},
+            )
+            row = result.fetchone()
+        if row is None:
+            return False
+        if token is None:
+            return True
+        return hmac.compare_digest(row.token_hash, PairingCodeRegistry._hash_token(token))

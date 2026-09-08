@@ -408,6 +408,9 @@ async def wipe_all_data() -> dict:
         await connection.execute(text("DELETE FROM events_fts"))
         await connection.execute(text("DELETE FROM events"))
         await connection.execute(text("DELETE FROM sessions"))
+        # Pairing credentials authorize access to captured data, so a full wipe
+        # revokes them too. The extension must be explicitly paired again.
+        await connection.execute(text("DELETE FROM paired_extensions"))
 
     # Remove all vector embeddings from the local Qdrant collection.
     await wipe_all_session_embeddings()

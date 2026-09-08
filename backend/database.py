@@ -256,6 +256,17 @@ async def create_all_tables() -> None:
             )
         """))
 
+        # Browser-extension credentials are stored only as SHA-256 hashes. A
+        # row is scoped to one Chrome extension ID and may be revoked locally.
+        await connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS paired_extensions (
+                extension_id TEXT PRIMARY KEY,
+                token_hash   TEXT NOT NULL,
+                created_at   INTEGER NOT NULL,
+                revoked_at   INTEGER
+            )
+        """))
+
         # Ensure the single capture_state row exists so UPDATE queries
         # in the privacy routes never silently affect zero rows.
         await connection.execute(text("""

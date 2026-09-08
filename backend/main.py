@@ -8,6 +8,7 @@ from fastapi import FastAPI, Response
 from database import create_all_tables
 from local_api_security import LocalApiSecurityConfig, LocalApiSecurityMiddleware
 from routes.capture import router as capture_router
+from routes.extension_pairing import router as extension_pairing_router
 from routes.feedback import router as feedback_router
 from routes.memory import router as memory_router
 from routes.privacy import router as privacy_router
@@ -64,6 +65,7 @@ app.add_middleware(
 )
 
 app.include_router(capture_router)
+app.include_router(extension_pairing_router)
 app.include_router(recall_router)
 app.include_router(privacy_router)
 app.include_router(memory_router)

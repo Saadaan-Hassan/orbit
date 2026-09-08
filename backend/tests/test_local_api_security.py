@@ -12,6 +12,7 @@ from fastapi.routing import APIRoute
 from local_api_security import (
     LocalApiSecurityConfig,
     LocalApiSecurityMiddleware,
+    PairingCodeRegistry,
     DEVELOPMENT_WEBVIEW_ORIGIN,
     SESSION_TOKEN_ENV,
     TAURI_WEBVIEW_ORIGIN,
@@ -34,6 +35,16 @@ def _client() -> tuple[TestClient, str]:
 
 
 class LocalApiSecurityTests(unittest.TestCase):
+    def test_pairing_codes_are_one_use_and_fail_closed_after_bad_attempts(self) -> None:
+        registry = PairingCodeRegistry()
+        code = registry.issue()
+        self.assertTrue(registry.consume(code))
+        self.assertFalse(registry.consume(code))
+
+        code = registry.issue()
+        for _ in range(5):
+            self.assertFalse(registry.consume("incorrect-pairing-code"))
+        self.assertFalse(registry.consume(code))
     def test_production_requires_a_valid_session_token(self) -> None:
         with patch.dict("os.environ", {"APP_ENVIRONMENT": "production"}, clear=True):
             with self.assertRaises(RuntimeError):
