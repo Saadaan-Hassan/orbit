@@ -169,7 +169,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | SEC-002 | Agent | DONE | Add authenticated, restrictive FastAPI middleware | SEC-001 |
 | SEC-003 | Agent | DONE | Integrate Tauri token lifecycle and authenticated frontend client | SEC-002 |
 | SEC-004 | Agent | DONE | Add secure extension pairing and restrictive extension CORS | SEC-003 |
-| PRIV-001 | Agent | TODO | Add versioned capture consent and safe database defaults | SEC-003 |
+| PRIV-001 | Agent | DONE | Add versioned capture consent and safe database defaults | SEC-003 |
 | PRIV-002 | Agent | TODO | Gate all Rust capture monitors on consent and settings | PRIV-001 |
 | PRIV-003 | Agent | TODO | Sanitize every Rust-captured field before SQLite | PRIV-002 |
 | PRIV-004 | Agent | TODO | Sanitize all provider-bound context at the Python boundary | PRIV-003 |
@@ -501,11 +501,11 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] Fresh database has all capture settings disabled.
-- [ ] Pre-migration database becomes paused pending re-consent.
-- [ ] Missing/corrupt consent settings fail closed.
-- [ ] User can later revoke each category without wiping unrelated preferences.
-- [ ] Migration tests cover fresh, existing and partially migrated databases.
+- [x] Fresh database has all capture settings disabled.
+- [x] Pre-migration database becomes paused pending re-consent.
+- [x] Missing/corrupt consent settings fail closed.
+- [x] User can later revoke each category without wiping unrelated preferences.
+- [x] Migration tests cover fresh, existing and partially migrated databases.
 
 ### PRIV-002 — Gate every Rust capture monitor
 
@@ -1222,6 +1222,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-08 | SEC-002 | DONE | `backend/local_api_security.py`, `backend/main.py`, request models, backend security tests, `app/src-tauri/src/main.rs` | Universal middleware requires the 256-bit app-session bearer credential for every registered route; it validates loopback Host and exact Tauri origin, has restrictive preflight/CORS, rejects credential query parameters, limits request/field sizes, removes API schema endpoints, and makes `/health` authenticated/no-content. Production rejects a missing/invalid token. `uv run python -m unittest discover -s tests -v` passed 6/6; compilation and `git diff --check` passed. | SEC-003 must generate/deliver the token and migrate desktop callers. The existing extension intentionally cannot authenticate until SEC-004 adds explicit pairing and capture-only authorization. Rust's full formatter still reports unrelated pre-existing drift outside this task. |
 | 2026-09-08 | SEC-003 | DONE | Tauri sidecar lifecycle, `app/src/lib/local-api.ts`, all desktop API callers, development-origin configuration, security tests | Rust generates a fresh 32-byte OS-CSPRNG token per app session, passes it only via the sidecar child environment, authenticates readiness, and never kills an unknown port occupant. The single module-memory webview client obtains the token through a main-window Tauri command and attaches it to every desktop API request; no direct local-backend `fetch` remains. It clears on unmount/401; startup emits the existing safe unavailable state on failure. `cargo check --bin app`, token unit test, frontend `pnpm build` (including TypeScript), backend security tests 6/6, and `git diff --check` passed. | SEC-004 must add the distinct paired extension token; no browser extension can use the sidecar yet. A full Rust formatter still reports unrelated pre-existing formatting drift. |
 | 2026-09-08 | SEC-004 | DONE | Pairing routes/table/middleware, extension popup and service worker, desktop Privacy pairing controls, extension permission documentation | Orbit issues five-minute, one-use in-memory pairing codes from its authenticated UI. A Chrome-origin pairing request receives a distinct random capture-only token; only its hash and exact extension ID are stored. Middleware permits that token only on `/capture` from that paired origin, revocation/full wipe invalidates it, and browser auth failures visibly require re-pairing. `uv run python -m unittest discover -s tests -v` passed 7/7; desktop `pnpm build`, extension `pnpm build`, backend compilation, and `git diff --check` passed. | Load the built extension manually in Chrome before public release to validate Chrome-origin behavior and pairing UX on a real profile. |
+| 2026-09-08 | PRIV-001 | DONE | `ADR-002`, consent migration/API, safe database defaults, migration tests, backend dependency lock | Consent version 1 records independent capture choices and defaults all of them off. Fresh and upgraded databases are paused until review; absent rows fail closed. Existing native-browser/file/screen toggles also update their consent category. `greenlet` is now an explicit SQLAlchemy async runtime dependency. Backend tests passed 9/9, including fresh and existing-schema migration coverage; compilation and `git diff --check` passed. | PRIV-002 must enforce this record in every Rust monitor and replace remaining Rust fail-open defaults before any capture can resume. |
 
 ---
 

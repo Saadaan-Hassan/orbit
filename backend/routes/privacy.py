@@ -72,6 +72,41 @@ class SetScreenContentRequest(BaseModel):
     enabled: bool
 
 
+class CaptureConsentRequest(BaseModel):
+    clipboard: bool = False
+    app_window: bool = False
+    browser: bool = False
+    file_activity: bool = False
+    screen_content: bool = False
+
+
+@router.get("/consent")
+async def get_capture_consent() -> dict:
+    async with _async_engine.connect() as connection:
+        result = await connection.execute(text("SELECT * FROM capture_consent WHERE id = 1"))
+        row = result.fetchone()
+    if row is None:
+        # Fail closed if a corrupt/partially migrated database lacks the row.
+        return {"consent_version": 1, "accepted": False, "clipboard": False, "app_window": False, "browser": False, "file_activity": False, "screen_content": False}
+    return {"consent_version": row.consent_version, "accepted": row.accepted_at is not None, "clipboard": bool(row.clipboard), "app_window": bool(row.app_window), "browser": bool(row.browser), "file_activity": bool(row.file_activity), "screen_content": bool(row.screen_content)}
+
+
+@router.post("/consent")
+async def save_capture_consent(request: CaptureConsentRequest) -> dict:
+    from datetime import datetime, timezone
+    accepted_at = int(datetime.now(timezone.utc).timestamp() * 1000)
+    async with _async_engine.begin() as connection:
+        await connection.execute(text("""
+            UPDATE capture_consent SET accepted_at = :accepted_at, clipboard = :clipboard,
+                app_window = :app_window, browser = :browser, file_activity = :file_activity,
+                screen_content = :screen_content WHERE id = 1
+        """), {"accepted_at": accepted_at, **request.model_dump()})
+        # Consent is not the same as a global pause: accepting choices allows
+        # PRIV-002 to apply each category independently.
+        await connection.execute(text("UPDATE capture_state SET is_paused = 0, paused_until = NULL WHERE id = 1"))
+    return {"status": "ok"}
+
+
 # ---------------------------------------------------------------------------
 # Excluded apps
 # ---------------------------------------------------------------------------
@@ -204,6 +239,7 @@ async def set_browser_capture(request: SetBrowserCaptureRequest) -> dict:
             ),
             {"enabled": 1 if request.native_enabled else 0},
         )
+        await connection.execute(text("UPDATE capture_consent SET browser = :enabled WHERE id = 1"), {"enabled": int(request.native_enabled)})
     return {"native_enabled": request.native_enabled}
 
 
@@ -231,6 +267,7 @@ async def set_screen_content(request: SetScreenContentRequest) -> dict:
             ),
             {"enabled": 1 if request.enabled else 0},
         )
+        await connection.execute(text("UPDATE capture_consent SET screen_content = :enabled WHERE id = 1"), {"enabled": int(request.enabled)})
     return {"enabled": request.enabled}
 
 
@@ -268,6 +305,7 @@ async def set_file_watching(request: SetFileWatchingRequest) -> dict:
             text("UPDATE file_watch_settings SET enabled = :enabled WHERE id = 1"),
             {"enabled": 1 if request.enabled else 0},
         )
+        await connection.execute(text("UPDATE capture_consent SET file_activity = :enabled WHERE id = 1"), {"enabled": int(request.enabled)})
     return {"enabled": request.enabled}
 
 

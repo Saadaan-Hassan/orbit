@@ -256,6 +256,21 @@ async def create_all_tables() -> None:
             )
         """))
 
+        # Consent is versioned so a future material expansion of capture can
+        # require an explicit review. All categories are opt-in by default.
+        await connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS capture_consent (
+                id               INTEGER PRIMARY KEY CHECK (id = 1),
+                consent_version  INTEGER NOT NULL,
+                accepted_at      INTEGER,
+                clipboard        INTEGER NOT NULL DEFAULT 0,
+                app_window       INTEGER NOT NULL DEFAULT 0,
+                browser          INTEGER NOT NULL DEFAULT 0,
+                file_activity    INTEGER NOT NULL DEFAULT 0,
+                screen_content   INTEGER NOT NULL DEFAULT 0
+            )
+        """))
+
         # Browser-extension credentials are stored only as SHA-256 hashes. A
         # row is scoped to one Chrome extension ID and may be revoked locally.
         await connection.execute(text("""
@@ -271,8 +286,21 @@ async def create_all_tables() -> None:
         # in the privacy routes never silently affect zero rows.
         await connection.execute(text("""
             INSERT OR IGNORE INTO capture_state (id, is_paused, paused_until)
-            VALUES (1, 0, NULL)
+            VALUES (1, 1, NULL)
         """))
+
+        # Existing installations have no consent row. Insert one with all
+        # sources disabled and pause capture pending a deliberate review.
+        await connection.execute(text("""
+            INSERT OR IGNORE INTO capture_consent
+                (id, consent_version, accepted_at, clipboard, app_window, browser, file_activity, screen_content)
+            VALUES (1, 1, NULL, 0, 0, 0, 0, 0)
+        """))
+        consent_result = await connection.execute(
+            text("SELECT accepted_at FROM capture_consent WHERE id = 1")
+        )
+        if consent_result.fetchone().accepted_at is None:
+            await connection.execute(text("UPDATE capture_state SET is_paused = 1, paused_until = NULL WHERE id = 1"))
 
         # Single-row table (id=1 always) that controls whether file activity
         # is captured and which folders are watched. watched_folders stores a
@@ -280,7 +308,7 @@ async def create_all_tables() -> None:
         await connection.execute(text("""
             CREATE TABLE IF NOT EXISTS file_watch_settings (
                 id              INTEGER PRIMARY KEY DEFAULT 1,
-                enabled         INTEGER NOT NULL DEFAULT 1,
+            enabled         INTEGER NOT NULL DEFAULT 0,
                 watched_folders TEXT    NOT NULL DEFAULT '[]'
             )
         """))
@@ -297,7 +325,7 @@ async def create_all_tables() -> None:
         await connection.execute(text("""
             CREATE TABLE IF NOT EXISTS browser_capture_settings (
                 id             INTEGER PRIMARY KEY DEFAULT 1,
-                native_enabled INTEGER NOT NULL DEFAULT 1
+            native_enabled INTEGER NOT NULL DEFAULT 0
             )
         """))
 
@@ -312,7 +340,7 @@ async def create_all_tables() -> None:
         await connection.execute(text("""
             CREATE TABLE IF NOT EXISTS screen_content_settings (
                 id      INTEGER PRIMARY KEY DEFAULT 1,
-                enabled INTEGER NOT NULL DEFAULT 1
+            enabled INTEGER NOT NULL DEFAULT 0
             )
         """))
 
