@@ -1,11 +1,11 @@
 """
 Capture endpoints — receive activity events and write them to SQLite.
 
-Pause and exclude filtering is enforced at two layers:
+Consent, pause, and exclusion filtering are enforced at two layers:
 - HERE (FastAPI): gates events arriving from the Chrome extension.
-- Rust (clipboard.rs, window.rs): each capture task reads capture_state and
-  excluded_apps from SQLite directly, with a 30-second local cache, before
-  every write. Both layers must agree for the controls to be effective.
+- Rust capture monitors: each task reads its consent and capture state from
+  SQLite directly before every write. Both layers must agree for the controls
+  to be effective.
 """
 
 import asyncio
@@ -29,12 +29,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # In-memory filter cache
 #
-# Refreshed from SQLite at most once every 30 seconds. This keeps the hot
+# Refreshed from SQLite at most once every five seconds. This keeps the hot
 # path (every captured event) free of synchronous DB round-trips while still
-# picking up pause/resume and exclude-list changes within half a minute.
+# applying consent, pause/resume, and exclusion changes promptly.
 # ---------------------------------------------------------------------------
 
-_CACHE_TTL_SECONDS = 30.0
+_CACHE_TTL_SECONDS = 5.0
 
 # When both native_browser capture and the Chrome extension are active, the
 # same URL can be recorded within seconds of each other. We deduplicate by
@@ -45,8 +45,17 @@ _URL_DEDUP_WINDOW_MS = 10_000  # 10 seconds
 
 @dataclass
 class _CaptureFilterCache:
-    is_paused: bool = False
+    # Every unset value is deliberately fail-closed: this route receives
+    # extension events, so an unavailable or uninitialised local database must
+    # never make capture start implicitly.
+    is_paused: bool = True
     paused_until_ms: int | None = None        # None means indefinite
+    consent_accepted: bool = False
+    clipboard_consent: bool = False
+    app_window_consent: bool = False
+    browser_consent: bool = False
+    file_activity_consent: bool = False
+    screen_content_consent: bool = False
     excluded_app_names: set[str] = field(default_factory=set)
     excluded_domains: set[str] = field(default_factory=set)
     last_refreshed_at: float = 0.0            # monotonic seconds
@@ -72,31 +81,64 @@ async def _refresh_cache_if_stale() -> None:
         if time.monotonic() - _filter_cache.last_refreshed_at < _CACHE_TTL_SECONDS:
             return
 
-        async with _async_engine.connect() as connection:
-            pause_result = await connection.execute(
-                text("SELECT is_paused, paused_until FROM capture_state WHERE id = 1")
-            )
-            pause_row = pause_result.fetchone()
+        # Populate temporary values first, then replace the shared cache all at
+        # once. Any SQLite error leaves it fail-closed instead of retaining a
+        # previously granted consent decision.
+        is_paused = True
+        paused_until_ms: int | None = None
+        consent_accepted = False
+        clipboard_consent = False
+        app_window_consent = False
+        browser_consent = False
+        file_activity_consent = False
+        screen_content_consent = False
+        excluded_rows = []
+        domain_rows = []
 
-            exclude_result = await connection.execute(
-                text("SELECT app_name FROM excluded_apps")
-            )
-            excluded_rows = exclude_result.fetchall()
+        try:
+            async with _async_engine.connect() as connection:
+                pause_result = await connection.execute(
+                    text("SELECT is_paused, paused_until FROM capture_state WHERE id = 1")
+                )
+                pause_row = pause_result.fetchone()
 
-            # excluded_domains must be queried inside the same open connection.
-            # Previously this ran after the `async with` block closed, causing
-            # a "connection already released" error that was silently caught and
-            # left excluded_domains permanently empty.
-            try:
+                consent_result = await connection.execute(text("""
+                    SELECT accepted_at, clipboard, app_window, browser, file_activity, screen_content
+                    FROM capture_consent WHERE id = 1
+                """))
+                consent_row = consent_result.fetchone()
+
+                exclude_result = await connection.execute(
+                    text("SELECT app_name FROM excluded_apps")
+                )
+                excluded_rows = exclude_result.fetchall()
+
                 domain_result = await connection.execute(
                     text("SELECT domain FROM excluded_domains")
                 )
                 domain_rows = domain_result.fetchall()
-            except Exception:
-                domain_rows = []
 
-        _filter_cache.is_paused = bool(pause_row.is_paused) if pause_row else False
-        _filter_cache.paused_until_ms = pause_row.paused_until if pause_row else None
+            if pause_row is not None:
+                is_paused = bool(pause_row.is_paused)
+                paused_until_ms = pause_row.paused_until
+            if consent_row is not None and consent_row.accepted_at is not None:
+                consent_accepted = True
+                clipboard_consent = bool(consent_row.clipboard)
+                app_window_consent = bool(consent_row.app_window)
+                browser_consent = bool(consent_row.browser)
+                file_activity_consent = bool(consent_row.file_activity)
+                screen_content_consent = bool(consent_row.screen_content)
+        except Exception:
+            logger.warning("Capture controls could not be read; refusing capture", exc_info=True)
+
+        _filter_cache.is_paused = is_paused
+        _filter_cache.paused_until_ms = paused_until_ms
+        _filter_cache.consent_accepted = consent_accepted
+        _filter_cache.clipboard_consent = clipboard_consent
+        _filter_cache.app_window_consent = app_window_consent
+        _filter_cache.browser_consent = browser_consent
+        _filter_cache.file_activity_consent = file_activity_consent
+        _filter_cache.screen_content_consent = screen_content_consent
         _filter_cache.excluded_app_names = {row.app_name for row in excluded_rows}
         _filter_cache.excluded_domains = {row.domain for row in domain_rows}
         _filter_cache.last_refreshed_at = time.monotonic()
@@ -155,6 +197,30 @@ def _capture_is_currently_paused() -> bool:
     return _filter_cache.paused_until_ms > now_ms
 
 
+_EVENT_CONSENT_FIELD = {
+    "clipboard": "clipboard_consent",
+    "window": "app_window_consent",
+    "app_lifecycle": "app_window_consent",
+    "system_state": "app_window_consent",
+    "url": "browser_consent",
+    "page_content": "browser_consent",
+    "search_query": "browser_consent",
+    "link_click": "browser_consent",
+    "file_activity": "file_activity_consent",
+    "screen_content": "screen_content_consent",
+}
+
+
+def _capture_category_is_allowed(event_type: str) -> bool:
+    """Allows only an explicitly consented category; unknown types fail closed."""
+    consent_field = _EVENT_CONSENT_FIELD.get(event_type)
+    return bool(
+        consent_field
+        and _filter_cache.consent_accepted
+        and getattr(_filter_cache, consent_field)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -169,6 +235,9 @@ async def capture_event(
 
     if _capture_is_currently_paused():
         return {"status": "paused"}
+
+    if not _capture_category_is_allowed(event.type):
+        return {"status": "consent_required"}
 
     if event.app_name and event.app_name in _filter_cache.excluded_app_names:
         return {"status": "excluded"}

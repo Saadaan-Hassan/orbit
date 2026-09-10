@@ -205,13 +205,13 @@ pub fn detect_sensitive_content_type(clipboard_text: &str) -> Option<&'static st
 //
 // The capture_state table lives in SQLite and is written by FastAPI.
 // Rather than query it on every 500ms poll, we cache the result locally and
-// refresh it every 30 seconds — matching the TTL on the FastAPI side.
+// refresh it every five seconds — matching the TTL on the FastAPI side.
 //
 // If the table doesn't exist yet (FastAPI not started) or returns an error,
 // we default to paused with no consent so nothing is captured on startup.
 // ---------------------------------------------------------------------------
 
-const PAUSE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+const PAUSE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
 struct PauseStateCache {
     is_paused: bool,
@@ -234,8 +234,11 @@ impl PauseStateCache {
     }
 
     fn capture_is_paused_right_now(&self) -> bool {
-        if !self.consent_granted || self.is_paused {
+        if !self.consent_granted {
             return true;
+        }
+        if !self.is_paused {
+            return false;
         }
         match self.paused_until_ms {
             None => true, // Paused indefinitely.
@@ -357,7 +360,18 @@ pub async fn start_clipboard_monitor(
 
 #[cfg(test)]
 mod tests {
-    use super::detect_sensitive_content_type;
+    use super::{detect_sensitive_content_type, PauseStateCache};
+
+    #[test]
+    fn no_clipboard_consent_is_treated_as_paused() {
+        let mut cache = PauseStateCache::new();
+        cache.is_paused = false;
+        cache.consent_granted = false;
+        assert!(cache.capture_is_paused_right_now());
+
+        cache.consent_granted = true;
+        assert!(!cache.capture_is_paused_right_now());
+    }
 
     #[test]
     fn detects_pem_private_key() {

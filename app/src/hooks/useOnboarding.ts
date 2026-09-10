@@ -1,11 +1,25 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  NO_CAPTURE_CONSENT,
+  type CaptureConsentChoices,
+} from "@/components/CaptureConsentChoices";
+import { orbitApiFetch } from "@/lib/local-api";
+
+export interface CaptureConsent extends CaptureConsentChoices {
+  consent_version: number;
+  accepted: boolean;
+}
 
 export interface OnboardingState {
   isCompleted: boolean;
   isLoading: boolean;
   hasAccessibilityPermission: boolean;
   browserAutomationGranted: boolean;
+  captureConsent: CaptureConsent;
+  loadCaptureConsent: () => Promise<void>;
+  saveCaptureConsent: (choices: CaptureConsentChoices) => Promise<void>;
+  skipCaptureConsent: () => Promise<void>;
   checkAccessibilityPermission: () => Promise<boolean>;
   openAccessibilitySettings: () => Promise<void>;
   checkBrowserAutomation: () => Promise<boolean>;
@@ -21,6 +35,11 @@ export function useOnboarding(): OnboardingState {
     useState(false);
   const [browserAutomationGranted, setBrowserAutomationGranted] =
     useState(false);
+  const [captureConsent, setCaptureConsent] = useState<CaptureConsent>({
+    consent_version: 1,
+    accepted: false,
+    ...NO_CAPTURE_CONSENT,
+  });
 
   // Tracks whether requestBrowserAutomation's polling loop should keep running.
   // Set to false on unmount to prevent state updates after the component is gone.
@@ -38,8 +57,10 @@ export function useOnboarding(): OnboardingState {
         setHasAccessibilityPermission(accessible);
         setBrowserAutomationGranted(browserAutomation);
       } catch {
-        // Fail open — don't block the user if IPC fails
-        setIsCompleted(true);
+        // A failed onboarding-state read must not bypass consent. The backend
+        // itself still fails closed, and the user can continue after choosing
+        // "keep capture off" from the review step.
+        setIsCompleted(false);
       } finally {
         setIsLoading(false);
       }
@@ -126,6 +147,39 @@ export function useOnboarding(): OnboardingState {
 
   // ---------------------------------------------------------------------------
 
+  const loadCaptureConsent = useCallback(async (): Promise<void> => {
+    const response = await orbitApiFetch("/privacy/consent");
+    if (!response.ok) throw new Error("Could not load capture consent.");
+    setCaptureConsent((await response.json()) as CaptureConsent);
+  }, []);
+
+  const saveCaptureConsent = useCallback(
+    async (choices: CaptureConsentChoices): Promise<void> => {
+      const response = await orbitApiFetch("/privacy/consent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(choices),
+      });
+      if (!response.ok) throw new Error("Could not save capture consent.");
+      setCaptureConsent((previous) => ({ ...previous, accepted: true, ...choices }));
+    },
+    []
+  );
+
+  const skipCaptureConsent = useCallback(async (): Promise<void> => {
+    const response = await orbitApiFetch("/privacy/consent/skip", {
+      method: "POST",
+    });
+    if (!response.ok) throw new Error("Could not keep capture disabled.");
+    setCaptureConsent((previous) => ({
+      ...previous,
+      accepted: false,
+      ...NO_CAPTURE_CONSENT,
+    }));
+  }, []);
+
+  // ---------------------------------------------------------------------------
+
   const completeOnboarding = useCallback(async (): Promise<void> => {
     try {
       await invoke("mark_onboarding_completed");
@@ -141,6 +195,10 @@ export function useOnboarding(): OnboardingState {
     isLoading,
     hasAccessibilityPermission,
     browserAutomationGranted,
+    captureConsent,
+    loadCaptureConsent,
+    saveCaptureConsent,
+    skipCaptureConsent,
     checkAccessibilityPermission,
     openAccessibilitySettings,
     checkBrowserAutomation,

@@ -1,13 +1,19 @@
 import { useState, useEffect, useRef } from "react";
+import {
+  CaptureConsentChoicesForm,
+  NO_CAPTURE_CONSENT,
+  type CaptureConsentChoices,
+} from "./CaptureConsentChoices";
 import { useOnboarding } from "../hooks/useOnboarding";
 
 // Step indices
 const STEP_WELCOME = 0;
-const STEP_ACCESSIBILITY = 1;
-const STEP_BROWSER_AUTOMATION = 2;
-const STEP_EXTENSION = 3;
-const STEP_WHAT_TO_EXPECT = 4;
-const TOTAL_STEPS = 5;
+const STEP_CAPTURE_CONSENT = 1;
+const STEP_ACCESSIBILITY = 2;
+const STEP_BROWSER_AUTOMATION = 3;
+const STEP_EXTENSION = 4;
+const STEP_WHAT_TO_EXPECT = 5;
+const TOTAL_STEPS = 6;
 
 // ─── Progress Dots ────────────────────────────────────────────────────────────
 function ProgressDots({ currentStep }: { currentStep: number }) {
@@ -77,7 +83,116 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
   );
 }
 
-// ─── Step 1 — Accessibility Permission ───────────────────────────────────────
+// ─── Step 1 — Capture Consent ────────────────────────────────────────────────
+function CaptureConsentStep({
+  consent,
+  onLoad,
+  onSave,
+  onSkip,
+  onNext,
+}: {
+  consent: CaptureConsentChoices;
+  onLoad: () => Promise<void>;
+  onSave: (choices: CaptureConsentChoices) => Promise<void>;
+  onSkip: () => Promise<void>;
+  onNext: () => void;
+}) {
+  const [choices, setChoices] = useState<CaptureConsentChoices>(NO_CAPTURE_CONSENT);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isCurrent = true;
+    setIsLoading(true);
+    onLoad()
+      .then(() => {
+        if (isCurrent) setError(null);
+      })
+      .catch(() => {
+        if (isCurrent) setError("Could not load your capture choices. Try again.");
+      })
+      .finally(() => {
+        if (isCurrent) setIsLoading(false);
+      });
+    return () => {
+      isCurrent = false;
+    };
+  }, [onLoad]);
+
+  useEffect(() => setChoices(consent), [consent]);
+
+  async function saveAndContinue(): Promise<void> {
+    setIsSaving(true);
+    setError(null);
+    try {
+      await onSave(choices);
+      onNext();
+    } catch {
+      setError("Could not save capture choices. Capture remains off.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function skipAndContinue(): Promise<void> {
+    setIsSaving(true);
+    setError(null);
+    try {
+      await onSkip();
+      onNext();
+    } catch {
+      setError("Could not keep capture disabled. Try again before continuing.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-4 px-2">
+      <div className="flex flex-col gap-1.5">
+        <h2 className="text-lg font-bold text-zinc-900 dark:text-white tracking-tight">
+          Choose what Orbit may capture
+        </h2>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed font-light">
+          Everything starts off. Pick only what you want Orbit to remember; you
+          can review or revoke each choice later in Privacy settings.
+        </p>
+      </div>
+
+      {isLoading ? (
+        <div className="h-48 rounded-2xl bg-zinc-50 dark:bg-zinc-900/50 animate-pulse" />
+      ) : (
+        <CaptureConsentChoicesForm
+          value={choices}
+          onChange={setChoices}
+          disabled={isSaving}
+        />
+      )}
+
+      <div className="flex flex-col gap-2">
+        <button
+          onClick={() => void saveAndContinue()}
+          disabled={isLoading || isSaving}
+          className="w-full py-3 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-sm font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+        >
+          {isSaving ? "Saving…" : "Save choices and continue"}
+        </button>
+        <button
+          onClick={() => void skipAndContinue()}
+          disabled={isLoading || isSaving}
+          className="w-full py-2 text-xs text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-xl disabled:opacity-50 transition-colors"
+        >
+          Keep capture off for now
+        </button>
+      </div>
+
+      {error && <p className="text-xs text-red-500 px-1">{error}</p>}
+    </div>
+  );
+}
+
+// ─── Step 2 — Accessibility Permission ───────────────────────────────────────
 function AccessibilityStep({
   hasPermission,
   onCheckPermission,
@@ -519,6 +634,10 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
     checkAccessibilityPermission,
     openAccessibilitySettings,
     requestBrowserAutomation,
+    captureConsent,
+    loadCaptureConsent,
+    saveCaptureConsent,
+    skipCaptureConsent,
     completeOnboarding,
   } = useOnboarding();
 
@@ -553,6 +672,15 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
         <div className="min-h-[380px] flex flex-col justify-center">
           {currentStep === STEP_WELCOME && (
             <WelcomeStep onNext={goToNextStep} />
+          )}
+          {currentStep === STEP_CAPTURE_CONSENT && (
+            <CaptureConsentStep
+              consent={captureConsent}
+              onLoad={loadCaptureConsent}
+              onSave={saveCaptureConsent}
+              onSkip={skipCaptureConsent}
+              onNext={goToNextStep}
+            />
           )}
           {currentStep === STEP_ACCESSIBILITY && (
             <AccessibilityStep

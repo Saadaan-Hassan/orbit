@@ -113,6 +113,24 @@ async def save_capture_consent(request: CaptureConsentRequest) -> dict:
     return {"status": "ok"}
 
 
+@router.post("/consent/skip")
+async def skip_capture_consent() -> dict:
+    """Keeps every invasive source disabled after an explicit onboarding skip."""
+    async with _async_engine.begin() as connection:
+        await connection.execute(text("""
+            UPDATE capture_consent
+            SET accepted_at = NULL, clipboard = 0, app_window = 0, browser = 0,
+                file_activity = 0, screen_content = 0
+            WHERE id = 1
+        """))
+        await connection.execute(text("""
+            UPDATE capture_state
+            SET is_paused = 1, paused_until = NULL
+            WHERE id = 1
+        """))
+    return {"status": "skipped"}
+
+
 # ---------------------------------------------------------------------------
 # Local custom redaction phrases
 # ---------------------------------------------------------------------------

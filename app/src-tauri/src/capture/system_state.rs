@@ -181,9 +181,21 @@ async fn write_system_state_event(
 ) {
     // System lock/wake activity is an app/window capture category. Any missing
     // table, consent row, or pause state fails closed before a DB write.
+    let event_timestamp_milliseconds = Utc::now().timestamp_millis();
     let allowed = sqlx::query_as::<_, (i64,)>(
-        "SELECT COALESCE((SELECT accepted_at IS NOT NULL AND app_window = 1 FROM capture_consent WHERE id = 1) AND (SELECT is_paused = 0 FROM capture_state WHERE id = 1), 0)",
+        r#"
+            SELECT COALESCE(
+                (SELECT accepted_at IS NOT NULL AND app_window = 1 FROM capture_consent WHERE id = 1)
+                AND (
+                    SELECT is_paused = 0
+                        OR (paused_until IS NOT NULL AND paused_until <= ?)
+                    FROM capture_state WHERE id = 1
+                ),
+                0
+            )
+        "#,
     )
+    .bind(event_timestamp_milliseconds)
     .fetch_optional(pool)
     .await
     .ok()
@@ -195,7 +207,6 @@ async fn write_system_state_event(
     }
     redaction_pattern_cache.refresh_if_stale(pool).await;
     let event_id = Uuid::new_v4().to_string();
-    let event_timestamp_milliseconds = Utc::now().timestamp_millis();
 
     if let Err(database_error) = sqlx::query(
         "INSERT INTO events \

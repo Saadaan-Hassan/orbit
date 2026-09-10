@@ -1,5 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import {
+  CaptureConsentChoicesForm,
+  type CaptureConsentChoices,
+} from "./CaptureConsentChoices";
 import { usePrivacySettings } from "../hooks/usePrivacySettings";
 import { useProviderStatus } from "../hooks/useProviderStatus";
 import { useAnalytics } from "../hooks/useAnalytics";
@@ -255,6 +259,86 @@ function CaptureStatusSection({
 
       {actionError && (
         <p className="text-xs text-red-500 font-medium px-1 mt-1">{actionError}</p>
+      )}
+    </div>
+  );
+}
+
+// ─── Capture Consent Review ──────────────────────────────────────────────────
+interface CaptureConsentSectionProps {
+  accepted: boolean;
+  choices: CaptureConsentChoices;
+  onSave: (choices: CaptureConsentChoices) => Promise<void>;
+  onSkip: () => Promise<void>;
+}
+
+function CaptureConsentSection({
+  accepted,
+  choices,
+  onSave,
+  onSkip,
+}: CaptureConsentSectionProps) {
+  const [draft, setDraft] = useState<CaptureConsentChoices>(choices);
+  const [isSaving, setIsSaving] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  useEffect(() => setDraft(choices), [choices]);
+
+  async function handleSave(): Promise<void> {
+    setIsSaving(true);
+    setActionError(null);
+    try {
+      await onSave(draft);
+    } catch {
+      setActionError("Could not save capture choices.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleSkip(): Promise<void> {
+    setIsSaving(true);
+    setActionError(null);
+    try {
+      await onSkip();
+    } catch {
+      setActionError("Could not keep capture disabled.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <SectionHeading>Capture Consent</SectionHeading>
+      <p className="text-xs text-zinc-400 dark:text-zinc-500 font-light leading-relaxed">
+        {accepted
+          ? "Review or change each source whenever you want. Saving an empty selection keeps capture off."
+          : "Capture is currently off. Choose only the sources you want, or keep using Orbit without activity capture."}
+      </p>
+      <CaptureConsentChoicesForm
+        value={draft}
+        onChange={setDraft}
+        disabled={isSaving}
+      />
+      <div className="flex flex-col gap-2">
+        <button
+          onClick={() => void handleSave()}
+          disabled={isSaving}
+          className="w-full py-2.5 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-xs font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+        >
+          {isSaving ? "Saving…" : "Save capture choices"}
+        </button>
+        <button
+          onClick={() => void handleSkip()}
+          disabled={isSaving}
+          className="w-full py-2 text-xs text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-xl disabled:opacity-50 transition-colors"
+        >
+          Keep all capture off
+        </button>
+      </div>
+      {actionError && (
+        <p className="text-xs text-red-500 font-medium px-1">{actionError}</p>
       )}
     </div>
   );
@@ -888,6 +972,7 @@ export function PrivacyPanel() {
     excludedApps,
     excludedDomains,
     redactionPatterns,
+    captureConsent,
     nativeBrowserEnabled,
     fileWatchEnabled,
     screenContentEnabled,
@@ -901,6 +986,8 @@ export function PrivacyPanel() {
     removeExcludedDomain,
     addRedactionPattern,
     removeRedactionPattern,
+    saveCaptureConsent,
+    skipCaptureConsent,
     setNativeBrowserEnabled,
     setFileWatchEnabled,
     setScreenContentEnabled,
@@ -929,6 +1016,15 @@ export function PrivacyPanel() {
 
   return (
     <div className="flex flex-col gap-6 bg-transparent">
+      <CaptureConsentSection
+        accepted={captureConsent.accepted}
+        choices={captureConsent}
+        onSave={saveCaptureConsent}
+        onSkip={skipCaptureConsent}
+      />
+
+      <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
+
       <ScreenContentSection
         enabled={screenContentEnabled}
         onToggle={setScreenContentEnabled}

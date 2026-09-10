@@ -130,6 +130,18 @@ async fn read_file_watch_settings(pool: &SqlitePool) -> FileWatchSettings {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::default_file_watch_settings;
+
+    #[test]
+    fn missing_file_settings_do_not_watch_any_folder() {
+        let settings = default_file_watch_settings();
+        assert!(!settings.enabled);
+        assert!(settings.watched_folders.is_empty());
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Watcher sync — diffs currently-watched paths against desired and adjusts
 // ---------------------------------------------------------------------------
@@ -179,7 +191,7 @@ fn sync_watched_folders(
 /// Watches user-configured folders for file system events, writing a
 /// `file_activity` event row to SQLite for each non-trivial change.
 ///
-/// Settings are refreshed from the `file_watch_settings` table every 30
+/// Settings are refreshed from the `file_watch_settings` table every five
 /// seconds. Disabling file watching or changing the folder list takes effect
 /// within the next refresh cycle. File *contents* are never read.
 pub async fn start_file_activity_monitor(
@@ -218,11 +230,11 @@ pub async fn start_file_activity_monitor(
         &initial_settings,
     );
 
-    // Refresh settings every 30 s. Start the first tick 30 s from now so we
+    // Refresh settings every 5 s. Start the first tick 5 s from now so we
     // don't immediately re-read what we just loaded on startup.
     let mut settings_refresh_interval = interval_at(
-        Instant::now() + Duration::from_secs(30),
-        Duration::from_secs(30),
+        Instant::now() + Duration::from_secs(5),
+        Duration::from_secs(5),
     );
 
     // file_system_debouncer must stay in scope for the entire loop — dropping

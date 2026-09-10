@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 
+import {
+  NO_CAPTURE_CONSENT,
+  type CaptureConsentChoices,
+} from "@/components/CaptureConsentChoices";
 import { orbitApiFetch } from "@/lib/local-api";
 
 // ---------------------------------------------------------------------------
@@ -9,6 +13,11 @@ import { orbitApiFetch } from "@/lib/local-api";
 interface CaptureStatus {
   is_paused: boolean;
   paused_until: number | null; // unix ms, null = indefinite
+}
+
+export interface CaptureConsent extends CaptureConsentChoices {
+  consent_version: number;
+  accepted: boolean;
 }
 
 export interface RedactionPattern {
@@ -27,6 +36,8 @@ export interface PrivacySettings {
   excludedDomains: string[];
   // Exact local phrases removed from Rust-captured fields before SQLite writes.
   redactionPatterns: RedactionPattern[];
+  // Versioned, independent choices that gate every invasive capture source.
+  captureConsent: CaptureConsent;
   // Whether native browser URL capture (osascript, no extension) is enabled.
   nativeBrowserEnabled: boolean;
   // Whether file activity capture is enabled.
@@ -48,6 +59,8 @@ export interface PrivacySettings {
   removeExcludedDomain: (domain: string) => Promise<void>;
   addRedactionPattern: (pattern: string) => Promise<void>;
   removeRedactionPattern: (patternId: string) => Promise<void>;
+  saveCaptureConsent: (choices: CaptureConsentChoices) => Promise<void>;
+  skipCaptureConsent: () => Promise<void>;
   setNativeBrowserEnabled: (enabled: boolean) => Promise<void>;
   setFileWatchEnabled: (enabled: boolean) => Promise<void>;
   setScreenContentEnabled: (enabled: boolean) => Promise<void>;
@@ -81,6 +94,16 @@ function normalizeDomain(input: string): string {
   }
 }
 
+function hasEnabledCaptureSource(choices: CaptureConsentChoices): boolean {
+  return (
+    choices.clipboard ||
+    choices.app_window ||
+    choices.browser ||
+    choices.file_activity ||
+    choices.screen_content
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
@@ -91,6 +114,11 @@ export function usePrivacySettings(): PrivacySettings {
   const [excludedApps, setExcludedApps] = useState<string[]>([]);
   const [excludedDomains, setExcludedDomains] = useState<string[]>([]);
   const [redactionPatterns, setRedactionPatterns] = useState<RedactionPattern[]>([]);
+  const [captureConsent, setCaptureConsent] = useState<CaptureConsent>({
+    consent_version: 1,
+    accepted: false,
+    ...NO_CAPTURE_CONSENT,
+  });
   const [nativeBrowserEnabled, setNativeBrowserEnabledState] = useState(true);
   const [fileWatchEnabled, setFileWatchEnabledState] = useState(true);
   const [screenContentEnabled, setScreenContentEnabledState] = useState(true);
@@ -107,6 +135,7 @@ export function usePrivacySettings(): PrivacySettings {
           statusResponse,
           excludedAppsResponse,
           excludedDomainsResponse,
+          consentResponse,
           redactionPatternsResponse,
           browserCaptureResponse,
           fileWatchResponse,
@@ -115,6 +144,7 @@ export function usePrivacySettings(): PrivacySettings {
           orbitApiFetch("/privacy/capture-status"),
           orbitApiFetch("/privacy/excluded-apps"),
           orbitApiFetch("/privacy/excluded-domains"),
+          orbitApiFetch("/privacy/consent"),
           orbitApiFetch("/privacy/redaction-patterns"),
           orbitApiFetch("/privacy/browser-capture"),
           orbitApiFetch("/privacy/file-watching"),
@@ -125,6 +155,7 @@ export function usePrivacySettings(): PrivacySettings {
           !statusResponse.ok ||
           !excludedAppsResponse.ok ||
           !excludedDomainsResponse.ok ||
+          !consentResponse.ok ||
           !redactionPatternsResponse.ok ||
           !browserCaptureResponse.ok ||
           !fileWatchResponse.ok ||
@@ -138,6 +169,7 @@ export function usePrivacySettings(): PrivacySettings {
           await excludedAppsResponse.json();
         const excludedDomainsData: { excluded_domains: string[] } =
           await excludedDomainsResponse.json();
+        const consentData: CaptureConsent = await consentResponse.json();
         const redactionPatternsData: { patterns: RedactionPattern[] } =
           await redactionPatternsResponse.json();
         const browserCaptureData: { native_enabled: boolean } =
@@ -147,10 +179,13 @@ export function usePrivacySettings(): PrivacySettings {
         const screenContentData: { enabled: boolean } =
           await screenContentResponse.json();
 
-        setIsCapturing(!statusData.is_paused);
+        setIsCapturing(
+          !statusData.is_paused && consentData.accepted && hasEnabledCaptureSource(consentData)
+        );
         setPausedUntil(statusData.paused_until);
         setExcludedApps(excludedAppsData.excluded_apps);
         setExcludedDomains(excludedDomainsData.excluded_domains);
+        setCaptureConsent(consentData);
         setRedactionPatterns(redactionPatternsData.patterns);
         setNativeBrowserEnabledState(browserCaptureData.native_enabled);
         setFileWatchEnabledState(fileWatchData.enabled);
@@ -276,6 +311,41 @@ export function usePrivacySettings(): PrivacySettings {
     },
     []
   );
+
+  const saveCaptureConsent = useCallback(
+    async (choices: CaptureConsentChoices): Promise<void> => {
+      const response = await orbitApiFetch("/privacy/consent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(choices),
+      });
+      if (!response.ok) throw new Error("Failed to save capture consent.");
+
+      setCaptureConsent((previous) => ({
+        ...previous,
+        accepted: true,
+        ...choices,
+      }));
+      setIsCapturing(hasEnabledCaptureSource(choices));
+      setPausedUntil(null);
+    },
+    []
+  );
+
+  const skipCaptureConsent = useCallback(async (): Promise<void> => {
+    const response = await orbitApiFetch("/privacy/consent/skip", {
+      method: "POST",
+    });
+    if (!response.ok) throw new Error("Failed to keep capture disabled.");
+
+    setCaptureConsent((previous) => ({
+      ...previous,
+      accepted: false,
+      ...NO_CAPTURE_CONSENT,
+    }));
+    setIsCapturing(false);
+    setPausedUntil(null);
+  }, []);
 
   const setNativeBrowserEnabled = useCallback(
     async (enabled: boolean): Promise<void> => {
@@ -410,6 +480,7 @@ export function usePrivacySettings(): PrivacySettings {
     excludedApps,
     excludedDomains,
     redactionPatterns,
+    captureConsent,
     nativeBrowserEnabled,
     fileWatchEnabled,
     screenContentEnabled,
@@ -423,6 +494,8 @@ export function usePrivacySettings(): PrivacySettings {
     removeExcludedDomain,
     addRedactionPattern,
     removeRedactionPattern,
+    saveCaptureConsent,
+    skipCaptureConsent,
     setNativeBrowserEnabled,
     setFileWatchEnabled,
     setScreenContentEnabled,

@@ -90,7 +90,7 @@ fn seconds_since_last_user_input() -> f64 {
 // Unified capture cache
 //
 // Consolidates the per-module caches from window.rs, browser_url.rs, and
-// app_lifecycle.rs into one struct refreshed once per 30-second window.
+// app_lifecycle.rs into one struct refreshed at most once per five seconds.
 // ---------------------------------------------------------------------------
 
 struct UnifiedPollCache {
@@ -145,8 +145,9 @@ impl UnifiedPollCache {
 }
 
 async fn refresh_unified_poll_cache(pool: &SqlitePool, cache: &mut UnifiedPollCache) {
-    // Throttle to at most one DB round-trip per 30 seconds.
-    if cache.last_refreshed_at.elapsed() < std::time::Duration::from_secs(30) {
+    // Keep consent and pause changes responsive without adding network work:
+    // this is a local SQLite read, at most once per five seconds.
+    if cache.last_refreshed_at.elapsed() < std::time::Duration::from_secs(5) {
         return;
     }
 
@@ -673,5 +674,19 @@ async fn run_unified_osascript() -> (String, String) {
             eprintln!("Unified poller: failed to spawn osascript: {io_error}");
             (String::new(), String::new())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UnifiedPollCache;
+
+    #[test]
+    fn missing_unified_settings_start_with_all_capture_categories_off() {
+        let cache = UnifiedPollCache::new();
+        assert!(cache.capture_is_paused_right_now());
+        assert!(!cache.app_window_consent);
+        assert!(!cache.browser_consent);
+        assert!(!cache.native_browser_enabled);
     }
 }

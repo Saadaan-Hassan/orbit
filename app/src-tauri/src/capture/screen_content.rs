@@ -56,8 +56,20 @@ impl ScreenContentCaptureCache {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::ScreenContentCaptureCache;
+
+    #[test]
+    fn missing_screen_settings_start_disabled_and_paused() {
+        let cache = ScreenContentCaptureCache::new();
+        assert!(!cache.is_enabled);
+        assert!(cache.capture_is_paused_right_now());
+    }
+}
+
 async fn refresh_screen_content_cache(pool: &SqlitePool, cache: &mut ScreenContentCaptureCache) {
-    if cache.last_refreshed_at.elapsed() < std::time::Duration::from_secs(30) {
+    if cache.last_refreshed_at.elapsed() < std::time::Duration::from_secs(5) {
         return;
     }
 
