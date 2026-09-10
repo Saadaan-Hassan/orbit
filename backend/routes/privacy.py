@@ -523,10 +523,19 @@ async def wipe_all_data() -> dict:
       captured *data*. Wiping them would mean 1Password, Bitwarden, and the
       user's personal websites could be inadvertently captured immediately
       after a wipe, before the user notices and re-adds them.
+
+    There are no persisted temporary capture/search files outside SQLite and
+    Qdrant. After deletion, SQLite's secure-delete mode, WAL truncation, and
+    VACUUM remove freed local database pages. The webview clears its in-memory
+    conversation only after this endpoint succeeds.
     """
     from database import _seed_default_excluded_apps, _seed_default_excluded_domains
 
     async with _async_engine.begin() as connection:
+        # Overwrite deleted SQLite cells rather than leaving raw captured data
+        # in reusable pages. This setting is applied before the DELETEs rather
+        # than assumed from an older database configuration.
+        await connection.execute(text("PRAGMA secure_delete = ON"))
         # Delete child tables before parents to satisfy foreign key ordering,
         # even though SQLite doesn't enforce FK constraints by default.
         await connection.execute(text("DELETE FROM memory_objects"))
@@ -536,6 +545,18 @@ async def wipe_all_data() -> dict:
         # Pairing credentials authorize access to captured data, so a full wipe
         # revokes them too. The extension must be explicitly paired again.
         await connection.execute(text("DELETE FROM paired_extensions"))
+
+    # The data transaction above has committed. Checkpoint and compact outside
+    # it so stale event/FTS content cannot remain in the WAL or database free
+    # pages. VACUUM requires SQLite autocommit mode.
+    async with _async_engine.connect() as connection:
+        await connection.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+        await connection.commit()
+        autocommit_connection = await connection.execution_options(
+            isolation_level="AUTOCOMMIT"
+        )
+        await autocommit_connection.execute(text("VACUUM"))
+        await autocommit_connection.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
 
     # Remove all vector embeddings from the local Qdrant collection.
     await wipe_all_session_embeddings()

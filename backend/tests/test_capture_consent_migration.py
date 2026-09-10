@@ -47,9 +47,13 @@ class CaptureConsentMigrationTests(unittest.TestCase):
 
     def test_existing_database_is_paused_pending_reconsent(self):
         def prepare(path: Path) -> None:
-            with sqlite3.connect(path) as connection:
+            connection = sqlite3.connect(path)
+            try:
                 connection.execute("CREATE TABLE capture_state (id INTEGER PRIMARY KEY, is_paused INTEGER, paused_until INTEGER)")
                 connection.execute("INSERT INTO capture_state VALUES (1, 0, NULL)")
+                connection.commit()
+            finally:
+                connection.close()
 
         consent, pause, redaction_pattern_count = self._with_database(prepare)
         self.assertIsNone(consent.accepted_at)

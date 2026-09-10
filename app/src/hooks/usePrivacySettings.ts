@@ -5,6 +5,7 @@ import {
   type CaptureConsentChoices,
 } from "@/components/CaptureConsentChoices";
 import { orbitApiFetch } from "@/lib/local-api";
+import { useOrbitStore } from "@/store/orbitStore";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -109,6 +110,7 @@ function hasEnabledCaptureSource(choices: CaptureConsentChoices): boolean {
 // ---------------------------------------------------------------------------
 
 export function usePrivacySettings(): PrivacySettings {
+  const { clearConversation, clearPendingQuery } = useOrbitStore();
   const [isCapturing, setIsCapturing] = useState(true);
   const [pausedUntil, setPausedUntil] = useState<number | null>(null);
   const [excludedApps, setExcludedApps] = useState<string[]>([]);
@@ -456,11 +458,16 @@ export function usePrivacySettings(): PrivacySettings {
         method: "DELETE",
       });
       if (!response.ok) throw new Error("Wipe failed.");
+      // Conversation and a queued timeline query are local-only state, but
+      // they are still visible memory. Clear them only once the durable wipe
+      // has succeeded, never when a network/API failure occurs.
+      clearConversation();
+      clearPendingQuery();
     } finally {
       // Always clear the wiping spinner, even on error.
       setIsWiping(false);
     }
-  }, []);
+  }, [clearConversation, clearPendingQuery]);
 
   const createExtensionPairingCode = useCallback(async (): Promise<string> => {
     const response = await orbitApiFetch("/extension/pairing-code", { method: "POST" });

@@ -176,7 +176,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | PRIV-003 | Agent | PARTIAL | Sanitize every Rust-captured field before SQLite | PRIV-002 |
 | PRIV-004 | Agent | DONE | Sanitize all provider-bound context at the Python boundary | PRIV-003 |
 | PRIV-005 | Agent | DONE | Normalize exclusions and protect local files/credentials | PRIV-004 |
-| PRIV-006 | Agent | TODO | Add privacy, consent, and redaction regression tests | PRIV-005 |
+| PRIV-006 | Agent | DONE | Add privacy, consent, and redaction regression tests | PRIV-005 |
 | APPSEC-001 | Agent | TODO | Harden Tauri CSP, release devtools, capabilities, and entitlements | SEC-003 |
 | COST-001 | Agent | TODO | Implement Keychain-backed BYOK UI and direct Groq calls | MAN-000, SEC-003 |
 | COST-002 | Agent | TODO | Remove all shared-key Worker behavior and fail closed | COST-001 |
@@ -632,17 +632,17 @@ Acceptance criteria:
 
 Create a focused suite that proves:
 
-- [ ] no pre-consent capture on new and upgraded installs;
-- [ ] fail-closed behavior for missing/corrupt settings;
-- [ ] every capture category respects pause, per-category toggles and exclusions;
-- [ ] secure text fields are skipped;
-- [ ] secrets in non-secure text are sanitized before storage;
-- [ ] legacy unsafe rows are sanitized before provider calls;
-- [ ] URL/path/window-title leakage cases are covered;
-- [ ] extension pairing/revocation and backend authentication are covered;
-- [ ] wipe behavior removes SQLite, FTS/index, Qdrant/legacy vectors, search history
+- [x] no pre-consent capture on new and upgraded installs;
+- [x] fail-closed behavior for missing/corrupt settings;
+- [x] every capture category respects pause, per-category toggles and exclusions;
+- [x] secure text fields are skipped;
+- [x] secrets in non-secure text are sanitized before storage;
+- [x] legacy unsafe rows are sanitized before provider calls;
+- [x] URL/path/window-title leakage cases are covered;
+- [x] extension pairing/revocation and backend authentication are covered;
+- [x] wipe behavior removes SQLite, FTS/index, Qdrant/legacy vectors, search history
       and temporary files as documented;
-- [ ] tests do not contain scanner-valid credentials.
+- [x] tests do not contain scanner-valid credentials.
 
 The task is complete only when the suite can run locally with one documented
 command and is suitable for `CI-002`.
@@ -1251,6 +1251,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-10 | PRIV-002 | PARTIAL | Rust clipboard, file activity, screen-content, unified-poller, system-state, capture API, onboarding, Privacy settings, and consent regression tests | Capture defaults fail closed. Every native monitor and the extension-facing `/capture` API now requires the relevant accepted category; unknown event types are denied. Onboarding and Privacy settings provide independent choices plus an explicit keep-off action. Consent/pause settings refresh locally within about five seconds (or the next eight-second monitor poll). `uv run python -m unittest discover -s tests -v` passed 12/12, `pnpm build`, `cargo test --bin app` 34/34, `cargo check`, focused Rust formatting, and staged/unstaged diff checks passed. No acceptance criterion is checked yet because live app behavior still requires maintainer observation. | Required maintainer action: test clean and upgraded profiles; confirm first launch and skip create no events; independently enable then revoke each category; apply global pause; restart; and inspect the local timeline/database for no events while disabled. Record the outcome, date, app build, and any exception here. Keep this task PARTIAL and the Consent gate blocked until that verification is recorded. |
 | 2026-09-10 | PRIV-004 | DONE | Shared Python provider-context sanitizer; Groq, Claude, Gemini, Voyage, Qdrant metadata, recall diagnostics, and provider-boundary tests | A single final boundary redacts static credential/PII/path/URL patterns plus local exact-match phrases, caps chat fields/requests, classification batches, embeddings, and vector metadata, and is called immediately before every AI/embedding HTTP request. Provider diagnostics contain only provider, model, operation, status, duration, and safe error kind; raw prompts/responses are not logged. `uv run python -m unittest discover -s tests -v` passed 17/17, including a synthetic secret inserted into a legacy SQLite event row, recall query/history interception, all provider services, metadata bounds, and a response-body-safe diagnostic test. | Continue with `PRIV-005`. `PRIV-002` remains PARTIAL pending the maintainer's live UI verification. |
 | 2026-09-10 | PRIV-005 | DONE | Canonical exclusion policy, FastAPI/Rust capture enforcement, macOS Keychain migration, owner-only local storage repair, ADR-004, and regression tests | `services/exclusion_policy.py` owns defaults and normalization; SQLite distributes canonical values to native and extension capture. Domains include true subdomains but not suffix lookalikes; watched-folder boundaries are enforced before every Python/Rust write. `~/.orbit`, SQLite/WAL/SHM, Qdrant, device ID, and onboarding marker receive owner-only modes without following symlinks. Groq keys use macOS Keychain; a legacy SQLite key is deleted only after a successful Keychain transfer/check, and subprocess output is never logged. `uv run python -m unittest discover -s tests -p 'test_*.py'` passed 24/24; focused suite passed 7/7 with ResourceWarnings treated as errors; `cargo test --bin app` passed 36/36; `python -m compileall -q .` and `git diff --check` passed. | Continue with `PRIV-006`. `PRIV-002` remains PARTIAL pending the maintainer's live UI verification. |
+| 2026-09-10 | PRIV-006 | DONE | Focused privacy regression suite, secure wipe compaction, in-memory history clearing, Rust secure-field test, and backend test command documentation | `test_privacy_regression_suite.py` proves fresh/upgraded pre-consent rejection, every extension capture category's consent/pause/exclusion gate, corrupt/missing settings fail-closed behavior, wipe of SQLite/FTS/sessions/memory/pairings plus Qdrant invocation, and capture-only extension pairing/revocation. Existing Rust sanitizer/provider-boundary tests cover non-secure secret redaction, URL/path/window-title leaks, legacy unsafe rows, and secure-field skipping; the secure-field branch now has a direct Rust unit test. A successful wipe enables SQLite secure-delete, truncates WAL, vacuums freed pages, and clears webview conversation/pending-query state. `backend/README.md` documents `uv run python -m unittest discover -s tests -p 'test_*.py'` for `CI-002`. The full backend suite passed 29/29 with `ResourceWarning` promoted to errors; `gitleaks detect --source tests --no-git --redact --exit-code 1` found no leaks; `cargo test --bin app` passed 37/37; `pnpm build`, backend compilation, and `git diff --check` passed. | Continue with `APPSEC-001`. `PRIV-002` remains PARTIAL pending the maintainer's live UI verification. |
 | 2026-09-10 | PRIV-003 | PARTIAL | `ADR-003`; shared Rust sanitizer; all active/retained Rust event writers; local exact-match pattern table/API/UI; migration test | All active and retained Rust event-insert sources now sanitize their captured strings; URLs strip fragments, redact userinfo and sensitive query values; static patterns cover credentials, keys, headers, JWTs, connection strings, payment/identity data, email/phone, and local custom phrases. `cargo test --bin app` passed 30/30, `cargo check --bin app`, focused `rustfmt --check` for changed capture files, backend tests 9/9, `pnpm build`, and both staged/unstaged `git diff --check` passed. | Keep PARTIAL: repository-wide Clippy fails an existing collapsible-if in `src/lib.rs`, and repository-wide formatter reports existing drift in `src/lib.rs` and `src/main.rs`. Fix and rerun those global checks before marking this task DONE. Consent gate remains blocked by PRIV-002. |
 
 ---

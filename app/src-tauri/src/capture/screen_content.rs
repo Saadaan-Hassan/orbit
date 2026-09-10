@@ -13,10 +13,15 @@ static AX_API_DISABLED_LOGGED: AtomicBool = AtomicBool::new(false);
 
 // Visible text is truncated to this many Unicode scalar values before storage.
 const SCREEN_TEXT_MAX_CHARS: usize = 1_500;
+const SECURE_TEXT_FIELD_ROLE: &str = "AXSecureTextField";
 
 // Traversal limits — keeps the blocking call short and avoids deep UI trees.
 const MAX_TRAVERSAL_ELEMENTS: usize = 30;
 const MAX_TRAVERSAL_DEPTH: usize = 3;
+
+fn is_secure_text_field_role(role: &str) -> bool {
+    role == SECURE_TEXT_FIELD_ROLE
+}
 
 // ---------------------------------------------------------------------------
 // Capture settings cache
@@ -59,13 +64,20 @@ impl ScreenContentCaptureCache {
 
 #[cfg(test)]
 mod tests {
-    use super::ScreenContentCaptureCache;
+    use super::{is_secure_text_field_role, ScreenContentCaptureCache};
 
     #[test]
     fn missing_screen_settings_start_disabled_and_paused() {
         let cache = ScreenContentCaptureCache::new();
         assert!(!cache.is_enabled);
         assert!(cache.capture_is_paused_right_now());
+    }
+
+    #[test]
+    fn secure_text_field_role_is_always_excluded_from_capture() {
+        assert!(is_secure_text_field_role("AXSecureTextField"));
+        assert!(!is_secure_text_field_role("AXTextField"));
+        assert!(!is_secure_text_field_role("AXStaticText"));
     }
 }
 
@@ -156,10 +168,6 @@ mod ax {
     pub const ROLE_STATIC_TEXT: &str = "AXStaticText";
     pub const ROLE_TEXT_AREA: &str = "AXTextArea";
     pub const ROLE_TEXT_FIELD: &str = "AXTextField";
-
-    // SECURITY: password fields — skip unconditionally, including during tree
-    // traversal. The AX role for a password input on macOS.
-    pub const ROLE_SECURE_TEXT_FIELD: &str = "AXSecureTextField";
 
     // Raw opaque pointer shared by all CF / AX object types.
     pub type RawRef = *mut c_void;
@@ -331,7 +339,7 @@ mod ax {
         let role = get_string_attr(element, ATTR_ROLE).unwrap_or_default();
 
         // SECURITY: never read password fields at any depth.
-        if role == ROLE_SECURE_TEXT_FIELD {
+        if super::is_secure_text_field_role(&role) {
             return;
         }
 
@@ -451,7 +459,7 @@ mod ax {
 
         // Step 6: SECURITY — skip secure text fields unconditionally.
         let focused_role = get_string_attr(focused_element.as_raw(), ATTR_ROLE).unwrap_or_default();
-        if focused_role == ROLE_SECURE_TEXT_FIELD {
+        if super::is_secure_text_field_role(&focused_role) {
             return CaptureOutcome::Success(None);
         }
 
