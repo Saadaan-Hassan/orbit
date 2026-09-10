@@ -13,9 +13,15 @@ request — never instantiate a new client per call.
 import asyncio
 import logging
 import os
+import time
 
 import httpx
 from dotenv import load_dotenv
+
+from services.provider_context_sanitizer import (
+    log_provider_diagnostic,
+    sanitize_embedding_text,
+)
 
 load_dotenv()
 
@@ -74,22 +80,40 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
         httpx.HTTPStatusError: on non-2xx response after all retries.
         httpx.TransportError: on network failure after all retries.
     """
+    # This is the final privacy boundary before the embedding leaves the
+    # device. It also protects sessions created before capture sanitization.
+    safe_text_to_embed = await sanitize_embedding_text(text_to_embed)
     request_body = {
-        "input":      [text_to_embed],
+        "input":      [safe_text_to_embed],
         "model":      VOYAGE_EMBEDDING_MODEL,
         "input_type": "document",
     }
 
     for attempt_number in range(3):
+        started_at = time.monotonic()
         try:
             response = await _http_client.post("/embed", json=request_body)
 
             if response.is_success:
-                return response.json()["data"][0]["embedding"]
+                try:
+                    return response.json()["data"][0]["embedding"]
+                except (KeyError, IndexError, TypeError, ValueError) as error:
+                    log_provider_diagnostic(
+                        provider="voyage",
+                        model=VOYAGE_EMBEDDING_MODEL,
+                        operation="embedding",
+                        started_at=started_at,
+                        status=response.status_code,
+                        error=error,
+                    )
+                    raise
 
-            logger.error(
-                "Voyage AI embedding request failed: HTTP %d — %s (attempt %d/3)",
-                response.status_code, response.text, attempt_number + 1,
+            log_provider_diagnostic(
+                provider="voyage",
+                model=VOYAGE_EMBEDDING_MODEL,
+                operation="embedding",
+                started_at=started_at,
+                status=response.status_code,
             )
             if attempt_number < 2:
                 await asyncio.sleep(2 ** attempt_number)
@@ -97,9 +121,12 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
                 response.raise_for_status()
 
         except httpx.TransportError as transport_error:
-            logger.error(
-                "Voyage AI embedding transport error: %s (attempt %d/3)",
-                transport_error, attempt_number + 1,
+            log_provider_diagnostic(
+                provider="voyage",
+                model=VOYAGE_EMBEDDING_MODEL,
+                operation="embedding",
+                started_at=started_at,
+                error=transport_error,
             )
             if attempt_number < 2:
                 await asyncio.sleep(2 ** attempt_number)

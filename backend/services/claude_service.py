@@ -9,10 +9,16 @@ request — never instantiate a new client per call.
 import json
 import logging
 import os
+import time
 from typing import AsyncGenerator
 
 import httpx
 from dotenv import load_dotenv
+
+from services.provider_context_sanitizer import (
+    log_provider_diagnostic,
+    sanitize_chat_context,
+)
 
 load_dotenv()
 
@@ -76,52 +82,61 @@ async def stream_recall_response(
     Yields:
         Plain text delta strings from each content_block_delta event.
     """
-    # Strip any client-only fields (e.g. timestamp) and skip malformed entries.
-    # Anthropic's messages API only accepts {role, content} per message.
-    prior_messages = [
-        {"role": msg["role"], "content": msg["content"]}
-        for msg in (conversation_history or [])
-        if msg.get("role") in ("user", "assistant") and msg.get("content")
-    ]
+    safe_system_prompt, safe_user_prompt, prior_messages = await sanitize_chat_context(
+        system_prompt, user_prompt, conversation_history
+    )
 
     request_payload = {
         "model": RECALL_MODEL,
         "max_tokens": 1024,
         "stream": True,
-        "system": system_prompt,
+        "system": safe_system_prompt,
         "messages": [
             *prior_messages,
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": safe_user_prompt},
         ],
     }
 
-    async with _http_client.stream(
-        "POST",
-        f"{_worker_url}/chat",
-        json=request_payload,
-    ) as streaming_response:
-        streaming_response.raise_for_status()
+    started_at = time.monotonic()
+    try:
+        async with _http_client.stream(
+            "POST",
+            f"{_worker_url}/chat",
+            json=request_payload,
+        ) as streaming_response:
+            streaming_response.raise_for_status()
 
-        async for raw_line in streaming_response.aiter_lines():
-            if not raw_line.startswith("data: "):
-                continue
+            async for raw_line in streaming_response.aiter_lines():
+                if not raw_line.startswith("data: "):
+                    continue
 
-            raw_json_payload = raw_line[len("data: "):]
+                raw_json_payload = raw_line[len("data: "):]
 
-            if raw_json_payload.strip() == "[DONE]":
-                break
+                if raw_json_payload.strip() == "[DONE]":
+                    break
 
-            try:
-                event_data = json.loads(raw_json_payload)
-            except json.JSONDecodeError:
-                continue
+                try:
+                    event_data = json.loads(raw_json_payload)
+                except json.JSONDecodeError:
+                    continue
 
-            # Anthropic SSE shape for streaming text deltas:
-            # {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "..."}}
-            if event_data.get("type") == "content_block_delta":
-                delta_text = event_data.get("delta", {}).get("text", "")
-                if delta_text:
-                    yield delta_text
+                # Anthropic SSE shape for streaming text deltas:
+                # {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "..."}}
+                if event_data.get("type") == "content_block_delta":
+                    delta_text = event_data.get("delta", {}).get("text", "")
+                    if delta_text:
+                        yield delta_text
+    except Exception as error:
+        status = error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
+        log_provider_diagnostic(
+            provider="anthropic",
+            model=RECALL_MODEL,
+            operation="recall_stream",
+            started_at=started_at,
+            status=status,
+            error=error,
+        )
+        raise
 
 
 async def generate_session_summary(
@@ -147,24 +162,40 @@ async def generate_session_summary(
         httpx.HTTPStatusError: if the Worker or Anthropic returns a non-2xx
             status that is not recoverable (caller handles retries if needed).
     """
+    safe_system_prompt, safe_user_prompt, _ = await sanitize_chat_context(
+        system_prompt, user_prompt
+    )
     request_payload = {
         "model": model,
         "max_tokens": 1024,
-        "system": system_prompt,
+        "system": safe_system_prompt,
         "messages": [
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": safe_user_prompt},
         ],
     }
 
-    response = await _http_client.post(
-        f"{_worker_url}/chat",
-        json=request_payload,
-    )
-    response.raise_for_status()
+    started_at = time.monotonic()
+    try:
+        response = await _http_client.post(
+            f"{_worker_url}/chat",
+            json=request_payload,
+        )
+        response.raise_for_status()
 
-    response_body = response.json()
+        response_body = response.json()
 
-    # Anthropic Messages API response shape:
-    # { "content": [{ "type": "text", "text": "..." }], ... }
-    first_content_block = response_body["content"][0]
-    return first_content_block["text"]
+        # Anthropic Messages API response shape:
+        # { "content": [{ "type": "text", "text": "..." }], ... }
+        first_content_block = response_body["content"][0]
+        return first_content_block["text"]
+    except Exception as error:
+        status = error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
+        log_provider_diagnostic(
+            provider="anthropic",
+            model=model,
+            operation="session_summary",
+            started_at=started_at,
+            status=status,
+            error=error,
+        )
+        raise

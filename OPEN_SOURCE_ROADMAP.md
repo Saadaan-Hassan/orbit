@@ -174,7 +174,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | PRIV-001 | Agent | DONE | Add versioned capture consent and safe database defaults | SEC-003 |
 | PRIV-002 | Agent | PARTIAL | Gate all Rust capture monitors on consent and settings | PRIV-001 |
 | PRIV-003 | Agent | PARTIAL | Sanitize every Rust-captured field before SQLite | PRIV-002 |
-| PRIV-004 | Agent | TODO | Sanitize all provider-bound context at the Python boundary | PRIV-003 |
+| PRIV-004 | Agent | DONE | Sanitize all provider-bound context at the Python boundary | PRIV-003 |
 | PRIV-005 | Agent | TODO | Normalize exclusions and protect local files/credentials | PRIV-004 |
 | PRIV-006 | Agent | TODO | Add privacy, consent, and redaction regression tests | PRIV-005 |
 | APPSEC-001 | Agent | TODO | Harden Tauri CSP, release devtools, capabilities, and entitlements | SEC-003 |
@@ -577,6 +577,12 @@ Acceptance criteria:
 
 ### PRIV-004 — Sanitize at the provider boundary
 
+**Current status: DONE (2026-09-10).** `provider_context_sanitizer.py` is the
+last local boundary for Groq, Claude, Gemini, and Voyage requests. It redacts
+legacy data, custom phrases, recall input/history, embeddings, and retained
+embedding metadata; it also applies explicit field and request limits. This is
+defence in depth and does not replace capture-time sanitization.
+
 Implementation requirements:
 
 - Create one Python provider-context sanitizer and call it immediately before
@@ -592,11 +598,11 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] Tests inject sensitive strings directly into legacy database rows and prove
+- [x] Tests inject sensitive strings directly into legacy database rows and prove
       they are absent from intercepted provider requests.
-- [ ] Recall query and conversation-history tests are included.
-- [ ] All provider call sites share the same boundary sanitizer.
-- [ ] Provider errors do not reveal prompts, response bodies, keys or local paths.
+- [x] Recall query and conversation-history tests are included.
+- [x] All provider call sites share the same boundary sanitizer.
+- [x] Provider errors do not reveal prompts, response bodies, keys or local paths.
 
 ### PRIV-005 — Normalize exclusions and protect local storage
 
@@ -1243,6 +1249,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-08 | SEC-004 | DONE | Pairing routes/table/middleware, extension popup and service worker, desktop Privacy pairing controls, extension permission documentation | Orbit issues five-minute, one-use in-memory pairing codes from its authenticated UI. A Chrome-origin pairing request receives a distinct random capture-only token; only its hash and exact extension ID are stored. Middleware permits that token only on `/capture` from that paired origin, revocation/full wipe invalidates it, and browser auth failures visibly require re-pairing. `uv run python -m unittest discover -s tests -v` passed 7/7; desktop `pnpm build`, extension `pnpm build`, backend compilation, and `git diff --check` passed. | Load the built extension manually in Chrome before public release to validate Chrome-origin behavior and pairing UX on a real profile. |
 | 2026-09-08 | PRIV-001 | DONE | `ADR-002`, consent migration/API, safe database defaults, migration tests, backend dependency lock | Consent version 1 records independent capture choices and defaults all of them off. Fresh and upgraded databases are paused until review; absent rows fail closed. Existing native-browser/file/screen toggles also update their consent category. `greenlet` is now an explicit SQLAlchemy async runtime dependency. Backend tests passed 9/9, including fresh and existing-schema migration coverage; compilation and `git diff --check` passed. | PRIV-002 must enforce this record in every Rust monitor and replace remaining Rust fail-open defaults before any capture can resume. |
 | 2026-09-10 | PRIV-002 | PARTIAL | Rust clipboard, file activity, screen-content, unified-poller, system-state, capture API, onboarding, Privacy settings, and consent regression tests | Capture defaults fail closed. Every native monitor and the extension-facing `/capture` API now requires the relevant accepted category; unknown event types are denied. Onboarding and Privacy settings provide independent choices plus an explicit keep-off action. Consent/pause settings refresh locally within about five seconds (or the next eight-second monitor poll). `uv run python -m unittest discover -s tests -v` passed 12/12, `pnpm build`, `cargo test --bin app` 34/34, `cargo check`, focused Rust formatting, and staged/unstaged diff checks passed. No acceptance criterion is checked yet because live app behavior still requires maintainer observation. | Required maintainer action: test clean and upgraded profiles; confirm first launch and skip create no events; independently enable then revoke each category; apply global pause; restart; and inspect the local timeline/database for no events while disabled. Record the outcome, date, app build, and any exception here. Keep this task PARTIAL and the Consent gate blocked until that verification is recorded. |
+| 2026-09-10 | PRIV-004 | DONE | Shared Python provider-context sanitizer; Groq, Claude, Gemini, Voyage, Qdrant metadata, recall diagnostics, and provider-boundary tests | A single final boundary redacts static credential/PII/path/URL patterns plus local exact-match phrases, caps chat fields/requests, classification batches, embeddings, and vector metadata, and is called immediately before every AI/embedding HTTP request. Provider diagnostics contain only provider, model, operation, status, duration, and safe error kind; raw prompts/responses are not logged. `uv run python -m unittest discover -s tests -v` passed 17/17, including a synthetic secret inserted into a legacy SQLite event row, recall query/history interception, all provider services, metadata bounds, and a response-body-safe diagnostic test. | Continue with `PRIV-005`. `PRIV-002` remains PARTIAL pending the maintainer's live UI verification. |
 | 2026-09-10 | PRIV-003 | PARTIAL | `ADR-003`; shared Rust sanitizer; all active/retained Rust event writers; local exact-match pattern table/API/UI; migration test | All active and retained Rust event-insert sources now sanitize their captured strings; URLs strip fragments, redact userinfo and sensitive query values; static patterns cover credentials, keys, headers, JWTs, connection strings, payment/identity data, email/phone, and local custom phrases. `cargo test --bin app` passed 30/30, `cargo check --bin app`, focused `rustfmt --check` for changed capture files, backend tests 9/9, `pnpm build`, and both staged/unstaged `git diff --check` passed. | Keep PARTIAL: repository-wide Clippy fails an existing collapsible-if in `src/lib.rs`, and repository-wide formatter reports existing drift in `src/lib.rs` and `src/main.rs`. Fix and rerun those global checks before marking this task DONE. Consent gate remains blocked by PRIV-002. |
 
 ---

@@ -12,9 +12,15 @@ import asyncio
 import json
 import logging
 import os
+import time
 
 import httpx
 from dotenv import load_dotenv
+
+from services.provider_context_sanitizer import (
+    log_provider_diagnostic,
+    sanitize_classification_events,
+)
 
 load_dotenv()
 
@@ -168,14 +174,10 @@ def _parse_classification_response(
 
         return annotated_events
 
-    except Exception as parse_error:
-        logger.warning(
-            "Failed to parse Gemini classification response: %s. "
-            "Defaulting all %d events to category '%s'.",
-            parse_error,
-            len(original_events),
-            DEFAULT_CATEGORY_ON_PARSE_FAILURE,
-        )
+    except Exception:
+        # The caller already records HTTP/transport failures via the shared
+        # structured diagnostic. Invalid model output is safely defaulted
+        # without logging any provider body or user context.
         return [
             {**event, "category": DEFAULT_CATEGORY_ON_PARSE_FAILURE, "project": None}
             for event in original_events
@@ -207,12 +209,14 @@ async def classify_events_batch(events: list[dict]) -> list[dict]:
     if not events:
         return []
 
-    user_prompt = _build_classification_prompt(events)
+    # This second boundary protects legacy/unredacted rows independently of
+    # capture-time redaction and bounds the exact payload sent to Gemini.
+    provider_events = await sanitize_classification_events(events)
+    user_prompt = _build_classification_prompt(provider_events)
     request_body = _build_gemini_request_body(user_prompt)
 
-    last_raised_exception: Exception | None = None
-
     for attempt_number in range(MAXIMUM_RETRY_ATTEMPTS):
+        started_at = time.monotonic()
         try:
             response = await _http_client.post(
                 f"{_worker_url}/classify",
@@ -226,8 +230,20 @@ async def classify_events_batch(events: list[dict]) -> list[dict]:
             return _parse_classification_response(generated_text, events)
 
         except Exception as api_error:
-            error_message = str(api_error).lower()
-            is_rate_limit = "429" in error_message or "quota" in error_message
+            status = (
+                api_error.response.status_code
+                if isinstance(api_error, httpx.HTTPStatusError)
+                else None
+            )
+            is_rate_limit = status == 429
+            log_provider_diagnostic(
+                provider="gemini",
+                model=GEMINI_MODEL_NAME,
+                operation="classification",
+                started_at=started_at,
+                status=status,
+                error=api_error,
+            )
 
             if is_rate_limit and attempt_number < MAXIMUM_RETRY_ATTEMPTS - 1:
                 backoff = INITIAL_RETRY_BACKOFF_SECONDS * (2 ** attempt_number)
@@ -238,21 +254,14 @@ async def classify_events_batch(events: list[dict]) -> list[dict]:
                     backoff,
                 )
                 await asyncio.sleep(backoff)
-                last_raised_exception = api_error
             else:
-                logger.error(
-                    "Gemini classification failed on attempt %d: %s",
-                    attempt_number + 1,
-                    api_error,
-                )
-                last_raised_exception = api_error
+                logger.error("Gemini classification failed on attempt %d.", attempt_number + 1)
                 break
 
     logger.error(
-        "All %d Gemini retry attempts exhausted (%s). "
+        "All %d Gemini retry attempts exhausted. "
         "Defaulting all events to '%s'.",
         MAXIMUM_RETRY_ATTEMPTS,
-        last_raised_exception,
         DEFAULT_CATEGORY_ON_PARSE_FAILURE,
     )
     return [

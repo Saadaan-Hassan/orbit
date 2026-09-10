@@ -7,6 +7,11 @@ from typing import AsyncGenerator
 import httpx
 
 from database import get_groq_api_key
+from services.provider_context_sanitizer import (
+    log_provider_diagnostic,
+    sanitize_chat_context,
+    sanitize_classification_events,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +93,14 @@ async def _call_groq_chat(
         logger.debug("Groq rate-limit cooldown active for %s — skipping this call.", model)
         return None
 
+    safe_system_prompt, safe_user_prompt, _ = await sanitize_chat_context(
+        system_prompt, user_prompt
+    )
     request_body = {
         "model": model,
         "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "system", "content": safe_system_prompt},
+            {"role": "user", "content": safe_user_prompt},
         ],
         "max_tokens": max_tokens,
         "temperature": 0.2,
@@ -107,6 +115,7 @@ async def _call_groq_chat(
     if personal_api_key:
         request_headers["X-Groq-Api-Key"] = personal_api_key
 
+    started_at = time.monotonic()
     try:
         response = await _get_http_client().post(
             f"{_WORKER_URL}/chat-groq",
@@ -115,7 +124,13 @@ async def _call_groq_chat(
             timeout=_GROQ_REQUEST_TIMEOUT_SECONDS,
         )
     except Exception as network_error:
-        logger.warning("Groq request network error (%s): %s", model, network_error)
+        log_provider_diagnostic(
+            provider="groq",
+            model=model,
+            operation="chat",
+            started_at=started_at,
+            error=network_error,
+        )
         return None
 
     if response.status_code == 429:
@@ -123,15 +138,12 @@ async def _call_groq_chat(
         # clear the backoff well before the next 30-minute scheduler run.
         retry_after = int(response.headers.get("Retry-After", "90"))
         _groq_rate_limited_until[model] = time.monotonic() + retry_after
-        try:
-            limit_detail = response.json().get("error", {}).get("message", "no detail")
-        except Exception:
-            limit_detail = response.text[:200]
-        logger.warning(
-            "Groq rate limit reached for %s — skipping for %d seconds. Groq says: %s",
-            model,
-            retry_after,
-            limit_detail,
+        log_provider_diagnostic(
+            provider="groq",
+            model=model,
+            operation="chat",
+            started_at=started_at,
+            status=response.status_code,
         )
         return None
 
@@ -139,38 +151,47 @@ async def _call_groq_chat(
         # Request too large for this model's per-request token budget. This is
         # a payload-size problem, not a time-based quota — retrying later won't
         # help, only sending less content will. No cooldown is set.
-        try:
-            size_detail = response.json().get("error", {}).get("message", response.text[:300])
-        except Exception:
-            size_detail = response.text[:300]
-        logger.warning("Groq request too large (%s): %s", model, size_detail)
+        log_provider_diagnostic(
+            provider="groq",
+            model=model,
+            operation="chat",
+            started_at=started_at,
+            status=response.status_code,
+        )
         return None
 
     if not response.is_success:
-        try:
-            error_detail = response.json().get("error", {}).get("message", response.text[:300])
-        except Exception:
-            error_detail = response.text[:300]
-        logger.warning("Groq request HTTP %d (%s): %s", response.status_code, model, error_detail)
+        log_provider_diagnostic(
+            provider="groq",
+            model=model,
+            operation="chat",
+            started_at=started_at,
+            status=response.status_code,
+        )
         return None
 
     try:
         data = response.json()
         content = data["choices"][0]["message"]["content"]
     except Exception as parse_error:
-        logger.warning("Groq response parse error (%s): %s", model, parse_error)
+        log_provider_diagnostic(
+            provider="groq",
+            model=model,
+            operation="chat",
+            started_at=started_at,
+            status=response.status_code,
+            error=parse_error,
+        )
         return None
 
     if not content or not content.strip():
-        finish_reason = None
-        try:
-            finish_reason = data["choices"][0].get("finish_reason")
-        except Exception:
-            pass
-        logger.warning(
-            "Groq returned an empty completion (%s). finish_reason=%s",
-            model,
-            finish_reason,
+        log_provider_diagnostic(
+            provider="groq",
+            model=model,
+            operation="chat",
+            started_at=started_at,
+            status=response.status_code,
+            error=ValueError("empty completion"),
         )
         return None
 
@@ -208,6 +229,7 @@ async def generate_session_summary_groq(
         " a single plain-English sentence of ≤15 words — no code, no JSON, no file paths."
     )
 
+    request_started_at = time.monotonic()
     raw_text = await _call_groq_chat(
         model=GROQ_SESSION_MODEL,
         system_prompt=groq_system_prompt,
@@ -241,9 +263,13 @@ async def generate_session_summary_groq(
             except json.JSONDecodeError:
                 pass
 
-        logger.warning(
-            "Groq session summary JSON parse failure. Raw (first 300): %.300s",
-            raw_text,
+        log_provider_diagnostic(
+            provider="groq",
+            model=GROQ_SESSION_MODEL,
+            operation="session_summary",
+            started_at=request_started_at,
+            status=200,
+            error=ValueError("invalid JSON response"),
         )
         return None
 
@@ -367,7 +393,9 @@ def _recover_truncated_json_array(text_value: str) -> list | None:
 
 async def _classify_events_group_groq(events: list[dict]) -> list[dict] | None:
     """Classifies one already-safely-sized group in a single Groq call."""
-    stripped_events = _strip_events_for_classification(events)
+    # Legacy rows may bypass Rust capture-time sanitization. Build the exact
+    # bounded/redacted event set before serialising the provider request.
+    stripped_events = await sanitize_classification_events(events)
     user_prompt = json.dumps(stripped_events, ensure_ascii=False)
 
     # Never request more completion tokens than fit alongside this prompt in
@@ -378,6 +406,7 @@ async def _classify_events_group_groq(events: list[dict]) -> list[dict] | None:
     available_completion_budget = GROQ_CLASSIFY_CONTEXT_WINDOW_TOKENS - estimated_prompt_tokens
     max_tokens = max(1, min(desired_max_tokens, available_completion_budget))
 
+    request_started_at = time.monotonic()
     raw_text = await _call_groq_chat(
         model=GROQ_CLASSIFY_MODEL,
         system_prompt=CLASSIFICATION_SYSTEM_PROMPT,
@@ -421,10 +450,13 @@ async def _classify_events_group_groq(events: list[dict]) -> list[dict] | None:
                 )
 
         if recovered is None:
-            logger.warning(
-                "Groq classification JSON parse failure: %s. Raw (first 300): %.300s",
-                parse_error,
-                raw_text,
+            log_provider_diagnostic(
+                provider="groq",
+                model=GROQ_CLASSIFY_MODEL,
+                operation="classification",
+                started_at=request_started_at,
+                status=200,
+                error=parse_error,
             )
             return None
 
@@ -436,11 +468,13 @@ async def _classify_events_group_groq(events: list[dict]) -> list[dict] | None:
     # That output is unreliable — better to report failure (caller defaults
     # the group to 'work') than to silently key off of it.
     if len(parsed_classifications) > len(events) * 1.5:
-        logger.warning(
-            "Groq classification returned %d entries for a %d-event group — "
-            "likely a repetition-loop artifact. Discarding as unreliable.",
-            len(parsed_classifications),
-            len(events),
+        log_provider_diagnostic(
+            provider="groq",
+            model=GROQ_CLASSIFY_MODEL,
+            operation="classification",
+            started_at=request_started_at,
+            status=200,
+            error=ValueError("unexpected classification count"),
         )
         return None
 
@@ -558,20 +592,18 @@ async def stream_recall_response_groq(
     call already catches exactly these and falls back to the offline FTS5
     message, so no new error handling is needed there.
     """
-    prior_messages = [
-        {"role": msg["role"], "content": msg["content"]}
-        for msg in (conversation_history or [])
-        if msg.get("role") in ("user", "assistant") and msg.get("content")
-    ]
+    safe_system_prompt, safe_user_prompt, prior_messages = await sanitize_chat_context(
+        system_prompt, user_prompt, conversation_history
+    )
 
     request_body = {
         "model": GROQ_RECALL_MODEL,
         "stream": True,
         "temperature": 0.3,
         "messages": [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": safe_system_prompt},
             *prior_messages,
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": safe_user_prompt},
         ],
     }
 
@@ -580,33 +612,46 @@ async def stream_recall_response_groq(
     if personal_api_key:
         request_headers["X-Groq-Api-Key"] = personal_api_key
 
-    async with _get_http_client().stream(
-        "POST",
-        f"{_WORKER_URL}/chat-groq",
-        json=request_body,
-        headers=request_headers,
-        timeout=_GROQ_RECALL_TIMEOUT_SECONDS,
-    ) as streaming_response:
-        streaming_response.raise_for_status()
+    started_at = time.monotonic()
+    try:
+        async with _get_http_client().stream(
+            "POST",
+            f"{_WORKER_URL}/chat-groq",
+            json=request_body,
+            headers=request_headers,
+            timeout=_GROQ_RECALL_TIMEOUT_SECONDS,
+        ) as streaming_response:
+            streaming_response.raise_for_status()
 
-        async for raw_line in streaming_response.aiter_lines():
-            if not raw_line.startswith("data: "):
-                continue
+            async for raw_line in streaming_response.aiter_lines():
+                if not raw_line.startswith("data: "):
+                    continue
 
-            raw_json_payload = raw_line[len("data: "):]
+                raw_json_payload = raw_line[len("data: "):]
 
-            if raw_json_payload.strip() == "[DONE]":
-                break
+                if raw_json_payload.strip() == "[DONE]":
+                    break
 
-            try:
-                event_data = json.loads(raw_json_payload)
-            except json.JSONDecodeError:
-                continue
+                try:
+                    event_data = json.loads(raw_json_payload)
+                except json.JSONDecodeError:
+                    continue
 
-            try:
-                delta_text = event_data["choices"][0]["delta"].get("content")
-            except (KeyError, IndexError, TypeError):
-                continue
+                try:
+                    delta_text = event_data["choices"][0]["delta"].get("content")
+                except (KeyError, IndexError, TypeError):
+                    continue
 
-            if delta_text:
-                yield delta_text
+                if delta_text:
+                    yield delta_text
+    except Exception as error:
+        status = error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
+        log_provider_diagnostic(
+            provider="groq",
+            model=GROQ_RECALL_MODEL,
+            operation="recall_stream",
+            started_at=started_at,
+            status=status,
+            error=error,
+        )
+        raise

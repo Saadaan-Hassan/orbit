@@ -578,7 +578,9 @@ async def _stream_sse_recall(
     4. Each text delta yielded as:  data: {"chunk": "..."}\n\n
     5. Final sentinel yielded as:   data: {"done": true}\n\n
     """
-    logger.info("Recall: running search for query: %.80s", query)
+    # Queries can contain pasted credentials or personal context. Record only
+    # bounded operational metadata, never raw prompt material.
+    logger.info("Recall: running local search (query_chars=%d).", len(query))
 
     now_ms     = int(datetime.now().timestamp() * 1000)
     time_range = extract_time_range_from_query(query, now_ms)
@@ -753,7 +755,10 @@ async def _stream_sse_recall(
         yield f"data: {json.dumps({'chunk': _format_fts5_fallback(keyword_matched_events)})}\n\n"
 
     except Exception as unexpected_error:
-        logger.error("Recall: unexpected error during synthesis: %s", unexpected_error)
+        logger.error(
+            "Recall: unexpected error during synthesis (error_kind=%s).",
+            type(unexpected_error).__name__,
+        )
         yield f"data: {json.dumps({'chunk': 'Sorry, something went wrong retrieving your memory.'})}\n\n"
 
     yield f"data: {json.dumps({'done': True})}\n\n"

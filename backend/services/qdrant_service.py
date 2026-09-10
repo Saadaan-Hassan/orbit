@@ -15,6 +15,7 @@ from pathlib import Path
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
+from services.provider_context_sanitizer import sanitize_provider_metadata
 from services.voyage_service import generate_text_embedding
 
 logger = logging.getLogger(__name__)
@@ -187,10 +188,14 @@ async def add_session_embedding(
     # from the session UUID so the same session always maps to the same point.
     stable_point_id = abs(hash(session_id)) % (10**9)
 
+    # Qdrant is local, but this payload later becomes recall context. Keep it
+    # aligned with the provider boundary so legacy summary metadata cannot be
+    # reintroduced into a future provider request through semantic search.
+    safe_metadata = await sanitize_provider_metadata(metadata)
     point = PointStruct(
         id=stable_point_id,
         vector=embedding_vector,
-        payload={**metadata, "session_id": session_id},
+        payload={**safe_metadata, "session_id": session_id},
     )
 
     await asyncio.to_thread(

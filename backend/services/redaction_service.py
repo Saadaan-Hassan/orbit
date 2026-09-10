@@ -44,7 +44,7 @@ _API_KEY_PREFIXES: tuple[str, ...] = (
     "AIza",        "AKIA",
     "ghp_",        "gho_",     "ghs_",       "ghr_",
     "npm_",        "hf_",      "phc_",
-    "sk-",         "pa-",
+    "gsk_",        "sk-",         "pa-",
     "re_",         "SG.",      "cf_",
 )
 

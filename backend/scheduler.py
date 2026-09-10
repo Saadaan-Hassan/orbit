@@ -639,9 +639,10 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
             )
     except Exception as embedding_error:
         logger.warning(
-            "Session generator: Qdrant upsert failed for session %s: %s. "
+            "Session generator: Qdrant upsert failed for session %s "
+            "(error_kind=%s). "
             "Session is saved in SQLite; semantic search will not include it.",
-            new_session_id, embedding_error,
+            new_session_id, type(embedding_error).__name__,
         )
 
     # ------------------------------------------------------------------

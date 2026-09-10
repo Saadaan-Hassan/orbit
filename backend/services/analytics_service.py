@@ -121,4 +121,7 @@ def capture_analytics_event(
 
     except Exception as analytics_error:
         # Analytics must NEVER break the app — log and continue.
-        logger.debug("Analytics capture failed silently: %s", analytics_error)
+        logger.debug(
+            "Analytics capture failed silently (error_kind=%s).",
+            type(analytics_error).__name__,
+        )
