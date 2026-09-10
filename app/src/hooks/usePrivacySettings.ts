@@ -11,6 +11,11 @@ interface CaptureStatus {
   paused_until: number | null; // unix ms, null = indefinite
 }
 
+export interface RedactionPattern {
+  id: string;
+  pattern: string;
+}
+
 export interface PrivacySettings {
   // Whether capture is currently active.
   isCapturing: boolean;
@@ -20,6 +25,8 @@ export interface PrivacySettings {
   excludedApps: string[];
   // Ordered list of domains excluded from browser capture.
   excludedDomains: string[];
+  // Exact local phrases removed from Rust-captured fields before SQLite writes.
+  redactionPatterns: RedactionPattern[];
   // Whether native browser URL capture (osascript, no extension) is enabled.
   nativeBrowserEnabled: boolean;
   // Whether file activity capture is enabled.
@@ -39,6 +46,8 @@ export interface PrivacySettings {
   removeExcludedApp: (appName: string) => Promise<void>;
   addExcludedDomain: (domain: string) => Promise<void>;
   removeExcludedDomain: (domain: string) => Promise<void>;
+  addRedactionPattern: (pattern: string) => Promise<void>;
+  removeRedactionPattern: (patternId: string) => Promise<void>;
   setNativeBrowserEnabled: (enabled: boolean) => Promise<void>;
   setFileWatchEnabled: (enabled: boolean) => Promise<void>;
   setScreenContentEnabled: (enabled: boolean) => Promise<void>;
@@ -81,6 +90,7 @@ export function usePrivacySettings(): PrivacySettings {
   const [pausedUntil, setPausedUntil] = useState<number | null>(null);
   const [excludedApps, setExcludedApps] = useState<string[]>([]);
   const [excludedDomains, setExcludedDomains] = useState<string[]>([]);
+  const [redactionPatterns, setRedactionPatterns] = useState<RedactionPattern[]>([]);
   const [nativeBrowserEnabled, setNativeBrowserEnabledState] = useState(true);
   const [fileWatchEnabled, setFileWatchEnabledState] = useState(true);
   const [screenContentEnabled, setScreenContentEnabledState] = useState(true);
@@ -97,6 +107,7 @@ export function usePrivacySettings(): PrivacySettings {
           statusResponse,
           excludedAppsResponse,
           excludedDomainsResponse,
+          redactionPatternsResponse,
           browserCaptureResponse,
           fileWatchResponse,
           screenContentResponse,
@@ -104,6 +115,7 @@ export function usePrivacySettings(): PrivacySettings {
           orbitApiFetch("/privacy/capture-status"),
           orbitApiFetch("/privacy/excluded-apps"),
           orbitApiFetch("/privacy/excluded-domains"),
+          orbitApiFetch("/privacy/redaction-patterns"),
           orbitApiFetch("/privacy/browser-capture"),
           orbitApiFetch("/privacy/file-watching"),
           orbitApiFetch("/privacy/screen-content"),
@@ -113,6 +125,7 @@ export function usePrivacySettings(): PrivacySettings {
           !statusResponse.ok ||
           !excludedAppsResponse.ok ||
           !excludedDomainsResponse.ok ||
+          !redactionPatternsResponse.ok ||
           !browserCaptureResponse.ok ||
           !fileWatchResponse.ok ||
           !screenContentResponse.ok
@@ -125,6 +138,8 @@ export function usePrivacySettings(): PrivacySettings {
           await excludedAppsResponse.json();
         const excludedDomainsData: { excluded_domains: string[] } =
           await excludedDomainsResponse.json();
+        const redactionPatternsData: { patterns: RedactionPattern[] } =
+          await redactionPatternsResponse.json();
         const browserCaptureData: { native_enabled: boolean } =
           await browserCaptureResponse.json();
         const fileWatchData: { enabled: boolean; watched_folders: string[] } =
@@ -136,6 +151,7 @@ export function usePrivacySettings(): PrivacySettings {
         setPausedUntil(statusData.paused_until);
         setExcludedApps(excludedAppsData.excluded_apps);
         setExcludedDomains(excludedDomainsData.excluded_domains);
+        setRedactionPatterns(redactionPatternsData.patterns);
         setNativeBrowserEnabledState(browserCaptureData.native_enabled);
         setFileWatchEnabledState(fileWatchData.enabled);
         setScreenContentEnabledState(screenContentData.enabled);
@@ -223,6 +239,39 @@ export function usePrivacySettings(): PrivacySettings {
 
       setExcludedDomains((previous) =>
         previous.filter((existingDomain) => existingDomain !== domain)
+      );
+    },
+    []
+  );
+
+  const addRedactionPattern = useCallback(async (pattern: string): Promise<void> => {
+    const trimmedPattern = pattern.trim();
+    if (!trimmedPattern) return;
+
+    const response = await orbitApiFetch("/privacy/redaction-patterns", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pattern: trimmedPattern }),
+    });
+    if (!response.ok) throw new Error("Failed to add redaction pattern.");
+
+    const created = (await response.json()) as RedactionPattern;
+    setRedactionPatterns((previous) =>
+      previous.some((existing) => existing.id === created.id)
+        ? previous
+        : [...previous, created]
+    );
+  }, []);
+
+  const removeRedactionPattern = useCallback(
+    async (patternId: string): Promise<void> => {
+      const response = await orbitApiFetch(
+        `/privacy/redaction-patterns/${encodeURIComponent(patternId)}`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) throw new Error("Failed to remove redaction pattern.");
+      setRedactionPatterns((previous) =>
+        previous.filter((existing) => existing.id !== patternId)
       );
     },
     []
@@ -360,6 +409,7 @@ export function usePrivacySettings(): PrivacySettings {
     pausedUntil,
     excludedApps,
     excludedDomains,
+    redactionPatterns,
     nativeBrowserEnabled,
     fileWatchEnabled,
     screenContentEnabled,
@@ -371,6 +421,8 @@ export function usePrivacySettings(): PrivacySettings {
     removeExcludedApp,
     addExcludedDomain,
     removeExcludedDomain,
+    addRedactionPattern,
+    removeRedactionPattern,
     setNativeBrowserEnabled,
     setFileWatchEnabled,
     setScreenContentEnabled,

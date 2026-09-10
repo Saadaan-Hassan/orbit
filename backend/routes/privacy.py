@@ -8,7 +8,7 @@ Nothing in this module touches the AI pipeline — it is purely data management.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -80,6 +80,12 @@ class CaptureConsentRequest(BaseModel):
     screen_content: bool = False
 
 
+class RedactionPatternRequest(BaseModel):
+    # This is an exact local phrase, not a regular expression. The Rust
+    # sanitizer applies the same limit before using a loaded row.
+    pattern: str
+
+
 @router.get("/consent")
 async def get_capture_consent() -> dict:
     async with _async_engine.connect() as connection:
@@ -104,6 +110,64 @@ async def save_capture_consent(request: CaptureConsentRequest) -> dict:
         # Consent is not the same as a global pause: accepting choices allows
         # PRIV-002 to apply each category independently.
         await connection.execute(text("UPDATE capture_state SET is_paused = 0, paused_until = NULL WHERE id = 1"))
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Local custom redaction phrases
+# ---------------------------------------------------------------------------
+
+
+@router.get("/redaction-patterns")
+async def get_redaction_patterns() -> dict:
+    async with _async_engine.connect() as connection:
+        result = await connection.execute(
+            text("SELECT id, pattern FROM redaction_patterns ORDER BY created_at ASC, id ASC")
+        )
+        rows = result.fetchall()
+    return {"patterns": [{"id": row.id, "pattern": row.pattern} for row in rows]}
+
+
+@router.post("/redaction-patterns")
+async def add_redaction_pattern(request: RedactionPatternRequest) -> dict:
+    import uuid
+    from datetime import datetime, timezone
+
+    pattern = request.pattern.strip()
+    if not pattern or len(pattern) > 256 or pattern == "[REDACTED:custom]":
+        raise HTTPException(status_code=422, detail="Pattern is invalid.")
+
+    async with _async_engine.begin() as connection:
+        await connection.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO redaction_patterns (id, pattern, created_at)
+                VALUES (:id, :pattern, :created_at)
+                """
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "pattern": pattern,
+                "created_at": int(datetime.now(timezone.utc).timestamp() * 1000),
+            },
+        )
+        result = await connection.execute(
+            text("SELECT id, pattern FROM redaction_patterns WHERE pattern = :pattern"),
+            {"pattern": pattern},
+        )
+        row = result.fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=500, detail="Could not save pattern.")
+    return {"id": row.id, "pattern": row.pattern}
+
+
+@router.delete("/redaction-patterns/{pattern_id}")
+async def remove_redaction_pattern(pattern_id: str) -> dict:
+    async with _async_engine.begin() as connection:
+        await connection.execute(
+            text("DELETE FROM redaction_patterns WHERE id = :id"), {"id": pattern_id}
+        )
     return {"status": "ok"}
 
 

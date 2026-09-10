@@ -1,3 +1,4 @@
+use super::sanitizer::RedactionPatternCache;
 use chrono::Utc;
 use notify::{RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult};
@@ -99,14 +100,9 @@ struct FileWatchSettings {
 }
 
 fn default_file_watch_settings() -> FileWatchSettings {
-    let home = std::env::var("HOME").unwrap_or_default();
     FileWatchSettings {
-        enabled: true,
-        watched_folders: vec![
-            format!("{}/Documents", home),
-            format!("{}/Desktop", home),
-            format!("{}/Downloads", home),
-        ],
+        enabled: false,
+        watched_folders: vec![],
     }
 }
 
@@ -115,18 +111,17 @@ fn default_file_watch_settings() -> FileWatchSettings {
 /// Falls back to the hardcoded defaults if the table or row is absent (e.g.
 /// FastAPI hasn't run yet and hasn't created the table).
 async fn read_file_watch_settings(pool: &SqlitePool) -> FileWatchSettings {
-    let query_result = sqlx::query_as::<_, (i64, String)>(
-        "SELECT enabled, watched_folders FROM file_watch_settings WHERE id = 1",
+    let query_result = sqlx::query_as::<_, (i64, String, i64)>(
+        "SELECT enabled, watched_folders, COALESCE((SELECT accepted_at IS NOT NULL AND file_activity = 1 FROM capture_consent WHERE id = 1), 0) FROM file_watch_settings WHERE id = 1",
     )
     .fetch_optional(pool)
     .await;
 
     match query_result {
-        Ok(Some((enabled_flag, folders_json))) => {
-            let folders: Vec<String> =
-                serde_json::from_str(&folders_json).unwrap_or_default();
+        Ok(Some((enabled_flag, folders_json, consent_granted))) => {
+            let folders: Vec<String> = serde_json::from_str(&folders_json).unwrap_or_default();
             FileWatchSettings {
-                enabled: enabled_flag != 0,
+                enabled: enabled_flag != 0 && consent_granted != 0,
                 watched_folders: folders,
             }
         }
@@ -156,12 +151,8 @@ fn sync_watched_folders(
     // Unwatch paths that are no longer desired.
     let to_remove: Vec<String> = currently_watched.difference(&desired).cloned().collect();
     for path in &to_remove {
-        if let Err(unwatch_error) =
-            watcher.unwatch(std::path::Path::new(path.as_str()))
-        {
-            eprintln!(
-                "File activity monitor: could not unwatch {path}: {unwatch_error}"
-            );
+        if let Err(unwatch_error) = watcher.unwatch(std::path::Path::new(path.as_str())) {
+            eprintln!("File activity monitor: could not unwatch {path}: {unwatch_error}");
         } else {
             currently_watched.remove(path);
         }
@@ -174,9 +165,7 @@ fn sync_watched_folders(
             std::path::Path::new(path.as_str()),
             RecursiveMode::Recursive,
         ) {
-            eprintln!(
-                "File activity monitor: could not watch {path}: {watch_error}"
-            );
+            eprintln!("File activity monitor: could not watch {path}: {watch_error}");
         } else {
             currently_watched.insert(path.clone());
         }
@@ -197,6 +186,7 @@ pub async fn start_file_activity_monitor(
     sqlx_connection_pool: SqlitePool,
     sqlite_database_path: String,
 ) {
+    let mut redaction_pattern_cache = RedactionPatternCache::new();
     let (debounced_event_sender, mut debounced_event_receiver) =
         mpsc::unbounded_channel::<DebounceEventResult>();
 
@@ -251,6 +241,10 @@ pub async fn start_file_activity_monitor(
                     None => break, // channel closed — debouncer was dropped
                 };
 
+                redaction_pattern_cache
+                    .refresh_if_stale(&sqlx_connection_pool)
+                    .await;
+
                 for debounced_event in debounced_events {
                     let action = match map_notify_event_kind_to_action_string(
                         &debounced_event.event.kind,
@@ -273,6 +267,8 @@ pub async fn start_file_activity_monitor(
                         }
 
                         let file_path_string = file_path.to_string_lossy().to_string();
+                        let sanitized_file_name = redaction_pattern_cache.sanitize_text(&file_name);
+                        let sanitized_file_path = redaction_pattern_cache.sanitize_text(&file_path_string);
                         let metadata_json = format!(r#"{{"action":"{}"}}"#, action);
                         let new_event_id = Uuid::new_v4().to_string();
                         let event_timestamp_milliseconds = Utc::now().timestamp_millis();
@@ -285,8 +281,8 @@ pub async fn start_file_activity_monitor(
                         )
                         .bind(&new_event_id)
                         .bind(event_timestamp_milliseconds)
-                        .bind(&file_name)
-                        .bind(&file_path_string)
+                        .bind(&sanitized_file_name)
+                        .bind(&sanitized_file_path)
                         .bind(&metadata_json)
                         .execute(&sqlx_connection_pool)
                         .await;

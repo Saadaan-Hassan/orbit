@@ -271,6 +271,18 @@ async def create_all_tables() -> None:
             )
         """))
 
+        # Exact-match phrases the user wants redacted from every Rust-captured
+        # field. They are deliberately not arbitrary regular expressions: that
+        # keeps matching predictable and prevents user configuration from
+        # adding an expensive pattern to capture's hot path.
+        await connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS redaction_patterns (
+                id         TEXT PRIMARY KEY,
+                pattern    TEXT NOT NULL UNIQUE,
+                created_at INTEGER NOT NULL
+            )
+        """))
+
         # Browser-extension credentials are stored only as SHA-256 hashes. A
         # row is scoped to one Chrome extension ID and may be revoked locally.
         await connection.execute(text("""

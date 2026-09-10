@@ -1,3 +1,4 @@
+use super::sanitizer::sanitize_text;
 use chrono::Utc;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
@@ -58,8 +59,8 @@ async fn write_app_lifecycle_event(pool: &SqlitePool, app_name: &str, action: &s
     )
     .bind(&event_id)
     .bind(event_timestamp_milliseconds)
-    .bind(app_name)
-    .bind(app_name)
+    .bind(sanitize_text(app_name))
+    .bind(sanitize_text(app_name))
     .bind(&metadata_json)
     .execute(pool)
     .await

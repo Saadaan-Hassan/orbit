@@ -1,6 +1,9 @@
+use super::sanitizer::RedactionPatternCache;
 use chrono::Utc;
+#[cfg(test)]
 use regex::Regex;
 use sqlx::SqlitePool;
+#[cfg(test)]
 use std::sync::OnceLock;
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
@@ -14,27 +17,25 @@ use uuid::Uuid;
 // by single spaces or dashes. Handles both "4111 1111 1111 1111" and
 // "4111111111111111" forms without false-positiving on phone numbers
 // (which are shorter and typically have different grouping).
+#[cfg(test)]
 fn credit_card_regex() -> &'static Regex {
     static CREDIT_CARD_PATTERN: OnceLock<Regex> = OnceLock::new();
-    CREDIT_CARD_PATTERN.get_or_init(|| {
-        Regex::new(r"\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{1,7}\b").unwrap()
-    })
+    CREDIT_CARD_PATTERN
+        .get_or_init(|| Regex::new(r"\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{1,7}\b").unwrap())
 }
 
 // Matches the canonical US Social Security Number format: 123-45-6789.
+#[cfg(test)]
 fn ssn_regex() -> &'static Regex {
     static SSN_PATTERN: OnceLock<Regex> = OnceLock::new();
-    SSN_PATTERN.get_or_init(|| {
-        Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap()
-    })
+    SSN_PATTERN.get_or_init(|| Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap())
 }
 
 // Matches an Ethereum address: 0x followed by exactly 40 hex characters.
+#[cfg(test)]
 fn ethereum_address_regex() -> &'static Regex {
     static ETHEREUM_PATTERN: OnceLock<Regex> = OnceLock::new();
-    ETHEREUM_PATTERN.get_or_init(|| {
-        Regex::new(r"\b0x[a-fA-F0-9]{40}\b").unwrap()
-    })
+    ETHEREUM_PATTERN.get_or_init(|| Regex::new(r"\b0x[a-fA-F0-9]{40}\b").unwrap())
 }
 
 // ---------------------------------------------------------------------------
@@ -42,6 +43,7 @@ fn ethereum_address_regex() -> &'static Regex {
 // ---------------------------------------------------------------------------
 
 // Checked via str::starts_with — no regex needed, faster and unambiguous.
+#[cfg(test)]
 const KNOWN_API_KEY_PREFIXES: &[&str] = &[
     // OpenAI / Anthropic
     "sk-",
@@ -102,6 +104,7 @@ const KNOWN_API_KEY_PREFIXES: &[&str] = &[
 ];
 
 // PEM header fragments that identify a private key block.
+#[cfg(test)]
 const PEM_PRIVATE_KEY_MARKERS: &[&str] = &[
     "BEGIN PRIVATE KEY",
     "BEGIN RSA PRIVATE KEY",
@@ -119,6 +122,7 @@ const PEM_PRIVATE_KEY_MARKERS: &[&str] = &[
 /// Patterns are checked in descending order of risk. The function returns
 /// on the first match so only one category is ever reported per clipboard
 /// entry — no double-tagging.
+#[cfg(test)]
 pub fn detect_sensitive_content_type(clipboard_text: &str) -> Option<&'static str> {
     // 1. PEM private keys — highest severity; check before API keys because
     //    PEM blocks sometimes start with "-----" which has no common prefix.
@@ -204,13 +208,14 @@ pub fn detect_sensitive_content_type(clipboard_text: &str) -> Option<&'static st
 // refresh it every 30 seconds — matching the TTL on the FastAPI side.
 //
 // If the table doesn't exist yet (FastAPI not started) or returns an error,
-// we default to "not paused" so no events are silently lost on startup.
+// we default to paused with no consent so nothing is captured on startup.
 // ---------------------------------------------------------------------------
 
 const PAUSE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
 struct PauseStateCache {
     is_paused: bool,
+    consent_granted: bool,
     paused_until_ms: Option<i64>,
     // Far in the past on construction so the first poll always refreshes.
     last_refreshed_at: Instant,
@@ -219,7 +224,8 @@ struct PauseStateCache {
 impl PauseStateCache {
     fn new() -> Self {
         Self {
-            is_paused: false,
+            is_paused: true,
+            consent_granted: false,
             paused_until_ms: None,
             last_refreshed_at: Instant::now()
                 .checked_sub(PAUSE_CACHE_TTL * 2)
@@ -228,8 +234,8 @@ impl PauseStateCache {
     }
 
     fn capture_is_paused_right_now(&self) -> bool {
-        if !self.is_paused {
-            return false;
+        if !self.consent_granted || self.is_paused {
+            return true;
         }
         match self.paused_until_ms {
             None => true, // Paused indefinitely.
@@ -238,32 +244,31 @@ impl PauseStateCache {
     }
 }
 
-async fn refresh_pause_cache_if_stale(
-    pool: &SqlitePool,
-    cache: &mut PauseStateCache,
-) {
+async fn refresh_pause_cache_if_stale(pool: &SqlitePool, cache: &mut PauseStateCache) {
     if cache.last_refreshed_at.elapsed() < PAUSE_CACHE_TTL {
         return; // Still fresh.
     }
 
     // capture_state is created by FastAPI's lifespan. If it doesn't exist yet
     // (e.g. the app just started and FastAPI is still initialising), the query
-    // will error — we treat that as "not paused" and retry next interval.
-    let query_result = sqlx::query_as::<_, (i64, Option<i64>)>(
-        "SELECT is_paused, paused_until FROM capture_state WHERE id = 1",
+    // will error — we stay paused and retry next interval.
+    let query_result = sqlx::query_as::<_, (i64, Option<i64>, i64)>(
+        "SELECT is_paused, paused_until, COALESCE((SELECT accepted_at IS NOT NULL AND clipboard = 1 FROM capture_consent WHERE id = 1), 0) FROM capture_state WHERE id = 1",
     )
     .fetch_optional(pool)
     .await;
 
     match query_result {
-        Ok(Some((is_paused_value, paused_until_value))) => {
+        Ok(Some((is_paused_value, paused_until_value, consent_granted))) => {
             cache.is_paused = is_paused_value != 0;
             cache.paused_until_ms = paused_until_value;
+            cache.consent_granted = consent_granted != 0;
         }
         Ok(None) | Err(_) => {
-            // Table absent or empty — default to capturing.
-            cache.is_paused = false;
+            // Table absent or empty — fail closed.
+            cache.is_paused = true;
             cache.paused_until_ms = None;
+            cache.consent_granted = false;
         }
     }
 
@@ -276,6 +281,7 @@ pub async fn start_clipboard_monitor(
 ) {
     let mut last_seen_clipboard_text = String::new();
     let mut pause_cache = PauseStateCache::new();
+    let mut redaction_pattern_cache = RedactionPatternCache::new();
 
     loop {
         // arboard::Clipboard is !Send and cannot be held across .await points,
@@ -299,6 +305,9 @@ pub async fn start_clipboard_monitor(
         // if the user has paused capture. We still update last_seen so that
         // when capture resumes we don't immediately re-insert the same text.
         refresh_pause_cache_if_stale(&sqlx_connection_pool, &mut pause_cache).await;
+        redaction_pattern_cache
+            .refresh_if_stale(&sqlx_connection_pool)
+            .await;
 
         if let Some(current_clipboard_text) = maybe_clipboard_text {
             let is_non_empty = !current_clipboard_text.is_empty();
@@ -313,16 +322,8 @@ pub async fn start_clipboard_monitor(
                     continue;
                 }
 
-                // Check for sensitive content before any DB write.
-                // If the text matches a known secret pattern, store only the
-                // redaction placeholder — never the raw value.
                 let content_to_store =
-                    match detect_sensitive_content_type(&current_clipboard_text) {
-                        Some(sensitive_content_type) => {
-                            format!("[REDACTED:{sensitive_content_type}]")
-                        }
-                        None => current_clipboard_text.clone(),
-                    };
+                    redaction_pattern_cache.sanitize_text(&current_clipboard_text);
 
                 let new_event_id = Uuid::new_v4().to_string();
                 let event_timestamp_milliseconds = Utc::now().timestamp_millis();
@@ -360,7 +361,8 @@ mod tests {
 
     #[test]
     fn detects_pem_private_key() {
-        let pem_text = "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkq...\n-----END PRIVATE KEY-----";
+        let pem_text =
+            "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkq...\n-----END PRIVATE KEY-----";
         assert_eq!(detect_sensitive_content_type(pem_text), Some("private_key"));
     }
 
@@ -399,8 +401,14 @@ mod tests {
 
     #[test]
     fn detects_credit_card() {
-        assert_eq!(detect_sensitive_content_type("4111 1111 1111 1111"), Some("credit_card"));
-        assert_eq!(detect_sensitive_content_type("4111111111111111"), Some("credit_card"));
+        assert_eq!(
+            detect_sensitive_content_type("4111 1111 1111 1111"),
+            Some("credit_card")
+        );
+        assert_eq!(
+            detect_sensitive_content_type("4111111111111111"),
+            Some("credit_card")
+        );
     }
 
     #[test]
@@ -557,7 +565,13 @@ mod tests {
     #[test]
     fn safe_content_passes_through() {
         assert_eq!(detect_sensitive_content_type("hello world"), None);
-        assert_eq!(detect_sensitive_content_type("fn main() { println!(\"hi\"); }"), None);
-        assert_eq!(detect_sensitive_content_type("meeting notes from today"), None);
+        assert_eq!(
+            detect_sensitive_content_type("fn main() { println!(\"hi\"); }"),
+            None
+        );
+        assert_eq!(
+            detect_sensitive_content_type("meeting notes from today"),
+            None
+        );
     }
 }

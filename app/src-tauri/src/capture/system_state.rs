@@ -1,3 +1,4 @@
+use super::sanitizer::RedactionPatternCache;
 use chrono::Utc;
 use sqlx::SqlitePool;
 use std::time::{Duration, SystemTime};
@@ -31,6 +32,7 @@ pub async fn start_system_state_monitor(sqlx_connection_pool: SqlitePool) {
 #[cfg(target_os = "macos")]
 async fn run_macos_system_state_monitor(pool: SqlitePool) {
     let mut previous_locked: Option<bool> = None;
+    let mut redaction_pattern_cache = RedactionPatternCache::new();
 
     loop {
         // Capture wall clock time before sleeping so we can detect if the
@@ -51,6 +53,7 @@ async fn run_macos_system_state_monitor(pool: SqlitePool) {
                     &pool,
                     "wake",
                     &format!(r#"{{"state":"wake","gap_seconds":{gap_secs}}}"#),
+                    &mut redaction_pattern_cache,
                 )
                 .await;
             }
@@ -74,6 +77,7 @@ async fn run_macos_system_state_monitor(pool: SqlitePool) {
                     &pool,
                     state,
                     &format!(r#"{{"state":"{state}"}}"#),
+                    &mut redaction_pattern_cache,
                 )
                 .await;
                 previous_locked = Some(now_locked);
@@ -169,7 +173,27 @@ fn read_screen_lock_state() -> bool {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
-async fn write_system_state_event(pool: &SqlitePool, state: &str, metadata_json: &str) {
+async fn write_system_state_event(
+    pool: &SqlitePool,
+    state: &str,
+    metadata_json: &str,
+    redaction_pattern_cache: &mut RedactionPatternCache,
+) {
+    // System lock/wake activity is an app/window capture category. Any missing
+    // table, consent row, or pause state fails closed before a DB write.
+    let allowed = sqlx::query_as::<_, (i64,)>(
+        "SELECT COALESCE((SELECT accepted_at IS NOT NULL AND app_window = 1 FROM capture_consent WHERE id = 1) AND (SELECT is_paused = 0 FROM capture_state WHERE id = 1), 0)",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .map(|(value,)| value != 0)
+    .unwrap_or(false);
+    if !allowed {
+        return;
+    }
+    redaction_pattern_cache.refresh_if_stale(pool).await;
     let event_id = Uuid::new_v4().to_string();
     let event_timestamp_milliseconds = Utc::now().timestamp_millis();
 
@@ -180,8 +204,8 @@ async fn write_system_state_event(pool: &SqlitePool, state: &str, metadata_json:
     )
     .bind(&event_id)
     .bind(event_timestamp_milliseconds)
-    .bind(state)
-    .bind(metadata_json)
+    .bind(redaction_pattern_cache.sanitize_text(state))
+    .bind(redaction_pattern_cache.sanitize_text(metadata_json))
     .execute(pool)
     .await
     {

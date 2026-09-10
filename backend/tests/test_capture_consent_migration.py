@@ -18,7 +18,9 @@ async def _read_consent(database_module):
         consent = result.fetchone()
         result = await connection.execute(database_module.text("SELECT is_paused FROM capture_state WHERE id = 1"))
         pause = result.fetchone()
-    return consent, pause
+        result = await connection.execute(database_module.text("SELECT COUNT(*) FROM redaction_patterns"))
+        redaction_pattern_count = result.fetchone()[0]
+    return consent, pause, redaction_pattern_count
 
 
 class CaptureConsentMigrationTests(unittest.TestCase):
@@ -32,15 +34,16 @@ class CaptureConsentMigrationTests(unittest.TestCase):
                 asyncio.run(database._async_engine.dispose())
                 database = importlib.reload(database)
                 asyncio.run(database.create_all_tables())
-                consent, pause = asyncio.run(_read_consent(database))
+                consent, pause, redaction_pattern_count = asyncio.run(_read_consent(database))
                 asyncio.run(database._async_engine.dispose())
-            return consent, pause
+            return consent, pause, redaction_pattern_count
 
     def test_fresh_database_is_unaccepted_and_paused(self):
-        consent, pause = self._with_database()
+        consent, pause, redaction_pattern_count = self._with_database()
         self.assertIsNone(consent.accepted_at)
         self.assertEqual(tuple(consent[1:]), (0, 0, 0, 0, 0))
         self.assertEqual(pause.is_paused, 1)
+        self.assertEqual(redaction_pattern_count, 0)
 
     def test_existing_database_is_paused_pending_reconsent(self):
         def prepare(path: Path) -> None:
@@ -48,7 +51,8 @@ class CaptureConsentMigrationTests(unittest.TestCase):
                 connection.execute("CREATE TABLE capture_state (id INTEGER PRIMARY KEY, is_paused INTEGER, paused_until INTEGER)")
                 connection.execute("INSERT INTO capture_state VALUES (1, 0, NULL)")
 
-        consent, pause = self._with_database(prepare)
+        consent, pause, redaction_pattern_count = self._with_database(prepare)
         self.assertIsNone(consent.accepted_at)
         self.assertEqual(tuple(consent[1:]), (0, 0, 0, 0, 0))
         self.assertEqual(pause.is_paused, 1)
+        self.assertEqual(redaction_pattern_count, 0)

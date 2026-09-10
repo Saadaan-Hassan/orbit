@@ -67,6 +67,8 @@ Status values used in the index:
 
 - `TODO` — not started
 - `IN PROGRESS` — currently being implemented
+- `PARTIAL` — some scoped work exists, but acceptance criteria, required review,
+  or verification remain; it must not be treated as a release approval
 - `BLOCKED` — cannot continue; reason must be in the Completion Log
 - `DONE` — implemented and verified
 - `N/A` — intentionally skipped, with maintainer rationale in the Completion Log
@@ -170,8 +172,8 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | SEC-003 | Agent | DONE | Integrate Tauri token lifecycle and authenticated frontend client | SEC-002 |
 | SEC-004 | Agent | DONE | Add secure extension pairing and restrictive extension CORS | SEC-003 |
 | PRIV-001 | Agent | DONE | Add versioned capture consent and safe database defaults | SEC-003 |
-| PRIV-002 | Agent | TODO | Gate all Rust capture monitors on consent and settings | PRIV-001 |
-| PRIV-003 | Agent | TODO | Sanitize every Rust-captured field before SQLite | PRIV-002 |
+| PRIV-002 | Agent | PARTIAL | Gate all Rust capture monitors on consent and settings | PRIV-001 |
+| PRIV-003 | Agent | PARTIAL | Sanitize every Rust-captured field before SQLite | PRIV-002 |
 | PRIV-004 | Agent | TODO | Sanitize all provider-bound context at the Python boundary | PRIV-003 |
 | PRIV-005 | Agent | TODO | Normalize exclusions and protect local files/credentials | PRIV-004 |
 | PRIV-006 | Agent | TODO | Add privacy, consent, and redaction regression tests | PRIV-005 |
@@ -509,6 +511,14 @@ Acceptance criteria:
 
 ### PRIV-002 — Gate every Rust capture monitor
 
+**Current status: PARTIAL (2026-09-10).** Fail-closed consent work is in progress
+in the Rust capture monitors, but this task is not complete and must not be used
+as public-release approval. Before it can be marked `DONE`, the consent/review UI
+and the regression tests below must be completed. Then the maintainer must review
+the UI on a clean or upgraded local profile, explicitly choose the wanted capture
+categories, and verify that skip, pause, and revocation result in no new captured
+events. Record that verification in the Completion Log.
+
 Implementation requirements:
 
 - Do not begin polling clipboard, Accessibility, Automation, FSEvents or other
@@ -531,6 +541,14 @@ Acceptance criteria:
 
 ### PRIV-003 — Sanitize every Rust field before persistence
 
+**Current status: PARTIAL (2026-09-10).** The functional Rust sanitizer,
+custom-phrase controls, tests, and focused formatting checks are complete. This
+task cannot be marked `DONE` yet because the repository-wide `cargo clippy
+--bin app -- -D warnings` and `cargo fmt --check` checks still fail in
+pre-existing `src/lib.rs` and `src/main.rs`, outside this task's files. Do not
+weaken or suppress those checks; rerun them after their existing findings are
+resolved, then record the result below.
+
 Implementation requirements:
 
 - Extract a shared Rust sanitizer used by clipboard, unified poller, browser URL,
@@ -549,10 +567,10 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] Every Rust SQLite insert path demonstrably invokes the sanitizer.
-- [ ] Secrets displayed in Terminal/editor/normal text fields are redacted.
-- [ ] Window title, URL, file path and screen text tests exist.
-- [ ] Input caps are applied after/before sanitization as appropriate without
+- [x] Every Rust SQLite insert path demonstrably invokes the sanitizer.
+- [x] Secrets displayed in Terminal/editor/normal text fields are redacted.
+- [x] Window title, URL, file path and screen text tests exist.
+- [x] Input caps are applied after/before sanitization as appropriate without
       leaking truncated secret fragments.
 - [ ] Rust formatting, Clippy and tests pass.
 
@@ -1223,6 +1241,8 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-08 | SEC-003 | DONE | Tauri sidecar lifecycle, `app/src/lib/local-api.ts`, all desktop API callers, development-origin configuration, security tests | Rust generates a fresh 32-byte OS-CSPRNG token per app session, passes it only via the sidecar child environment, authenticates readiness, and never kills an unknown port occupant. The single module-memory webview client obtains the token through a main-window Tauri command and attaches it to every desktop API request; no direct local-backend `fetch` remains. It clears on unmount/401; startup emits the existing safe unavailable state on failure. `cargo check --bin app`, token unit test, frontend `pnpm build` (including TypeScript), backend security tests 6/6, and `git diff --check` passed. | SEC-004 must add the distinct paired extension token; no browser extension can use the sidecar yet. A full Rust formatter still reports unrelated pre-existing formatting drift. |
 | 2026-09-08 | SEC-004 | DONE | Pairing routes/table/middleware, extension popup and service worker, desktop Privacy pairing controls, extension permission documentation | Orbit issues five-minute, one-use in-memory pairing codes from its authenticated UI. A Chrome-origin pairing request receives a distinct random capture-only token; only its hash and exact extension ID are stored. Middleware permits that token only on `/capture` from that paired origin, revocation/full wipe invalidates it, and browser auth failures visibly require re-pairing. `uv run python -m unittest discover -s tests -v` passed 7/7; desktop `pnpm build`, extension `pnpm build`, backend compilation, and `git diff --check` passed. | Load the built extension manually in Chrome before public release to validate Chrome-origin behavior and pairing UX on a real profile. |
 | 2026-09-08 | PRIV-001 | DONE | `ADR-002`, consent migration/API, safe database defaults, migration tests, backend dependency lock | Consent version 1 records independent capture choices and defaults all of them off. Fresh and upgraded databases are paused until review; absent rows fail closed. Existing native-browser/file/screen toggles also update their consent category. `greenlet` is now an explicit SQLAlchemy async runtime dependency. Backend tests passed 9/9, including fresh and existing-schema migration coverage; compilation and `git diff --check` passed. | PRIV-002 must enforce this record in every Rust monitor and replace remaining Rust fail-open defaults before any capture can resume. |
+| 2026-09-10 | PRIV-002 | PARTIAL | Rust clipboard, file activity, screen-content, unified-poller, and system-state capture paths | Consent/pause fail-closed changes are present in the working tree; `cargo check --manifest-path app/src-tauri/Cargo.toml --bin app` and `git diff --check` passed during this partial implementation. No acceptance criterion is checked yet. | Remaining agent work: complete consent/review UI and live/restart regression tests. Required maintainer action after that UI exists: test a clean or upgraded profile, explicitly choose categories, and verify skip, pause, and consent revocation write no captured events. Keep this task PARTIAL and the Consent gate blocked until recorded. |
+| 2026-09-10 | PRIV-003 | PARTIAL | `ADR-003`; shared Rust sanitizer; all active/retained Rust event writers; local exact-match pattern table/API/UI; migration test | All active and retained Rust event-insert sources now sanitize their captured strings; URLs strip fragments, redact userinfo and sensitive query values; static patterns cover credentials, keys, headers, JWTs, connection strings, payment/identity data, email/phone, and local custom phrases. `cargo test --bin app` passed 30/30, `cargo check --bin app`, focused `rustfmt --check` for changed capture files, backend tests 9/9, `pnpm build`, and both staged/unstaged `git diff --check` passed. | Keep PARTIAL: repository-wide Clippy fails an existing collapsible-if in `src/lib.rs`, and repository-wide formatter reports existing drift in `src/lib.rs` and `src/main.rs`. Fix and rerun those global checks before marking this task DONE. Consent gate remains blocked by PRIV-002. |
 
 ---
 

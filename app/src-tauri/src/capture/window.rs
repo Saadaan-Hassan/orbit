@@ -1,3 +1,4 @@
+use super::sanitizer::sanitize_text;
 use chrono::Utc;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
@@ -81,10 +82,7 @@ impl WindowCaptureCache {
     }
 }
 
-async fn refresh_window_capture_cache(
-    pool: &SqlitePool,
-    cache: &mut WindowCaptureCache,
-) {
+async fn refresh_window_capture_cache(pool: &SqlitePool, cache: &mut WindowCaptureCache) {
     // Throttle to at most one DB round-trip per 30 seconds.
     if cache.last_refreshed_at.elapsed() < std::time::Duration::from_secs(30) {
         return;
@@ -110,10 +108,9 @@ async fn refresh_window_capture_cache(
     }
 
     // --- Excluded apps ---
-    let exclude_result =
-        sqlx::query_as::<_, (String,)>("SELECT app_name FROM excluded_apps")
-            .fetch_all(pool)
-            .await;
+    let exclude_result = sqlx::query_as::<_, (String,)>("SELECT app_name FROM excluded_apps")
+        .fetch_all(pool)
+        .await;
 
     match exclude_result {
         Ok(rows) => {
@@ -150,7 +147,11 @@ pub async fn start_window_tracker(sqlx_connection_pool: SqlitePool) {
         // if one fires. 1 = active (input within the last 60 s), 0 = idle.
         // On non-macOS this always defaults to 1 (active).
         #[cfg(target_os = "macos")]
-        let is_user_active: i64 = if seconds_since_last_user_input() < 60.0 { 1 } else { 0 };
+        let is_user_active: i64 = if seconds_since_last_user_input() < 60.0 {
+            1
+        } else {
+            0
+        };
         #[cfg(not(target_os = "macos"))]
         let is_user_active: i64 = 1;
 
@@ -187,8 +188,8 @@ pub async fn start_window_tracker(sqlx_connection_pool: SqlitePool) {
                 )
                 .bind(&new_event_id)
                 .bind(event_timestamp_milliseconds)
-                .bind(&effective_window_title)
-                .bind(&active_app_name)
+                .bind(sanitize_text(&effective_window_title))
+                .bind(sanitize_text(&active_app_name))
                 .bind(is_user_active)
                 .execute(&sqlx_connection_pool)
                 .await;
@@ -243,9 +244,7 @@ async fn run_osascript_async(applescript_expression: &str) -> Option<String> {
 
     match command_output {
         Ok(output) if output.status.success() => {
-            let trimmed_output = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .to_string();
+            let trimmed_output = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
             if trimmed_output.is_empty() {
                 None

@@ -1,3 +1,4 @@
+use super::sanitizer::{sanitize_text, sanitize_url};
 use chrono::Utc;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
@@ -90,10 +91,7 @@ impl BrowserUrlCaptureCache {
     }
 }
 
-async fn refresh_browser_url_capture_cache(
-    pool: &SqlitePool,
-    cache: &mut BrowserUrlCaptureCache,
-) {
+async fn refresh_browser_url_capture_cache(pool: &SqlitePool, cache: &mut BrowserUrlCaptureCache) {
     if cache.last_refreshed_at.elapsed() < std::time::Duration::from_secs(30) {
         return;
     }
@@ -117,10 +115,9 @@ async fn refresh_browser_url_capture_cache(
     }
 
     // --- Excluded domains ---
-    let domain_result =
-        sqlx::query_as::<_, (String,)>("SELECT domain FROM excluded_domains")
-            .fetch_all(pool)
-            .await;
+    let domain_result = sqlx::query_as::<_, (String,)>("SELECT domain FROM excluded_domains")
+        .fetch_all(pool)
+        .await;
 
     match domain_result {
         Ok(rows) => {
@@ -273,9 +270,9 @@ pub async fn start_native_browser_url_monitor(sqlx_connection_pool: SqlitePool) 
         )
         .bind(&new_event_id)
         .bind(event_timestamp_milliseconds)
-        .bind(&captured_title)
-        .bind(browser_name)
-        .bind(&captured_url)
+        .bind(sanitize_text(&captured_title))
+        .bind(sanitize_text(browser_name))
+        .bind(sanitize_url(&captured_url))
         .execute(&sqlx_connection_pool)
         .await;
 
@@ -339,9 +336,7 @@ async fn get_frontmost_app_name() -> Option<String> {
 ///
 /// Uses tokio::process::Command so the osascript subprocess is spawned
 /// without blocking a tokio worker thread during the OS round-trip.
-async fn run_osascript_capturing_output(
-    applescript_expression: &str,
-) -> (Option<String>, String) {
+async fn run_osascript_capturing_output(applescript_expression: &str) -> (Option<String>, String) {
     let command_result = TokioCommand::new("osascript")
         .arg("-e")
         .arg(applescript_expression)
@@ -353,9 +348,7 @@ async fn run_osascript_capturing_output(
             let stderr_text = String::from_utf8_lossy(&output.stderr).to_string();
 
             if output.status.success() {
-                let stdout_text = String::from_utf8_lossy(&output.stdout)
-                    .trim()
-                    .to_string();
+                let stdout_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 let trimmed_stdout = if stdout_text.is_empty() {
                     None
                 } else {
@@ -383,8 +376,7 @@ async fn run_osascript_capturing_output(
 /// send Apple Events to another app that the user has not yet allowed in
 /// System Settings → Privacy & Security → Automation.
 fn is_automation_permission_error(stderr_output: &str) -> bool {
-    stderr_output.contains("Not authorized to send Apple events")
-        || stderr_output.contains("-1743")
+    stderr_output.contains("Not authorized to send Apple events") || stderr_output.contains("-1743")
 }
 
 // ---------------------------------------------------------------------------

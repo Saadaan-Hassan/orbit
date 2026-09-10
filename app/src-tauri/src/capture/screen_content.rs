@@ -1,3 +1,4 @@
+use super::sanitizer::RedactionPatternCache;
 use chrono::Utc;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
@@ -25,16 +26,18 @@ struct ScreenContentCaptureCache {
     is_paused: bool,
     paused_until_ms: Option<i64>,
     excluded_app_names: HashSet<String>,
+    redaction_pattern_cache: RedactionPatternCache,
     last_refreshed_at: Instant,
 }
 
 impl ScreenContentCaptureCache {
     fn new() -> Self {
         Self {
-            is_enabled: true,
-            is_paused: false,
+            is_enabled: false,
+            is_paused: true,
             paused_until_ms: None,
             excluded_app_names: HashSet::new(),
+            redaction_pattern_cache: RedactionPatternCache::new(),
             // Far in the past so the very first iteration always refreshes.
             last_refreshed_at: Instant::now()
                 .checked_sub(std::time::Duration::from_secs(60))
@@ -53,24 +56,20 @@ impl ScreenContentCaptureCache {
     }
 }
 
-async fn refresh_screen_content_cache(
-    pool: &SqlitePool,
-    cache: &mut ScreenContentCaptureCache,
-) {
+async fn refresh_screen_content_cache(pool: &SqlitePool, cache: &mut ScreenContentCaptureCache) {
     if cache.last_refreshed_at.elapsed() < std::time::Duration::from_secs(30) {
         return;
     }
 
     // Screen content enabled toggle. Defaults to true if the table hasn't been
     // seeded yet (FastAPI may still be starting).
-    let enabled_result = sqlx::query_as::<_, (i64,)>(
-        "SELECT enabled FROM screen_content_settings WHERE id = 1",
-    )
-    .fetch_optional(pool)
-    .await;
+    let enabled_result =
+        sqlx::query_as::<_, (i64,)>("SELECT enabled FROM screen_content_settings WHERE id = 1")
+            .fetch_optional(pool)
+            .await;
     cache.is_enabled = match enabled_result {
         Ok(Some((v,))) => v != 0,
-        _ => true,
+        _ => false,
     };
 
     // Global pause state.
@@ -85,20 +84,28 @@ async fn refresh_screen_content_cache(
             cache.paused_until_ms = until;
         }
         _ => {
-            cache.is_paused = false;
+            cache.is_paused = true;
             cache.paused_until_ms = None;
         }
     }
 
+    let consent_result = sqlx::query_as::<_, (i64,)>("SELECT COALESCE(accepted_at IS NOT NULL AND screen_content = 1, 0) FROM capture_consent WHERE id = 1")
+        .fetch_optional(pool)
+        .await;
+    if !matches!(consent_result, Ok(Some((1,)))) {
+        cache.is_enabled = false;
+    }
+
     // Excluded apps list.
-    let apps_result =
-        sqlx::query_as::<_, (String,)>("SELECT app_name FROM excluded_apps")
-            .fetch_all(pool)
-            .await;
+    let apps_result = sqlx::query_as::<_, (String,)>("SELECT app_name FROM excluded_apps")
+        .fetch_all(pool)
+        .await;
     cache.excluded_app_names = match apps_result {
         Ok(rows) => rows.into_iter().map(|(n,)| n).collect(),
         Err(_) => HashSet::new(),
     };
+
+    cache.redaction_pattern_cache.refresh_if_stale(pool).await;
 
     cache.last_refreshed_at = Instant::now();
 }
@@ -109,7 +116,7 @@ async fn refresh_screen_content_cache(
 
 #[cfg(target_os = "macos")]
 mod ax {
-    use std::ffi::{CStr, CString, c_void};
+    use std::ffi::{c_void, CStr, CString};
 
     // AX return codes.
     pub const AX_OK: i32 = 0;
@@ -297,12 +304,7 @@ mod ax {
 
     /// Recursively collects visible text from an element and its children.
     /// Stops at MAX_TRAVERSAL_DEPTH / MAX_TRAVERSAL_ELEMENTS to bound latency.
-    unsafe fn collect_text(
-        element: RawRef,
-        depth: usize,
-        out: &mut String,
-        visited: &mut usize,
-    ) {
+    unsafe fn collect_text(element: RawRef, depth: usize, out: &mut String, visited: &mut usize) {
         if *visited >= super::MAX_TRAVERSAL_ELEMENTS || depth > super::MAX_TRAVERSAL_DEPTH {
             return;
         }
@@ -316,12 +318,9 @@ mod ax {
         }
 
         // Text-bearing elements: prefer AXValue, fall back to AXTitle.
-        let text = if role == ROLE_STATIC_TEXT
-            || role == ROLE_TEXT_AREA
-            || role == ROLE_TEXT_FIELD
+        let text = if role == ROLE_STATIC_TEXT || role == ROLE_TEXT_AREA || role == ROLE_TEXT_FIELD
         {
-            get_string_attr(element, ATTR_VALUE)
-                .or_else(|| get_string_attr(element, ATTR_TITLE))
+            get_string_attr(element, ATTR_VALUE).or_else(|| get_string_attr(element, ATTR_TITLE))
         } else {
             // Other elements (buttons, groups, etc.): only AXTitle is useful.
             get_string_attr(element, ATTR_TITLE)
@@ -398,8 +397,7 @@ mod ax {
             Some(v) => v,
             None => return CaptureOutcome::Success(None),
         };
-        let app_name = get_string_attr(focused_app.as_raw(), ATTR_TITLE)
-            .unwrap_or_default();
+        let app_name = get_string_attr(focused_app.as_raw(), ATTR_TITLE).unwrap_or_default();
 
         // Step 4: excluded-app check.
         if !app_name.is_empty() && excluded_app_names.contains(&app_name) {
@@ -434,8 +432,7 @@ mod ax {
         };
 
         // Step 6: SECURITY — skip secure text fields unconditionally.
-        let focused_role = get_string_attr(focused_element.as_raw(), ATTR_ROLE)
-            .unwrap_or_default();
+        let focused_role = get_string_attr(focused_element.as_raw(), ATTR_ROLE).unwrap_or_default();
         if focused_role == ROLE_SECURE_TEXT_FIELD {
             return CaptureOutcome::Success(None);
         }
@@ -498,10 +495,9 @@ pub async fn start_screen_content_monitor(sqlx_connection_pool: SqlitePool) {
 
         // Run blocking AX calls on a dedicated thread.
         #[cfg(target_os = "macos")]
-        let blocking_result = tokio::task::spawn_blocking(move || {
-            ax::capture_screen_content_sync(&excluded_apps)
-        })
-        .await;
+        let blocking_result =
+            tokio::task::spawn_blocking(move || ax::capture_screen_content_sync(&excluded_apps))
+                .await;
 
         // Non-macOS: no-op — AX APIs are macOS-only.
         #[cfg(not(target_os = "macos"))]
@@ -558,16 +554,26 @@ pub async fn start_screen_content_monitor(sqlx_connection_pool: SqlitePool) {
             )
             .bind(&event_id)
             .bind(timestamp_ms)
-            .bind(&capture.window_title) // raw_content = window title
-            .bind(&capture.app_name)
-            .bind(&capture.screen_text)
+            .bind(
+                cache
+                    .redaction_pattern_cache
+                    .sanitize_text(&capture.window_title),
+            )
+            .bind(
+                cache
+                    .redaction_pattern_cache
+                    .sanitize_text(&capture.app_name),
+            )
+            .bind(
+                cache
+                    .redaction_pattern_cache
+                    .sanitize_text(&capture.screen_text),
+            )
             .execute(&sqlx_connection_pool)
             .await;
 
             if let Err(db_error) = insert_result {
-                eprintln!(
-                    "Screen content monitor: failed to write event to SQLite: {db_error}"
-                );
+                eprintln!("Screen content monitor: failed to write event to SQLite: {db_error}");
             }
         }
     }

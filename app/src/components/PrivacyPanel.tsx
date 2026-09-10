@@ -452,7 +452,109 @@ function ExcludedWebsitesSection({
   );
 }
 
-// ─── Section 4 — Browser Tracking ────────────────────────────────────────────
+// ─── Section 4 — Custom Redaction Phrases ────────────────────────────────────
+interface RedactionPattern {
+  id: string;
+  pattern: string;
+}
+
+interface RedactionPatternsSectionProps {
+  patterns: RedactionPattern[];
+  onAdd: (pattern: string) => Promise<void>;
+  onRemove: (patternId: string) => Promise<void>;
+}
+
+function RedactionPatternsSection({
+  patterns,
+  onAdd,
+  onRemove,
+}: RedactionPatternsSectionProps) {
+  const [inputValue, setInputValue] = useState("");
+  const [isAdding, setIsAdding] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function handleAddPattern(): Promise<void> {
+    const pattern = inputValue.trim();
+    if (!pattern) return;
+
+    setIsAdding(true);
+    setActionError(null);
+    try {
+      await onAdd(pattern);
+      setInputValue("");
+    } catch {
+      setActionError("Could not save redaction phrase.");
+    } finally {
+      setIsAdding(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <SectionHeading>Custom Redaction Phrases</SectionHeading>
+      <p className="text-xs text-zinc-400 dark:text-zinc-500 font-light leading-relaxed mb-1">
+        Add an exact phrase that Orbit should replace before it writes captured
+        text, titles, URLs, or file paths to local memory. These phrases are
+        stored locally so they can be matched; do not use this as a secret vault.
+      </p>
+
+      <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto mb-2">
+        {patterns.length === 0 && (
+          <p className="text-xs text-zinc-400 dark:text-zinc-500 italic py-2 px-1">
+            No custom redaction phrases.
+          </p>
+        )}
+        {patterns.map((item) => (
+          <div
+            key={item.id}
+            className="flex items-center justify-between px-3.5 py-2 bg-zinc-50/50 dark:bg-zinc-900/10 rounded-xl"
+          >
+            <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 truncate">
+              {item.pattern}
+            </span>
+            <button
+              onClick={() => onRemove(item.id)}
+              aria-label="Remove redaction phrase"
+              className="ml-2 flex-shrink-0 text-zinc-400 hover:text-red-500 transition-colors p-1 hover:bg-red-500/10 rounded-lg cursor-pointer"
+            >
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={inputValue}
+          onChange={(event) => setInputValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void handleAddPattern();
+          }}
+          maxLength={256}
+          placeholder="Exact phrase to redact"
+          className="flex-1 text-xs bg-zinc-100 dark:bg-zinc-900 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-zinc-400/20 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 border-0"
+        />
+        <button
+          onClick={() => void handleAddPattern()}
+          disabled={!inputValue.trim() || isAdding}
+          className="px-3.5 py-2 text-xs font-semibold rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer whitespace-nowrap"
+        >
+          Redact
+        </button>
+      </div>
+
+      {actionError && (
+        <p className="text-xs text-red-500 font-medium px-1 mt-1">{actionError}</p>
+      )}
+    </div>
+  );
+}
+
+// ─── Section 5 — Browser Tracking ────────────────────────────────────────────
 interface BrowserTrackingSectionProps {
   enabled: boolean;
   onToggle: (enabled: boolean) => Promise<void>;
@@ -785,6 +887,7 @@ export function PrivacyPanel() {
     pausedUntil,
     excludedApps,
     excludedDomains,
+    redactionPatterns,
     nativeBrowserEnabled,
     fileWatchEnabled,
     screenContentEnabled,
@@ -796,6 +899,8 @@ export function PrivacyPanel() {
     removeExcludedApp,
     addExcludedDomain,
     removeExcludedDomain,
+    addRedactionPattern,
+    removeRedactionPattern,
     setNativeBrowserEnabled,
     setFileWatchEnabled,
     setScreenContentEnabled,
@@ -852,6 +957,14 @@ export function PrivacyPanel() {
         excludedDomains={excludedDomains}
         onAdd={addExcludedDomain}
         onRemove={removeExcludedDomain}
+      />
+
+      <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
+
+      <RedactionPatternsSection
+        patterns={redactionPatterns}
+        onAdd={addRedactionPattern}
+        onRemove={removeRedactionPattern}
       />
 
       <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />

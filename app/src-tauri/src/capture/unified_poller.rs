@@ -13,6 +13,7 @@
 // The three replaced modules (window.rs, browser_url.rs, app_lifecycle.rs)
 // are kept on disk for reference but removed from capture/mod.rs.
 
+use super::sanitizer::RedactionPatternCache;
 use chrono::Utc;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
@@ -98,19 +99,25 @@ struct UnifiedPollCache {
     excluded_app_names: HashSet<String>,
     excluded_domains: HashSet<String>,
     native_browser_enabled: bool,
+    app_window_consent: bool,
+    browser_consent: bool,
+    redaction_pattern_cache: RedactionPatternCache,
     last_refreshed_at: Instant,
 }
 
 impl UnifiedPollCache {
     fn new() -> Self {
         Self {
-            is_paused: false,
+            is_paused: true,
             paused_until_ms: None,
             excluded_app_names: HashSet::new(),
             excluded_domains: HashSet::new(),
             // Default true so browser capture works from the very first tick,
             // before FastAPI has seeded the browser_capture_settings row.
-            native_browser_enabled: true,
+            native_browser_enabled: false,
+            app_window_consent: false,
+            browser_consent: false,
+            redaction_pattern_cache: RedactionPatternCache::new(),
             // Far in the past so the first iteration always refreshes.
             last_refreshed_at: Instant::now()
                 .checked_sub(std::time::Duration::from_secs(60))
@@ -155,7 +162,7 @@ async fn refresh_unified_poll_cache(pool: &SqlitePool, cache: &mut UnifiedPollCa
             cache.paused_until_ms = paused_until_value;
         }
         Ok(None) | Err(_) => {
-            cache.is_paused = false;
+            cache.is_paused = true;
             cache.paused_until_ms = None;
         }
     }
@@ -197,9 +204,27 @@ async fn refresh_unified_poll_cache(pool: &SqlitePool, cache: &mut UnifiedPollCa
             cache.native_browser_enabled = native_enabled_value != 0;
         }
         Ok(None) | Err(_) => {
-            cache.native_browser_enabled = true;
+            cache.native_browser_enabled = false;
         }
     }
+
+    match sqlx::query_as::<_, (i64, i64)>(
+        "SELECT COALESCE(accepted_at IS NOT NULL AND app_window = 1, 0), COALESCE(accepted_at IS NOT NULL AND browser = 1, 0) FROM capture_consent WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some((app_window, browser))) => {
+            cache.app_window_consent = app_window != 0;
+            cache.browser_consent = browser != 0;
+        }
+        _ => {
+            cache.app_window_consent = false;
+            cache.browser_consent = false;
+        }
+    }
+
+    cache.redaction_pattern_cache.refresh_if_stale(pool).await;
 
     cache.last_refreshed_at = Instant::now();
 }
@@ -377,7 +402,9 @@ pub async fn start_unified_poller(pool: SqlitePool) {
 
         refresh_unified_poll_cache(&pool, &mut cache).await;
 
-        if cache.capture_is_paused_right_now() {
+        if cache.capture_is_paused_right_now()
+            || (!cache.app_window_consent && !cache.browser_consent)
+        {
             continue;
         }
 
@@ -388,19 +415,32 @@ pub async fn start_unified_poller(pool: SqlitePool) {
         // 1 = user interacted with keyboard or mouse within the last 60 s.
         // 0 = idle. Non-macOS always reports active.
         #[cfg(target_os = "macos")]
-        let is_user_active: i64 = if seconds_since_last_user_input() < 60.0 { 1 } else { 0 };
+        let is_user_active: i64 = if seconds_since_last_user_input() < 60.0 {
+            1
+        } else {
+            0
+        };
         #[cfg(not(target_os = "macos"))]
         let is_user_active: i64 = 1;
 
         // ── Window event ─────────────────────────────────────────────────
-        if let (Some(app_name), Some(window_title)) = (&poll.app_name, &poll.window_title) {
-            let is_not_excluded = !cache.app_is_excluded(app_name);
-            let title_is_not_empty = !window_title.is_empty();
-            let title_has_changed = *window_title != last_window_title;
+        if cache.app_window_consent {
+            if let (Some(app_name), Some(window_title)) = (&poll.app_name, &poll.window_title) {
+                let is_not_excluded = !cache.app_is_excluded(app_name);
+                let title_is_not_empty = !window_title.is_empty();
+                let title_has_changed = *window_title != last_window_title;
 
-            if is_not_excluded && title_is_not_empty && title_has_changed {
-                write_window_event(&pool, app_name, window_title, is_user_active).await;
-                last_window_title = window_title.clone();
+                if is_not_excluded && title_is_not_empty && title_has_changed {
+                    write_window_event(
+                        &pool,
+                        app_name,
+                        window_title,
+                        is_user_active,
+                        &cache.redaction_pattern_cache,
+                    )
+                    .await;
+                    last_window_title = window_title.clone();
+                }
             }
         }
 
@@ -419,27 +459,25 @@ pub async fn start_unified_poller(pool: SqlitePool) {
                 BROWSER_AUTOMATION_DENIED.store(false, Ordering::Relaxed);
             }
 
-            if cache.native_browser_enabled && !is_internal_browser_url(browser_url) {
+            if cache.browser_consent
+                && cache.native_browser_enabled
+                && !is_internal_browser_url(browser_url)
+            {
                 // Advance the dedup cursor even for excluded domains, so that
                 // navigating from an excluded page to an allowed one is captured.
                 if *browser_url != last_browser_url {
                     let hostname = extract_hostname(browser_url);
                     if hostname.is_empty() || !cache.domain_is_excluded(&hostname) {
-                        let browser_title = poll
-                            .browser_title
-                            .as_deref()
-                            .unwrap_or("");
+                        let browser_title = poll.browser_title.as_deref().unwrap_or("");
                         // The app_name from the poll is the browser name when a
                         // browser URL was returned (the browser is frontmost).
-                        let browser_app_name = poll
-                            .app_name
-                            .as_deref()
-                            .unwrap_or("Chrome");
+                        let browser_app_name = poll.app_name.as_deref().unwrap_or("Chrome");
                         write_browser_url_event(
                             &pool,
                             browser_url,
                             browser_title,
                             browser_app_name,
+                            &cache.redaction_pattern_cache,
                         )
                         .await;
                     }
@@ -449,7 +487,7 @@ pub async fn start_unified_poller(pool: SqlitePool) {
         }
 
         // ── App lifecycle events ─────────────────────────────────────────
-        if !poll.running_app_names.is_empty() {
+        if cache.app_window_consent && !poll.running_app_names.is_empty() {
             let current_running: HashSet<String> = poll
                 .running_app_names
                 .into_iter()
@@ -457,11 +495,23 @@ pub async fn start_unified_poller(pool: SqlitePool) {
                 .collect();
 
             for launched_app_name in current_running.difference(&previous_running_app_names) {
-                write_app_lifecycle_event(&pool, launched_app_name, "launched").await;
+                write_app_lifecycle_event(
+                    &pool,
+                    launched_app_name,
+                    "launched",
+                    &cache.redaction_pattern_cache,
+                )
+                .await;
             }
 
             for quit_app_name in previous_running_app_names.difference(&current_running) {
-                write_app_lifecycle_event(&pool, quit_app_name, "quit").await;
+                write_app_lifecycle_event(
+                    &pool,
+                    quit_app_name,
+                    "quit",
+                    &cache.redaction_pattern_cache,
+                )
+                .await;
             }
 
             previous_running_app_names = current_running;
@@ -482,7 +532,7 @@ fn is_noise_app_name(name: &str) -> bool {
         || name == "missing value"
         || name.starts_with("com.apple.")
         || name.contains("WebKit")
-        || name.contains("Helper")    // e.g. "Google Chrome Helper", "Claude Helper"
+        || name.contains("Helper") // e.g. "Google Chrome Helper", "Claude Helper"
 }
 
 // ---------------------------------------------------------------------------
@@ -494,6 +544,7 @@ async fn write_window_event(
     app_name: &str,
     window_title: &str,
     is_user_active: i64,
+    redaction_pattern_cache: &RedactionPatternCache,
 ) {
     let event_id = Uuid::new_v4().to_string();
     let timestamp_ms = Utc::now().timestamp_millis();
@@ -505,8 +556,8 @@ async fn write_window_event(
     )
     .bind(&event_id)
     .bind(timestamp_ms)
-    .bind(window_title)
-    .bind(app_name)
+    .bind(redaction_pattern_cache.sanitize_text(window_title))
+    .bind(redaction_pattern_cache.sanitize_text(app_name))
     .bind(is_user_active)
     .execute(pool)
     .await
@@ -520,6 +571,7 @@ async fn write_browser_url_event(
     url: &str,
     page_title: &str,
     browser_app_name: &str,
+    redaction_pattern_cache: &RedactionPatternCache,
 ) {
     let event_id = Uuid::new_v4().to_string();
     let timestamp_ms = Utc::now().timestamp_millis();
@@ -531,9 +583,9 @@ async fn write_browser_url_event(
     )
     .bind(&event_id)
     .bind(timestamp_ms)
-    .bind(page_title)
-    .bind(browser_app_name)
-    .bind(url)
+    .bind(redaction_pattern_cache.sanitize_text(page_title))
+    .bind(redaction_pattern_cache.sanitize_text(browser_app_name))
+    .bind(redaction_pattern_cache.sanitize_url(url))
     .execute(pool)
     .await
     {
@@ -541,7 +593,12 @@ async fn write_browser_url_event(
     }
 }
 
-async fn write_app_lifecycle_event(pool: &SqlitePool, app_name: &str, action: &str) {
+async fn write_app_lifecycle_event(
+    pool: &SqlitePool,
+    app_name: &str,
+    action: &str,
+    redaction_pattern_cache: &RedactionPatternCache,
+) {
     let event_id = Uuid::new_v4().to_string();
     let timestamp_ms = Utc::now().timestamp_millis();
     // action is always "launched" or "quit" — safe for inline JSON.
@@ -554,8 +611,8 @@ async fn write_app_lifecycle_event(pool: &SqlitePool, app_name: &str, action: &s
     )
     .bind(&event_id)
     .bind(timestamp_ms)
-    .bind(app_name)
-    .bind(app_name)
+    .bind(redaction_pattern_cache.sanitize_text(app_name))
+    .bind(redaction_pattern_cache.sanitize_text(app_name))
     .bind(&metadata_json)
     .execute(pool)
     .await
