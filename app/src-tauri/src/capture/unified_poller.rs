@@ -13,6 +13,9 @@
 // The three replaced modules (window.rs, browser_url.rs, app_lifecycle.rs)
 // are kept on disk for reference but removed from capture/mod.rs.
 
+use super::exclusion::{
+    domain_is_excluded as exclusion_domain_is_excluded, normalize_app_name, normalize_hostname,
+};
 use super::sanitizer::RedactionPatternCache;
 use chrono::Utc;
 use sqlx::SqlitePool;
@@ -136,11 +139,12 @@ impl UnifiedPollCache {
     }
 
     fn app_is_excluded(&self, app_name: &str) -> bool {
-        self.excluded_app_names.contains(app_name)
+        self.excluded_app_names
+            .contains(&normalize_app_name(app_name))
     }
 
-    fn domain_is_excluded(&self, hostname: &str) -> bool {
-        self.excluded_domains.contains(hostname)
+    fn domain_is_excluded(&self, hostname_or_url: &str) -> bool {
+        exclusion_domain_is_excluded(hostname_or_url, &self.excluded_domains)
     }
 }
 
@@ -174,7 +178,11 @@ async fn refresh_unified_poll_cache(pool: &SqlitePool, cache: &mut UnifiedPollCa
         .await
     {
         Ok(rows) => {
-            cache.excluded_app_names = rows.into_iter().map(|(name,)| name).collect();
+            cache.excluded_app_names = rows
+                .into_iter()
+                .map(|(name,)| normalize_app_name(&name))
+                .filter(|name| !name.is_empty())
+                .collect();
         }
         Err(_) => {
             cache.excluded_app_names = HashSet::new();
@@ -187,7 +195,10 @@ async fn refresh_unified_poll_cache(pool: &SqlitePool, cache: &mut UnifiedPollCa
         .await
     {
         Ok(rows) => {
-            cache.excluded_domains = rows.into_iter().map(|(domain,)| domain).collect();
+            cache.excluded_domains = rows
+                .into_iter()
+                .filter_map(|(domain,)| normalize_hostname(&domain))
+                .collect();
         }
         Err(_) => {
             cache.excluded_domains = HashSet::new();
@@ -467,12 +478,13 @@ pub async fn start_unified_poller(pool: SqlitePool) {
                 // Advance the dedup cursor even for excluded domains, so that
                 // navigating from an excluded page to an allowed one is captured.
                 if *browser_url != last_browser_url {
-                    let hostname = extract_hostname(browser_url);
-                    if hostname.is_empty() || !cache.domain_is_excluded(&hostname) {
-                        let browser_title = poll.browser_title.as_deref().unwrap_or("");
-                        // The app_name from the poll is the browser name when a
-                        // browser URL was returned (the browser is frontmost).
-                        let browser_app_name = poll.app_name.as_deref().unwrap_or("Chrome");
+                    let browser_title = poll.browser_title.as_deref().unwrap_or("");
+                    // The app_name from the poll is the browser name when a
+                    // browser URL was returned (the browser is frontmost).
+                    let browser_app_name = poll.app_name.as_deref().unwrap_or("Chrome");
+                    if !cache.domain_is_excluded(browser_url)
+                        && !cache.app_is_excluded(browser_app_name)
+                    {
                         write_browser_url_event(
                             &pool,
                             browser_url,
@@ -489,10 +501,13 @@ pub async fn start_unified_poller(pool: SqlitePool) {
 
         // ── App lifecycle events ─────────────────────────────────────────
         if cache.app_window_consent && !poll.running_app_names.is_empty() {
+            // A password manager that was running before exclusions loaded
+            // must not later produce a spurious "quit" event.
+            previous_running_app_names.retain(|name| !cache.app_is_excluded(name));
             let current_running: HashSet<String> = poll
                 .running_app_names
                 .into_iter()
-                .filter(|name| !is_noise_app_name(name))
+                .filter(|name| !is_noise_app_name(name) && !cache.app_is_excluded(name))
                 .collect();
 
             for launched_app_name in current_running.difference(&previous_running_app_names) {
@@ -633,21 +648,6 @@ fn is_internal_browser_url(url: &str) -> bool {
     INTERNAL_URL_SCHEME_PREFIXES
         .iter()
         .any(|prefix| url.starts_with(prefix))
-}
-
-/// Extracts the bare hostname from a URL string.
-///
-/// Handles `https://hostname/path?query` without pulling in the `url` crate.
-/// Returns an empty string for anything that does not contain `://`.
-fn extract_hostname(url: &str) -> String {
-    let after_scheme = match url.find("://") {
-        Some(offset) => &url[offset + 3..],
-        None => return String::new(),
-    };
-    let hostname_length = after_scheme
-        .find(|c: char| c == '/' || c == '?' || c == '#' || c == ':')
-        .unwrap_or(after_scheme.len());
-    after_scheme[..hostname_length].to_lowercase()
 }
 
 // ---------------------------------------------------------------------------

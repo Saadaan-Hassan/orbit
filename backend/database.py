@@ -1,15 +1,32 @@
 import os
 import re
 import uuid
+import json
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+from pathlib import Path
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import text
 from typing import AsyncGenerator
 
+from services.exclusion_policy import (
+    DEFAULT_EXCLUDED_APPS,
+    DEFAULT_EXCLUDED_DOMAINS,
+    normalize_app_name,
+    normalize_domain,
+    normalize_folder_path,
+)
+from services.local_storage_security import repair_orbit_storage
+
 load_dotenv()
 
-_database_path = os.getenv("ORBIT_DB_PATH", "orbit.db")
+_database_path = os.getenv(
+    "ORBIT_DB_PATH", str(Path.home() / ".orbit" / "orbit.db")
+)
+_qdrant_storage_path = os.getenv(
+    "QDRANT_STORAGE_PATH", str(Path(_database_path).expanduser().parent / "qdrant_storage")
+)
+repair_orbit_storage(_database_path, _qdrant_storage_path)
 _database_url = f"sqlite+aiosqlite:///{_database_path}"
 
 _async_engine = create_async_engine(_database_url, echo=False)
@@ -362,7 +379,8 @@ async def create_all_tables() -> None:
             VALUES (1, 1)
         """))
 
-        # Generic key/value store for user-configurable settings (e.g. BYOK keys).
+        # Generic key/value store for non-secret user settings. Provider
+        # credentials live in the macOS Keychain, never in SQLite.
         await connection.execute(text("""
             CREATE TABLE IF NOT EXISTS app_settings (
                 key   TEXT PRIMARY KEY,
@@ -370,30 +388,101 @@ async def create_all_tables() -> None:
             )
         """))
 
-        # Pre-create known setting rows so reads never need to INSERT.
-        await connection.execute(text("""
-            INSERT OR IGNORE INTO app_settings (key, value)
-            VALUES ('groq_api_key', '')
-        """))
+    # Normalize old entries before seeding. The canonical SQLite values are
+    # consumed by both FastAPI/extension capture and Rust native capture.
+    await _normalize_exclusion_settings()
+    await _normalize_file_watch_settings()
 
     # Seed default lists outside the schema transaction so INSERT OR IGNORE
     # checks work against a fully committed table state.
     await _seed_default_excluded_apps()
     await _seed_default_excluded_domains()
     await _seed_default_file_watch_settings()
+    repair_orbit_storage(_database_path, _qdrant_storage_path)
 
 
-_DEFAULT_EXCLUDED_APPS: list[str] = [
-    "Orbit",              # suppress screen_content noise from Orbit's own UI
-    "1Password",
-    "Bitwarden",
-    "Keychain Access",
-    "LastPass",
-    "Dashlane",
-    "System Preferences",
-    "System Settings",
-]
+async def _normalize_exclusion_settings() -> None:
+    """Repairs old raw exclusions into the canonical values shared at runtime."""
+    async with _async_engine.begin() as connection:
+        app_result = await connection.execute(
+            text("SELECT app_name FROM excluded_apps")
+        )
+        app_rows = app_result.fetchall()
+        normalized_apps = {
+            normalized
+            for row in app_rows
+            if (normalized := normalize_app_name(row.app_name))
+        }
+        domain_result = await connection.execute(
+            text("SELECT domain FROM excluded_domains")
+        )
+        domain_rows = domain_result.fetchall()
+        normalized_domains = {
+            normalized
+            for row in domain_rows
+            if (normalized := normalize_domain(row.domain))
+        }
 
+        # Exclusion row IDs are not referenced by other tables. Replacing the
+        # set transactionally handles collisions such as `WWW.Example.com.`
+        # and `example.com` without an intermediate UNIQUE conflict.
+        added_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        if (
+            len(app_rows) != len(normalized_apps)
+            or {row.app_name for row in app_rows} != normalized_apps
+        ):
+            await connection.execute(text("DELETE FROM excluded_apps"))
+            for app_name in sorted(normalized_apps):
+                await connection.execute(
+                    text(
+                        "INSERT INTO excluded_apps (id, app_name, added_at) VALUES (:id, :name, :added_at)"
+                    ),
+                    {"id": str(uuid.uuid4()), "name": app_name, "added_at": added_at_ms},
+                )
+
+        if (
+            len(domain_rows) != len(normalized_domains)
+            or {row.domain for row in domain_rows} != normalized_domains
+        ):
+            await connection.execute(text("DELETE FROM excluded_domains"))
+            for domain in sorted(normalized_domains):
+                await connection.execute(
+                    text(
+                        "INSERT INTO excluded_domains (id, domain, added_at) VALUES (:id, :domain, :added_at)"
+                    ),
+                    {"id": str(uuid.uuid4()), "domain": domain, "added_at": added_at_ms},
+                )
+
+
+async def _normalize_file_watch_settings() -> None:
+    """Repairs old watched-folder values to canonical absolute paths."""
+    async with _async_engine.begin() as connection:
+        result = await connection.execute(
+            text("SELECT watched_folders FROM file_watch_settings WHERE id = 1")
+        )
+        row = result.fetchone()
+        if row is None:
+            return
+        try:
+            raw_folders = json.loads(row.watched_folders) if row.watched_folders else []
+        except (TypeError, ValueError):
+            raw_folders = []
+        normalized_folders = list(
+            dict.fromkeys(
+                normalized
+                for folder in raw_folders
+                if isinstance(folder, str)
+                and (normalized := normalize_folder_path(folder)) is not None
+            )
+        )
+        serialized_folders = json.dumps(normalized_folders)
+        if serialized_folders != (row.watched_folders or "[]"):
+            await connection.execute(
+                text(
+                    "UPDATE file_watch_settings SET watched_folders = :folders WHERE id = 1"
+                ),
+                {"folders": serialized_folders},
+            )
 
 async def _seed_default_excluded_apps() -> None:
     # Only seeds when the table is completely empty — i.e. first run.
@@ -407,7 +496,8 @@ async def _seed_default_excluded_apps() -> None:
             return  # Already seeded — nothing to do.
 
         added_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        for app_name in _DEFAULT_EXCLUDED_APPS:
+        for app_name in DEFAULT_EXCLUDED_APPS:
+            normalized_app_name = normalize_app_name(app_name)
             await connection.execute(
                 text(
                     """
@@ -417,19 +507,10 @@ async def _seed_default_excluded_apps() -> None:
                 ),
                 {
                     "id": str(uuid.uuid4()),
-                    "app_name": app_name,
+                    "app_name": normalized_app_name,
                     "added_at": added_at_ms,
                 },
             )
-
-
-# Login and webmail pages are good default examples — they contain personal
-# credentials / private communication and users almost never want them in memory.
-# Kept minimal so users' own lists aren't drowned out at first glance.
-_DEFAULT_EXCLUDED_DOMAINS: list[str] = [
-    "mail.google.com",
-    "accounts.google.com",
-]
 
 
 async def _seed_default_excluded_domains() -> None:
@@ -443,7 +524,10 @@ async def _seed_default_excluded_domains() -> None:
             return  # Already seeded — nothing to do.
 
         added_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        for domain in _DEFAULT_EXCLUDED_DOMAINS:
+        for domain in DEFAULT_EXCLUDED_DOMAINS:
+            normalized_domain = normalize_domain(domain)
+            if normalized_domain is None:
+                continue
             await connection.execute(
                 text(
                     """
@@ -453,7 +537,7 @@ async def _seed_default_excluded_domains() -> None:
                 ),
                 {
                     "id": str(uuid.uuid4()),
-                    "domain": domain,
+                    "domain": normalized_domain,
                     "added_at": added_at_ms,
                 },
             )
@@ -694,9 +778,42 @@ async def set_groq_key_enabled(enabled: bool) -> None:
 
 
 async def get_groq_api_key() -> str | None:
-    """Returns None when disabled, even if a key is stored — every caller
-    already treats "no key" as "fall back to the default provider", so a
-    disabled key needs no extra plumbing at the call sites."""
+    """Reads a user key from Keychain only immediately before provider use."""
     if not await get_groq_key_enabled():
         return None
-    return await get_setting("groq_api_key")
+    from services.keychain_service import get_groq_api_key as get_keychain_groq_api_key
+
+    return await get_keychain_groq_api_key()
+
+
+async def migrate_legacy_groq_api_key_to_keychain() -> bool:
+    """Migrates a legacy SQLite key without replacing an existing Keychain key.
+
+    The plaintext database value remains intact if Keychain access or storage
+    fails. Once a Keychain credential is confirmed, the legacy row is deleted.
+    """
+    legacy_key = await get_setting("groq_api_key")
+    if not legacy_key:
+        return True
+
+    from services.keychain_service import (
+        KeychainUnavailableError,
+        has_groq_api_key,
+        store_groq_api_key,
+    )
+
+    try:
+        # A newly entered Keychain key is the user's most recent choice; do
+        # not overwrite it with an old database value during migration.
+        if not await has_groq_api_key():
+            await store_groq_api_key(legacy_key)
+    except KeychainUnavailableError:
+        # Preserve the old row on failure: losing a user-owned key is worse
+        # than requiring them to retry migration after fixing Keychain access.
+        return False
+
+    async with _async_engine.begin() as connection:
+        await connection.execute(
+            text("DELETE FROM app_settings WHERE key = 'groq_api_key'")
+        )
+    return True

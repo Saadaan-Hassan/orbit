@@ -13,7 +13,6 @@ import json
 import time
 import logging
 from dataclasses import dataclass, field
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +20,12 @@ from sqlalchemy import text
 
 from models.event import CaptureEvent
 from database import get_db, _async_engine
+from services.exclusion_policy import (
+    domain_is_excluded,
+    normalize_app_name,
+    normalize_folder_path,
+    path_is_within_watched_folder,
+)
 from services.redaction_service import redact_sensitive_content
 
 router = APIRouter()
@@ -58,6 +63,7 @@ class _CaptureFilterCache:
     screen_content_consent: bool = False
     excluded_app_names: set[str] = field(default_factory=set)
     excluded_domains: set[str] = field(default_factory=set)
+    watched_folders: tuple[str, ...] = ()
     last_refreshed_at: float = 0.0            # monotonic seconds
 
 
@@ -94,6 +100,7 @@ async def _refresh_cache_if_stale() -> None:
         screen_content_consent = False
         excluded_rows = []
         domain_rows = []
+        watched_folders: tuple[str, ...] = ()
 
         try:
             async with _async_engine.connect() as connection:
@@ -118,6 +125,19 @@ async def _refresh_cache_if_stale() -> None:
                 )
                 domain_rows = domain_result.fetchall()
 
+                folder_result = await connection.execute(
+                    text("SELECT watched_folders FROM file_watch_settings WHERE id = 1")
+                )
+                folder_row = folder_result.fetchone()
+                if folder_row is not None and folder_row.watched_folders:
+                    raw_folders = json.loads(folder_row.watched_folders)
+                    watched_folders = tuple(
+                        normalized_folder
+                        for folder in raw_folders
+                        if isinstance(folder, str)
+                        and (normalized_folder := normalize_folder_path(folder)) is not None
+                    )
+
             if pause_row is not None:
                 is_paused = bool(pause_row.is_paused)
                 paused_until_ms = pause_row.paused_until
@@ -139,18 +159,12 @@ async def _refresh_cache_if_stale() -> None:
         _filter_cache.browser_consent = browser_consent
         _filter_cache.file_activity_consent = file_activity_consent
         _filter_cache.screen_content_consent = screen_content_consent
-        _filter_cache.excluded_app_names = {row.app_name for row in excluded_rows}
+        _filter_cache.excluded_app_names = {
+            normalize_app_name(row.app_name) for row in excluded_rows
+        }
         _filter_cache.excluded_domains = {row.domain for row in domain_rows}
+        _filter_cache.watched_folders = watched_folders
         _filter_cache.last_refreshed_at = time.monotonic()
-
-
-def _extract_domain(url: str) -> str | None:
-    """Returns the netloc (e.g. 'example.com') from a URL, or None on failure."""
-    try:
-        return urlparse(url).netloc or None
-    except Exception:
-        return None
-
 
 async def _find_recent_url_event(
     db: AsyncSession,
@@ -239,20 +253,29 @@ async def capture_event(
     if not _capture_category_is_allowed(event.type):
         return {"status": "consent_required"}
 
-    if event.app_name and event.app_name in _filter_cache.excluded_app_names:
+    if (
+        event.app_name
+        and normalize_app_name(event.app_name) in _filter_cache.excluded_app_names
+    ):
         return {"status": "excluded"}
 
     # file_activity events carry the responsible app in metadata.app_name rather
     # than (or in addition to) the top-level app_name field. Check it separately
     # so files written by excluded apps (e.g. 1Password) are not recorded.
-    if event.type == "file_activity" and event.metadata:
-        file_event_app = event.metadata.get("app_name")
-        if file_event_app and file_event_app in _filter_cache.excluded_app_names:
+    if event.type == "file_activity":
+        file_event_app = event.metadata.get("app_name") if event.metadata else None
+        if (
+            file_event_app
+            and normalize_app_name(str(file_event_app)) in _filter_cache.excluded_app_names
+        ):
+            return {"status": "excluded"}
+        if not event.file_path or not path_is_within_watched_folder(
+            event.file_path, _filter_cache.watched_folders
+        ):
             return {"status": "excluded"}
 
     if event.url:
-        domain = _extract_domain(event.url)
-        if domain and domain in _filter_cache.excluded_domains:
+        if domain_is_excluded(event.url, _filter_cache.excluded_domains):
             return {"status": "excluded"}
 
     # Deduplicate url-type events: when both native_browser capture and the

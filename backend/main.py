@@ -1,11 +1,12 @@
 import os
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Response
 
-from database import create_all_tables
+from database import create_all_tables, migrate_legacy_groq_api_key_to_keychain
 from local_api_security import LocalApiSecurityConfig, LocalApiSecurityMiddleware
 from routes.capture import router as capture_router
 from routes.extension_pairing import router as extension_pairing_router
@@ -22,6 +23,7 @@ from services.analytics_service import capture_analytics_event
 from services.sentry_service import initialise_sentry_error_reporting
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -38,6 +40,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
 
     await create_all_tables()
+    migration_succeeded = await migrate_legacy_groq_api_key_to_keychain()
+    if not migration_succeeded:
+        logger.warning(
+            "A legacy local provider credential could not be moved to macOS Keychain; "
+            "the existing value was left untouched."
+        )
     await initialize_qdrant_collection()
     capture_analytics_event("app_started")
 

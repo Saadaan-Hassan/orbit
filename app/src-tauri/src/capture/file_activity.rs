@@ -1,3 +1,4 @@
+use super::exclusion::path_is_within_watched_folder;
 use super::sanitizer::RedactionPatternCache;
 use chrono::Utc;
 use notify::{RecursiveMode, Watcher};
@@ -222,12 +223,12 @@ pub async fn start_file_activity_monitor(
     };
 
     // Load initial settings and apply them to the watcher.
-    let initial_settings = read_file_watch_settings(&sqlx_connection_pool).await;
+    let mut active_settings = read_file_watch_settings(&sqlx_connection_pool).await;
     let mut currently_watched: HashSet<String> = HashSet::new();
     sync_watched_folders(
         file_system_debouncer.watcher(),
         &mut currently_watched,
-        &initial_settings,
+        &active_settings,
     );
 
     // Refresh settings every 5 s. Start the first tick 5 s from now so we
@@ -266,7 +267,13 @@ pub async fn start_file_activity_monitor(
                     };
 
                     for file_path in &debounced_event.event.paths {
-                        if path_should_be_skipped(file_path) {
+                        if path_should_be_skipped(file_path)
+                            || !active_settings.enabled
+                            || !path_is_within_watched_folder(
+                                file_path,
+                                &active_settings.watched_folders,
+                            )
+                        {
                             continue;
                         }
 
@@ -317,6 +324,7 @@ pub async fn start_file_activity_monitor(
                     &mut currently_watched,
                     &new_settings,
                 );
+                active_settings = new_settings;
             }
         }
     }

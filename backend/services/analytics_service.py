@@ -17,6 +17,8 @@ from typing import Optional
 
 import posthog as posthog_sdk
 
+from services.local_storage_security import secure_directory, secure_file
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -68,11 +70,14 @@ def get_or_create_device_id() -> str:
 
     device_id_file = Path.home() / ".orbit" / "device_id"
     if device_id_file.exists():
+        secure_directory(device_id_file.parent)
+        secure_file(device_id_file)
         _analytics_device_id = device_id_file.read_text().strip()
     else:
         _analytics_device_id = str(uuid.uuid4())
-        device_id_file.parent.mkdir(parents=True, exist_ok=True)
+        secure_directory(device_id_file.parent)
         device_id_file.write_text(_analytics_device_id)
+        secure_file(device_id_file)
 
     return _analytics_device_id
 

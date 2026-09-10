@@ -4,7 +4,40 @@
 mod capture;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
+use std::path::Path;
 use std::str::FromStr;
+
+/// Applies owner-only permissions without following an attacker-controlled
+/// symlink. This is defence in depth; FileVault remains responsible for
+/// encryption at rest on a locked Mac.
+fn secure_path_permissions(path: &Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        if let Ok(metadata) = std::fs::symlink_metadata(path) {
+            if !metadata.file_type().is_symlink() {
+                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+            }
+        }
+    }
+}
+
+fn prepare_orbit_storage(orbit_directory_path: &str, orbit_database_file_path: &str) {
+    std::fs::create_dir_all(orbit_directory_path)
+        .expect("Failed to create ~/.orbit directory");
+    secure_path_permissions(Path::new(orbit_directory_path), 0o700);
+
+    // SQLite may create these asynchronously when WAL mode is enabled, so
+    // this helper runs again after the initial connection/table setup.
+    for path in [
+        orbit_database_file_path.to_string(),
+        format!("{orbit_database_file_path}-wal"),
+        format!("{orbit_database_file_path}-shm"),
+    ] {
+        secure_path_permissions(Path::new(&path), 0o600);
+    }
+}
 
 // FastAPI subprocess management is only needed in dev mode.
 // In release builds the backend runs as a bundled PyInstaller sidecar spawned
@@ -44,7 +77,12 @@ fn resolve_uv_executable_path() -> String {
 }
 
 #[cfg(debug_assertions)]
-fn spawn_fastapi_backend(backend_directory_path: &str, session_token: &str) -> Child {
+fn spawn_fastapi_backend(
+    backend_directory_path: &str,
+    session_token: &str,
+    orbit_database_file_path: &str,
+    qdrant_storage_path: &str,
+) -> Child {
     let uv_executable_path = resolve_uv_executable_path();
 
     Command::new(&uv_executable_path)
@@ -53,6 +91,10 @@ fn spawn_fastapi_backend(backend_directory_path: &str, session_token: &str) -> C
         // This avoids disclosure through process arguments, URLs, and normal
         // access logs. The token is never written to persistent storage.
         .env("ORBIT_LOCAL_API_SESSION_TOKEN", session_token)
+        // Keep native capture and the development FastAPI process on one
+        // local database/storage root, just like the packaged sidecar.
+        .env("ORBIT_DB_PATH", orbit_database_file_path)
+        .env("QDRANT_STORAGE_PATH", qdrant_storage_path)
         // Inherit stdout and stderr so FastAPI logs appear in the same terminal.
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -80,10 +122,9 @@ fn main() {
 
     let orbit_directory_path = format!("{}/.orbit", home_directory_path);
 
-    std::fs::create_dir_all(&orbit_directory_path)
-        .expect("Failed to create ~/.orbit directory");
-
     let orbit_database_file_path = format!("{}/orbit.db", orbit_directory_path);
+    let qdrant_storage_path = format!("{}/qdrant_storage", orbit_directory_path);
+    prepare_orbit_storage(&orbit_directory_path, &orbit_database_file_path);
 
     let sqlx_connection_pool = tokio_runtime
         .block_on(async {
@@ -128,6 +169,7 @@ fn main() {
             .await
         })
         .expect("Failed to create events table in SQLite");
+    prepare_orbit_storage(&orbit_directory_path, &orbit_database_file_path);
 
     tokio_runtime.spawn(capture::clipboard::start_clipboard_monitor(
         orbit_database_file_path.clone(),
@@ -136,7 +178,7 @@ fn main() {
 
     tokio_runtime.spawn(capture::file_activity::start_file_activity_monitor(
         sqlx_connection_pool.clone(),
-        orbit_database_file_path,
+        orbit_database_file_path.clone(),
     ));
 
     tokio_runtime.spawn(capture::system_state::start_system_state_monitor(
@@ -177,7 +219,12 @@ fn main() {
         // A port collision is handled by the authenticated readiness probe; do
         // not kill or trust an arbitrary process that owns the shared port.
         let fastapi_child_process =
-            spawn_fastapi_backend(&backend_directory_path, &local_api_session_token);
+            spawn_fastapi_backend(
+                &backend_directory_path,
+                &local_api_session_token,
+                &orbit_database_file_path,
+                &qdrant_storage_path,
+            );
 
         // Wrap the child handle in Arc<Mutex<Option<Child>>> so it can be moved
         // into the Tauri exit hook.

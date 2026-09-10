@@ -1,3 +1,4 @@
+use super::exclusion::normalize_app_name;
 use super::sanitizer::RedactionPatternCache;
 use chrono::Utc;
 use sqlx::SqlitePool;
@@ -113,7 +114,11 @@ async fn refresh_screen_content_cache(pool: &SqlitePool, cache: &mut ScreenConte
         .fetch_all(pool)
         .await;
     cache.excluded_app_names = match apps_result {
-        Ok(rows) => rows.into_iter().map(|(n,)| n).collect(),
+        Ok(rows) => rows
+            .into_iter()
+            .map(|(name,)| normalize_app_name(&name))
+            .filter(|name| !name.is_empty())
+            .collect(),
         Err(_) => HashSet::new(),
     };
 
@@ -128,6 +133,7 @@ async fn refresh_screen_content_cache(pool: &SqlitePool, cache: &mut ScreenConte
 
 #[cfg(target_os = "macos")]
 mod ax {
+    use super::super::exclusion::normalize_app_name;
     use std::ffi::{c_void, CStr, CString};
 
     // AX return codes.
@@ -412,7 +418,7 @@ mod ax {
         let app_name = get_string_attr(focused_app.as_raw(), ATTR_TITLE).unwrap_or_default();
 
         // Step 4: excluded-app check.
-        if !app_name.is_empty() && excluded_app_names.contains(&app_name) {
+        if !app_name.is_empty() && excluded_app_names.contains(&normalize_app_name(&app_name)) {
             return CaptureOutcome::Success(None);
         }
 

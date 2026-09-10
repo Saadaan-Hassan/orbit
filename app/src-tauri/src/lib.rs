@@ -6,6 +6,19 @@ use tauri::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::{rngs::OsRng, RngCore};
 
+fn secure_local_path(path: &std::path::Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        if let Ok(metadata) = std::fs::symlink_metadata(path) {
+            if !metadata.file_type().is_symlink() {
+                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+            }
+        }
+    }
+}
+
 /// Kept in Rust application state only. It is generated for each sidecar
 /// lifecycle and never written to a file, Vite variable, URL, or analytics.
 struct LocalApiSessionToken(String);
@@ -158,8 +171,12 @@ fn quit_app(app_handle: tauri::AppHandle) {
 fn mark_onboarding_completed() {
     let home = std::env::var("HOME").unwrap_or_default();
     let orbit_dir = format!("{}/.orbit", home);
-    let _ = std::fs::create_dir_all(&orbit_dir);
-    let _ = std::fs::write(format!("{}/onboarding_done", orbit_dir), "1");
+    let orbit_dir_path = std::path::Path::new(&orbit_dir);
+    let onboarding_path = orbit_dir_path.join("onboarding_done");
+    let _ = std::fs::create_dir_all(orbit_dir_path);
+    secure_local_path(orbit_dir_path, 0o700);
+    let _ = std::fs::write(&onboarding_path, "1");
+    secure_local_path(&onboarding_path, 0o600);
 }
 
 // ---------------------------------------------------------------------------

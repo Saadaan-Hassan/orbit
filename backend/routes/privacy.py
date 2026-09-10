@@ -13,26 +13,15 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from database import _async_engine
+from services.exclusion_policy import (
+    normalize_app_name,
+    normalize_domain,
+    normalize_folder_path,
+)
 from services.qdrant_service import wipe_all_session_embeddings
 
 router = APIRouter(prefix="/privacy")
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Default apps excluded from window tracking at first run.
-# Password managers and system credential stores must always be in this list.
-# ---------------------------------------------------------------------------
-
-DEFAULT_EXCLUDED_APPS: list[str] = [
-    "1Password",
-    "Bitwarden",
-    "Keychain Access",
-    "LastPass",
-    "Dashlane",
-    "Safari",
-    "System Preferences",
-    "System Settings",
-]
 
 # ---------------------------------------------------------------------------
 # Request / response models
@@ -209,6 +198,10 @@ async def add_excluded_app(request: AddExcludedAppRequest) -> dict:
     import uuid
     from datetime import datetime, timezone
 
+    app_name = normalize_app_name(request.app_name)
+    if not app_name:
+        raise HTTPException(status_code=422, detail="Enter a valid application name.")
+
     new_id = str(uuid.uuid4())
     added_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
@@ -221,17 +214,20 @@ async def add_excluded_app(request: AddExcludedAppRequest) -> dict:
                 VALUES (:id, :app_name, :added_at)
                 """
             ),
-            {"id": new_id, "app_name": request.app_name, "added_at": added_at_ms},
+            {"id": new_id, "app_name": app_name, "added_at": added_at_ms},
         )
-    return {"status": "ok", "app_name": request.app_name}
+    return {"status": "ok", "app_name": app_name}
 
 
 @router.delete("/excluded-apps/{app_name}")
 async def remove_excluded_app(app_name: str) -> dict:
+    normalized_app_name = normalize_app_name(app_name)
+    if not normalized_app_name:
+        raise HTTPException(status_code=422, detail="Enter a valid application name.")
     async with _async_engine.begin() as connection:
         await connection.execute(
             text("DELETE FROM excluded_apps WHERE app_name = :app_name"),
-            {"app_name": app_name},
+            {"app_name": normalized_app_name},
         )
     return {"status": "ok"}
 
@@ -256,6 +252,10 @@ async def add_excluded_domain(request: AddExcludedDomainRequest) -> dict:
     import uuid
     from datetime import datetime, timezone
 
+    domain = normalize_domain(request.domain)
+    if domain is None:
+        raise HTTPException(status_code=422, detail="Enter a valid domain or URL.")
+
     new_id = str(uuid.uuid4())
     added_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
@@ -268,17 +268,20 @@ async def add_excluded_domain(request: AddExcludedDomainRequest) -> dict:
                 VALUES (:id, :domain, :added_at)
                 """
             ),
-            {"id": new_id, "domain": request.domain, "added_at": added_at_ms},
+            {"id": new_id, "domain": domain, "added_at": added_at_ms},
         )
-    return {"status": "ok", "domain": request.domain}
+    return {"status": "ok", "domain": domain}
 
 
 @router.delete("/excluded-domains/{domain}")
 async def remove_excluded_domain(domain: str) -> dict:
+    normalized_domain = normalize_domain(domain)
+    if normalized_domain is None:
+        raise HTTPException(status_code=422, detail="Enter a valid domain or URL.")
     async with _async_engine.begin() as connection:
         await connection.execute(
             text("DELETE FROM excluded_domains WHERE domain = :domain"),
-            {"domain": domain},
+            {"domain": normalized_domain},
         )
     return {"status": "ok"}
 
@@ -370,7 +373,7 @@ async def get_file_watching() -> dict:
 
     if row is None:
         # Table or row absent — return safe defaults without erroring.
-        return {"enabled": True, "watched_folders": []}
+        return {"enabled": False, "watched_folders": []}
 
     try:
         folders = _json.loads(row.watched_folders) if row.watched_folders else []
@@ -395,9 +398,9 @@ async def set_file_watching(request: SetFileWatchingRequest) -> dict:
 async def add_watched_folder(request: AddWatchedFolderRequest) -> dict:
     import json as _json
 
-    folder = request.folder.strip()
-    if not folder:
-        return {"status": "ok"}
+    folder = normalize_folder_path(request.folder)
+    if folder is None:
+        raise HTTPException(status_code=422, detail="Enter an absolute folder path.")
 
     async with _async_engine.begin() as connection:
         result = await connection.execute(
@@ -423,7 +426,9 @@ async def add_watched_folder(request: AddWatchedFolderRequest) -> dict:
 async def remove_watched_folder(request: RemoveWatchedFolderRequest) -> dict:
     import json as _json
 
-    folder = request.folder.strip()
+    folder = normalize_folder_path(request.folder)
+    if folder is None:
+        raise HTTPException(status_code=422, detail="Enter an absolute folder path.")
 
     async with _async_engine.begin() as connection:
         result = await connection.execute(

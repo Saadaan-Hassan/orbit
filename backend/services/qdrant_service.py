@@ -9,6 +9,7 @@ still held by a stale FastAPI process from a previous Tauri hot-reload cycle.
 
 import asyncio
 import logging
+import os
 import threading
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from services.provider_context_sanitizer import sanitize_provider_metadata
+from services.local_storage_security import secure_directory_tree
 from services.voyage_service import generate_text_embedding
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,9 @@ MINIMUM_SIMILARITY_SCORE = 0.3
 # Lazy singleton client
 # ---------------------------------------------------------------------------
 
-_qdrant_storage_path = str(Path.home() / ".orbit" / "qdrant_storage")
+_qdrant_storage_path = os.getenv(
+    "QDRANT_STORAGE_PATH", str(Path.home() / ".orbit" / "qdrant_storage")
+)
 
 # None until first use. A threading.Lock guards creation so that concurrent
 # callers (e.g. from asyncio.to_thread workers) never create two clients.
@@ -56,6 +60,7 @@ def _get_client() -> QdrantClient:
     if _qdrant_client is None:
         with _qdrant_client_lock:
             if _qdrant_client is None:  # re-check inside the lock
+                secure_directory_tree(Path(_qdrant_storage_path))
                 _qdrant_client = QdrantClient(path=_qdrant_storage_path)
     return _qdrant_client
 
@@ -140,6 +145,10 @@ async def initialize_qdrant_collection() -> None:
                 distance=Distance.COSINE,
             ),
         )
+
+    # Qdrant creates files lazily, so repair permissions once its initial
+    # collection-open work completes as well as before opening it.
+    secure_directory_tree(Path(_qdrant_storage_path))
 
 
 async def delete_session_embedding(embedding_id: str) -> None:

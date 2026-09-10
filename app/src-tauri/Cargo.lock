@@ -112,6 +112,8 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-updater",
  "tokio",
+ "unicode-normalization",
+ "url",
  "uuid",
 ]
 

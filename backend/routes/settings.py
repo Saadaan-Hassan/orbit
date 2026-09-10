@@ -6,9 +6,13 @@ from pydantic import BaseModel, Field
 
 from database import (
     get_groq_key_enabled,
-    get_setting,
     set_groq_key_enabled,
-    set_setting,
+)
+from services.keychain_service import (
+    KeychainUnavailableError,
+    delete_groq_api_key,
+    has_groq_api_key,
+    store_groq_api_key,
 )
 
 router = APIRouter(prefix="/settings")
@@ -27,8 +31,16 @@ class GroqKeyEnabledRequest(BaseModel):
 
 @router.get("/groq-key")
 async def get_groq_key_status() -> dict:
-    value = await get_setting("groq_api_key")
-    return {"configured": bool(value), "enabled": await get_groq_key_enabled()}
+    try:
+        configured = await has_groq_api_key()
+    except KeychainUnavailableError:
+        # Do not report a stale SQLite credential as configured. The UI can
+        # ask the user to unlock/fix Keychain before changing the key.
+        configured = False
+    return {
+        "configured": configured,
+        "enabled": await get_groq_key_enabled(),
+    }
 
 
 @router.post("/groq-key")
@@ -39,7 +51,13 @@ async def save_groq_key(body: GroqKeyRequest) -> dict:
             status_code=422,
             detail="Invalid Groq API key. Must start with 'gsk_' and be longer than 20 characters.",
         )
-    await set_setting("groq_api_key", key)
+    try:
+        await store_groq_api_key(key)
+    except KeychainUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="macOS Keychain is unavailable. Your key was not saved.",
+        )
     # Saving a new key implies the intent to use it right away, even if a
     # previous key had been paused.
     await set_groq_key_enabled(True)
@@ -48,7 +66,13 @@ async def save_groq_key(body: GroqKeyRequest) -> dict:
 
 @router.delete("/groq-key")
 async def delete_groq_key() -> dict:
-    await set_setting("groq_api_key", "")
+    try:
+        await delete_groq_api_key()
+    except KeychainUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="macOS Keychain is unavailable. Your key was not removed.",
+        )
     await set_groq_key_enabled(True)
     return {"success": True}
 
