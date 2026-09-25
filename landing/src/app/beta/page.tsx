@@ -21,6 +21,7 @@ export default function BetaPage() {
               alt="Orbit Logo"
               fill
               className="object-cover"
+              unoptimized
             />
           </div>
           <span className="font-semibold text-lg tracking-tight text-white">
@@ -48,9 +49,8 @@ export default function BetaPage() {
               You&apos;re in. Download Orbit below.
             </h1>
             <p className="text-sm text-zinc-400 font-light leading-relaxed">
-              Thanks for joining the Orbit waitlist — this page is your
-              early access. Pick the download that matches your Mac, then
-              follow the guided setup when you open the app.
+              Pick the download that matches your Mac, then follow the
+              guided setup when you open the app.
             </p>
           </div>
 

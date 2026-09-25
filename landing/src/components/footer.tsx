@@ -12,6 +12,7 @@ export default function Footer() {
             width={20}
             height={20}
             className="opacity-70"
+            unoptimized
           />
           <span>
             Orbit by{" "}

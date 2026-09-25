@@ -1,6 +1,9 @@
 import { ImageResponse } from "next/og";
 
-export const runtime = "edge";
+// No `runtime = "edge"` — incompatible with `force-static`/static export
+// (SITE-001). This image has no per-request dynamic input, so it's
+// generated once at build time on the default (Node.js) runtime instead.
+export const dynamic = "force-static";
 export const alt = "Orbit — Never lose your place again.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
@@ -169,7 +172,7 @@ export default function Image() {
               fontWeight: 500,
             }}
           >
-            Early Access · Join the Waitlist
+            Available now for macOS
           </span>
         </div>
       </div>

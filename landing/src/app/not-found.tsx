@@ -19,6 +19,7 @@ export default function NotFound() {
               width={64}
               height={64}
               className="object-contain opacity-90"
+              unoptimized
             />
           </div>
           <span className="absolute -bottom-1 -right-1 px-2 py-0.5 rounded-md bg-zinc-800 border border-white/10 text-xs font-bold tracking-wider uppercase text-zinc-400">

@@ -302,33 +302,29 @@ orbit/
 ├── worker/
 │   ├── src/index.ts                        ← /chat /classify /embed /tts /stt-token
 │   └── wrangler.toml
-├── landing/
+├── landing/                                 ← fully static (SITE-001) — no server, no DB, no email, no waitlist
+│   ├── next.config.ts                       ← output: "export"; pnpm build writes out/, deployable to any static host
 │   ├── src/
 │   │   ├── app/
-│   │   │   ├── page.tsx                        ← landing page (Server Component)
+│   │   │   ├── page.tsx                        ← landing page (Server Component). Hero + direct download buttons (Apple Silicon/Intel, same orbit-releases URLs /beta uses) + unsigned/notarization disclosure — no waitlist form
 │   │   │   ├── layout.tsx                      ← root layout, metadata (metadataBase, OG, Twitter cards)
-│   │   │   ├── opengraph-image.tsx             ← auto-wired OG/Twitter image (1200×630, edge runtime, ImageResponse)
+│   │   │   ├── opengraph-image.tsx             ← auto-wired OG/Twitter image (1200×630, ImageResponse). `dynamic = "force-static"`, no `runtime = "edge"` — required for static export; generated once at build time
 │   │   │   ├── globals.css                     ← @import "tailwindcss" (Tailwind v4)
 │   │   │   ├── favicon.ico
 │   │   │   ├── not-found.tsx                   ← 404 page
 │   │   │   ├── privacy/
-│   │   │   │   └── page.tsx                    ← privacy policy (Server Component)
+│   │   │   │   └── page.tsx                    ← privacy policy (Server Component) — states plainly Orbit sends no telemetry (OBS-001)
 │   │   │   └── beta/
-│   │   │       └── page.tsx                    ← early access holding page (robots: noindex); shared only with invitees
+│   │   │       └── page.tsx                    ← same download flow as the main page, kept as-is (robots: noindex, still shareable directly) — now redundant with the public page's downloads, not removed since existing invite links may point here
 │   │   ├── components/
 │   │   │   ├── ui/
 │   │   │   │   ├── button.tsx                  ← ShadCN button
 │   │   │   │   └── input.tsx                   ← ShadCN input
 │   │   │   ├── background-orbit.tsx            ← animated background decoration
 │   │   │   ├── header.tsx                      ← site header / nav
-│   │   │   ├── footer.tsx                      ← site footer with links
-│   │   │   └── waitlist-form.tsx               ← 'use client' waitlist form component
-│   │   ├── emails/
-│   │   │   └── waitlist-confirmation.tsx       ← React Email confirmation template
+│   │   │   └── footer.tsx                      ← site footer with links
 │   │   └── lib/
-│   │       ├── supabase.ts                     ← singleton Supabase client (server-side)
-│   │       ├── utils.ts                        ← shared utilities (cn, etc.)
-│   │       └── waitlist-actions.ts             ← 'use server' Server Action: Zod → Supabase → Resend
+│   │       └── utils.ts                        ← shared utilities (cn, etc.)
 │   └── [config files, package.json, etc.]
 ├── releases/
 │   └── latest.json                         ← committed placeholder only — CI generates the real one at release time; not what the updater actually fetches
@@ -427,25 +423,28 @@ either means designing and building that from scratch, not just flipping a flag.
 ### Landing Page
 | Layer | Tool | Notes |
 |---|---|---|
-| Framework | Next.js 16.2.7 | App Router ONLY — no Pages Router |
+| Framework | Next.js 16.2.7 | App Router ONLY — no Pages Router. `output: "export"` (SITE-001) — fully static, no server |
 | Styling | Tailwind CSS v4 | `@import "tailwindcss"` in globals.css — no config file |
-| Email | Resend + React Email | `'use server'` Server Actions pattern |
-| Waitlist DB | Supabase Postgres | Service role key server-side only |
-| Validation | Zod | All Server Action inputs validated before DB write |
-| Deploy | Vercel | Root directory: `landing/` |
+| Deploy | Any static host | GitHub Pages, Cloudflare Pages, or Vercel's static hosting — `pnpm build` writes `out/`. No email service, no waitlist DB, no Server Actions (removed, SITE-001) |
 
 **Next.js 16 rules:**
 - Server Components by default. `'use client'` only for event handlers/hooks.
-- `'use server'` for mutations — no API routes for simple form actions.
 - `await params` always — params are async in Next.js 16.
+- No Server Actions — unsupported under `output: "export"`. No API routes for the same reason.
+- `next/image` usages need the `unoptimized` prop — default Image Optimization requires a server, unsupported under static export.
+- `opengraph-image.tsx`/any metadata image route needs `export const dynamic = "force-static"` and must NOT set `runtime = "edge"` (the two are incompatible) for static export to include it.
 
 ### Infrastructure
 | Tool | Purpose |
 |---|---|
 | Cloudflare Worker | Lightweight BYOK passthrough for Groq/Voyage AI (COST-002) — holds no maintainer-owned key of any kind. |
-| Supabase | Waitlist DB (landing) + cloud sync opt-in (Phase 5) |
 | Lemon Squeezy | Payments (Phase 5) |
 | GitHub Releases | App distribution + auto-update server |
+
+No waitlist DB or email service exists — the landing site is fully static
+with no backend of any kind (SITE-001). A future cloud sync opt-in
+(Phase 5) would need to pick its own infrastructure when built; nothing is
+provisioned for it today.
 
 No crash reporting or analytics infrastructure exists — removed entirely,
 not just disabled (OBS-001).
@@ -499,19 +498,16 @@ not just disabled (OBS-001).
 | `extension/src/content.ts` | Runs in every page context. 5-second visibility filter — pages the user bounced off are discarded. On threshold: detects search queries first (Google, YouTube, Bing, DuckDuckGo); otherwise runs `@mozilla/readability` on a DOM clone to extract article body (≤2 000 chars), author, site_name, excerpt. Sends `page_content` or `search_query` to the background worker on tab departure (`visibilitychange` + `pagehide`). Left-click listener captures `link_click` events with 500 ms debounce. |
 | `extension/package.json` | Runtime dep: `@mozilla/readability@^0.6.0` — ships own `index.d.ts`; do **NOT** install `@types/mozilla-readability` (conflicts). DevDeps: `@crxjs/vite-plugin`, `@types/chrome`, `typescript`, `vite`. |
 | `worker/src/index.ts` | Zero-secret BYOK-only passthrough (COST-002). `WorkerEnvironment` is an intentionally empty interface. Routes: `/chat-groq` → Groq (OpenAI-compatible; requires the caller's `X-Groq-Api-Key`, 401 without it, no fallback; response body piped through unbuffered so streaming works), `/embed` → Voyage AI (requires `X-Voyage-Api-Key`, 401 without it), `/tts` → stub, `/stt-token` → stub. `/chat` (Claude), `/classify` (Gemini), and `/provider-status`/admin kill switch have been deleted, not disabled. `worker/README.md` has the full rationale. CORS headers (`GET, POST, OPTIONS`) on every response. Tested with `vitest` (`worker/src/index.test.ts`) — auth, routing, and passthrough behavior with a mocked `fetch`. |
-| `landing/src/app/page.tsx` | Landing page — Server Component. Hero, "How it works" 3-card section, privacy callout strip. Uses header, footer, background-orbit, waitlist-form. |
+| `landing/next.config.ts` | `output: "export"` (SITE-001) — the whole site builds to static HTML/CSS/JS in `out/`, no Node.js server needed at runtime. |
+| `landing/src/app/page.tsx` | Landing page — Server Component. Hero with direct download buttons (Apple Silicon/Intel, same `orbit-releases` URLs `/beta` uses) + unsigned/notarization "what to expect" disclosure, "How it works" 3-card section, privacy callout strip. No waitlist form (removed, SITE-001). |
 | `landing/src/app/layout.tsx` | Root layout. Sets `metadataBase`, explicit `openGraph` and `twitter` metadata. Canonical URL resolves via `NEXT_PUBLIC_APP_URL` env var. |
-| `landing/src/app/opengraph-image.tsx` | Edge runtime `ImageResponse` — auto-wired by Next.js to og:image and twitter:image metadata. 1200×630 px dark PNG with orbit ring decoration, headline, and "Early Access" badge. No explicit metadata entry needed. |
-| `landing/src/app/privacy/page.tsx` | Privacy policy — Server Component. Covers all capture types (Phase 2.5–2.9), what gets sent to cloud AI, and all user controls. |
-| `landing/src/app/beta/page.tsx` | Early access holding page at `/beta`. `robots: { index: false }` — not indexed. Shared directly with invitees. Lists macOS requirements and what to expect; no download link until .dmg is ready. |
-| `landing/src/components/waitlist-form.tsx` | `'use client'` — handles form state, calls `joinWaitlist` Server Action, shows success/error state. |
+| `landing/src/app/opengraph-image.tsx` | `ImageResponse` — auto-wired by Next.js to og:image and twitter:image metadata. 1200×630 px dark PNG with orbit ring decoration, headline, "Available now for macOS" badge. `export const dynamic = "force-static"`, no `runtime = "edge"` — required for `output: "export"` to prerender it at build time. |
+| `landing/src/app/privacy/page.tsx` | Privacy policy — Server Component. Covers all capture types (Phase 2.5–2.9), what gets sent to cloud AI, all user controls, and states plainly that Orbit sends no telemetry of any kind (OBS-001). |
+| `landing/src/app/beta/page.tsx` | Same download flow as the main page (`robots: { index: false }`, not indexed). Kept as-is rather than removed — an existing invite link may still point here, and it's harmless now that the main page also offers direct downloads. |
 | `landing/src/components/background-orbit.tsx` | Animated background decoration. |
 | `landing/src/components/header.tsx` | Site header / navigation. |
 | `landing/src/components/footer.tsx` | Footer with links to privacy, social, GitHub. |
-| `landing/src/lib/supabase.ts` | Singleton Supabase client (service role, server-side only — never exposed to client). |
-| `landing/src/lib/waitlist-actions.ts` | `'use server'`. Zod validation → Supabase insert → Resend confirmation. Never exposes DB errors to client. |
 | `landing/src/lib/utils.ts` | Shared utilities — `cn()` for Tailwind class merging, etc. |
-| `landing/src/emails/waitlist-confirmation.tsx` | React Email confirmation template sent via Resend. |
 
 ---
 
@@ -936,11 +932,11 @@ git tag v0.2.0 && git push origin v0.2.0
 ```
 Triggers `.github/workflows/release.yml`, which builds a sequential two-leg matrix — `macos-latest` (Apple Silicon, `aarch64`) and `macos-15-intel` (Intel, `x86_64`; `macos-13` was retired by GitHub in Dec 2025) — then a `merge-latest-json` job combines both legs' single-platform `latest.json` into one file with both platform keys and republishes it. This merge step exists because both matrix legs upload a same-named `latest.json` release asset — without the merge, the second leg to finish silently overwrites the first leg's platform entry and the updater only ever offers updates to whichever architecture built last. **This entire matrix + merge flow has not been verified by a real CI run** (as of when it was written) — check the Actions run after pushing a tag before relying on it, especially the Intel leg and the final merged `latest.json`'s `platforms` object having both `darwin-aarch64` and `darwin-x86_64` keys.
 
-Each matrix leg also publishes a **version-agnostic copy** of its `.dmg` (`Orbit-latest-aarch64.dmg` / `Orbit-latest-x86_64.dmg`, `--clobber`-uploaded fresh on every release). The `/beta` landing page links directly to these via `github.com/Saadaan-Hassan/orbit-releases/releases/latest/download/<filename>` — that URL pattern always resolves to whatever release is currently "Latest", so **the landing page never needs updating after a new release**. Only the versioned filenames (e.g. `Orbit_0.2.0_aarch64.dmg`, which tauri-action uploads itself) change per release; the fixed-name copies exist purely so the beta page has something stable to link to.
+Each matrix leg also publishes a **version-agnostic copy** of its `.dmg` (`Orbit-latest-aarch64.dmg` / `Orbit-latest-x86_64.dmg`, `--clobber`-uploaded fresh on every release). Both the main landing page (`landing/src/app/page.tsx`) and `/beta` link directly to these via `github.com/Saadaan-Hassan/orbit-releases/releases/latest/download/<filename>` — that URL pattern always resolves to whatever release is currently "Latest", so **the landing site never needs updating after a new release**. Only the versioned filenames (e.g. `Orbit_0.2.0_aarch64.dmg`, which tauri-action uploads itself) change per release; the fixed-name copies exist purely so both pages have something stable to link to.
 
-**Not yet done:** Apple code-signing / notarization. `signingIdentity: null` in `tauri.conf.json`, no `APPLE_ID`/`APPLE_TEAM_ID`/`APPLE_CERTIFICATE` step in the workflow despite those being documented as expected secrets. Beta testers will see a Gatekeeper "Apple could not verify this app is free of malware" warning until this is set up — needs an Apple Developer Program membership. The `/beta` page's "What to expect" list warns testers about this and gives the right-click-Open workaround in the meantime.
+**Not yet done:** Apple code-signing / notarization. `signingIdentity: null` in `tauri.conf.json`, no `APPLE_ID`/`APPLE_TEAM_ID`/`APPLE_CERTIFICATE` step in the workflow despite those being documented as expected secrets. Anyone downloading will see a Gatekeeper "Apple could not verify this app is free of malware" warning until this is set up — needs an Apple Developer Program membership. Both the main page's and `/beta`'s "What to expect" list warn about this and give the right-click-Open workaround in the meantime.
 
-**Sharing with beta testers:** the `/beta` landing page link is the entire flow now — it's not indexed and only shared with invitees, but it hosts real download buttons (Apple Silicon / Intel) directly, no per-user emailed link needed. Nothing to do per-tester; nothing to re-share per-release.
+**Public downloads (SITE-001):** the main landing page now offers the same direct download buttons `/beta` always has — downloading Orbit no longer requires an invite. `/beta` is kept as-is (existing invite links may still point there), but it's no longer the only way in. Nothing to do per-release on either page; both use the fixed `orbit-latest-*` URLs above.
 
 ### Chrome extension distribution
 

@@ -12,6 +12,7 @@ export default function Header() {
             width={48}
             height={48}
             className="object-cover"
+            unoptimized
           />
         </div>
         <span className="font-semibold text-lg tracking-tight hover:text-zinc-200 transition-colors">Orbit</span>

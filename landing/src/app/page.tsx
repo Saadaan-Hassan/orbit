@@ -1,5 +1,11 @@
-import WaitlistForm from "@/components/waitlist-form";
 import { Eye, Layers, Search } from "lucide-react";
+
+const WHAT_TO_EXPECT = [
+  "macOS 13 Ventura or later required",
+  "The app isn't notarized yet, so macOS will block it the first time you open it — click Done (not Move to Bin), then go to System Settings → Privacy & Security, scroll to the bottom, and click \"Open Anyway\" next to Orbit. Open it once more to confirm.",
+  "Accessibility permission needed (you'll be guided through it)",
+  "No account creation — Orbit runs entirely on your Mac",
+];
 
 const HOW_IT_WORKS = [
   {
@@ -35,7 +41,7 @@ export default function Page() {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-zinc-300 opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-white" />
             </span>
-            Early Access Coming Soon
+            Available now for macOS
           </span>
 
           {/* Headline */}
@@ -50,20 +56,53 @@ export default function Page() {
             You spend hours rebuilding mental context every time you switch tasks. Orbit remembers your work so you never have to start over.
           </p>
 
-          {/* Waitlist form */}
-          <div className="w-full max-w-md mt-4">
-            <WaitlistForm />
+          {/* Download buttons */}
+          <div className="w-full max-w-md mt-4 flex flex-col gap-2.5">
+            <a
+              href="https://github.com/Saadaan-Hassan/orbit-releases/releases/latest/download/Orbit-latest-aarch64.dmg"
+              className="w-full py-3.5 rounded-xl bg-white text-zinc-950 text-sm font-semibold text-center hover:opacity-90 transition-all"
+            >
+              Download for Apple Silicon (M1/M2/M3/M4)
+            </a>
+            <a
+              href="https://github.com/Saadaan-Hassan/orbit-releases/releases/latest/download/Orbit-latest-x86_64.dmg"
+              className="w-full py-3 rounded-xl border border-white/10 text-zinc-300 text-xs font-semibold text-center hover:bg-white/5 transition-all"
+            >
+              Download for Intel Mac
+            </a>
+            <p className="text-[11px] text-zinc-600 text-center">
+              Not sure which chip you have? — Apple menu → About This Mac.{" "}
+              <a
+                href="https://github.com/Saadaan-Hassan/orbit-releases/releases/latest"
+                className="underline underline-offset-2 hover:text-zinc-400 transition-colors"
+              >
+                See all release files
+              </a>
+            </p>
           </div>
 
-          {/* Privacy trust + social proof */}
-          <div className="flex flex-col items-center gap-1.5">
-            <p className="text-[11px] text-zinc-600 font-light tracking-wide">
-              All data stays on your Mac · Never sold · Delete anytime
+          {/* What to expect box */}
+          <div className="w-full max-w-md flex flex-col gap-3 rounded-xl border border-white/5 bg-white/[0.015] p-5 text-left">
+            <p className="text-[11px] font-semibold text-zinc-500 tracking-widest uppercase">
+              What to expect
             </p>
-            <p className="text-[11px] text-zinc-500 font-light tracking-wide">
-              Join early access and help shape Orbit&apos;s future.
-            </p>
+            <ul className="flex flex-col gap-2.5">
+              {WHAT_TO_EXPECT.map((item) => (
+                <li
+                  key={item}
+                  className="flex items-start gap-2.5 text-xs text-zinc-400 font-light leading-relaxed"
+                >
+                  <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-zinc-600 shrink-0" />
+                  {item}
+                </li>
+              ))}
+            </ul>
           </div>
+
+          {/* Privacy trust */}
+          <p className="text-[11px] text-zinc-600 font-light tracking-wide">
+            All data stays on your Mac · Never sold · Delete anytime
+          </p>
         </div>
       </section>
 
