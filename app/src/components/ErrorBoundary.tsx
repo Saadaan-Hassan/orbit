@@ -1,5 +1,4 @@
 import React from "react";
-import * as Sentry from "@sentry/react";
 import { invoke } from "@tauri-apps/api/core";
 
 interface ErrorBoundaryState {
@@ -20,7 +19,8 @@ export class ErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    Sentry.captureException(error, { extra: { componentStack: info.componentStack } });
+    // No remote crash reporting (OBS-001) — log locally only.
+    console.error("Orbit render error:", error, info.componentStack);
   }
 
   handleRestart(): void {

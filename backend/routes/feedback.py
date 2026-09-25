@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from database import _async_engine
-from services.analytics_service import capture_analytics_event
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -59,8 +58,6 @@ async def submit_feedback(request: FeedbackRequest) -> dict:
                 "context": request.context,
             },
         )
-
-    capture_analytics_event("feedback_submitted", {"rating": request.rating})
 
     logger.info("Feedback recorded: %s (id=%s)", request.rating, feedback_id)
     return {"status": "ok"}

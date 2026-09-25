@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useOrbitStore } from "../store/orbitStore";
-import { useAnalytics } from "./useAnalytics";
 
 import { orbitApiFetch } from "@/lib/local-api";
 
@@ -22,7 +21,6 @@ export function useRecall() {
   const [errorMessage, setErrorMessage] = useState("");
 
   const { conversationHistory, addMessage, clearConversation: clearStore } = useOrbitStore();
-  const { captureEvent } = useAnalytics();
 
   // Exposed clearConversation also resets local streaming state so the UI
   // returns to a clean idle after the user starts a new topic.
@@ -36,8 +34,6 @@ export function useRecall() {
   async function askOrbit(query: string): Promise<void> {
     const trimmedQuery = query.trim();
     if (!trimmedQuery || isStreaming) return;
-
-    captureEvent("recall_query_submitted");
 
     // Snapshot prior turns BEFORE adding the new user message so we don't
     // send the current question twice (it also arrives in the query field).

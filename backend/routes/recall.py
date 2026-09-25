@@ -21,7 +21,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from database import fetch_sessions_by_time_range, fetch_system_state_events, search_events_fts
-from services.analytics_service import capture_analytics_event
 from services.groq_service import stream_recall_response_groq
 from services.qdrant_service import search_sessions_semantic
 from services.voyage_service import VoyageUnavailableError
@@ -751,13 +750,6 @@ async def _stream_sse_recall(
         len(semantic_matched_sessions),
     )
 
-    capture_analytics_event("recall_query_made", {
-        "had_results":  bool(keyword_matched_events or semantic_matched_sessions),
-        "result_count": len(keyword_matched_events) + len(semantic_matched_sessions),
-        "time_filtered": bool(time_range),
-        "intent":        intent,
-    })
-
     context_block = _build_context_block(
         keyword_matched_events,
         semantic_matched_sessions,
@@ -788,9 +780,6 @@ async def _stream_sse_recall(
             "Recall: falling back to local FTS5 results (%s).",
             type(offline_error).__name__,
         )
-        capture_analytics_event("recall_offline_fallback", {
-            "fts5_result_count": len(keyword_matched_events),
-        })
         fallback_reason = _describe_groq_unavailable_reason(offline_error)
         yield f"data: {json.dumps({'chunk': _format_fts5_fallback(keyword_matched_events, fallback_reason)})}\n\n"
 

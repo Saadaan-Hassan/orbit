@@ -17,7 +17,6 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 
 from database import _async_engine, get_voyage_api_key
-from services.analytics_service import capture_analytics_event
 # Claude (services.claude_service) and Gemini (services.gemini_service) are
 # unused here — Groq is the sole provider for session generation and
 # classification. As of COST-002 the Worker no longer has a /chat or
@@ -672,11 +671,6 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
             ),
             {"session_id": new_session_id, **id_bindings},
         )
-
-    capture_analytics_event("session_generated", {
-        "event_count":       len(project_events),
-        "project_detected":  bool(project_name),
-    })
 
     logger.info(
         "Session generator: marked %d event(s) with session_id %s.",

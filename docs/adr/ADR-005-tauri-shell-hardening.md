@@ -4,6 +4,14 @@
 
 Accepted
 
+**Update (OBS-001, 2026-09-25):** PostHog and Sentry were removed from the
+app entirely, not just disabled — see `AGENTS.md`'s Tech Stack section. The
+CSP's `connect-src` no longer includes `*.posthog.com`/`*.i.posthog.com`/
+`*.sentry.io`; it's `'self' http://localhost:47821` only. The rest of this
+record (devtools, capabilities, entitlements) is unaffected and still
+describes the current state — only the telemetry-hosts portion below is
+historical.
+
 ## Context
 
 `APPSEC-001` requires the production desktop shell to run with no user-accessible

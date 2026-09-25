@@ -228,11 +228,10 @@ orbit/
 │       └── orb-reference.png               ← orb animation reference (Phase 4)
 ├── app/                                    ← Tauri v2 desktop app
 │   ├── src/
-│   │   ├── instrument.ts                   ← Sentry init — FIRST import in main.tsx
-│   │   ├── main.tsx                        ← PostHogProvider wrapper, imports instrument first
+│   │   ├── main.tsx                        ← app entry point, renders <App /> (no telemetry wrapper — OBS-001)
 │   │   ├── components/
 │   │   │   ├── OnboardingFlow.tsx          ← 5-step first-launch: Welcome→Accessibility→BrowserAutomation→Extension(optional)→Tips
-│   │   │   ├── ErrorBoundary.tsx           ← global error boundary → Sentry → restart button
+│   │   │   ├── ErrorBoundary.tsx           ← global error boundary → console.error only (no remote reporting, OBS-001) → friendly message → restart button
 │   │   │   ├── RecallSearch.tsx            ← recall UI + ProjectCards dashboard; fades cards when user starts typing
 │   │   │   ├── ActivityTimeline.tsx        ← scrollable raw-event feed (rendered as children of RecallSearch)
 │   │   │   ├── ProjectCards.tsx            ← project cards dashboard; 2-col grid; shown when conversation is empty
@@ -247,7 +246,6 @@ orbit/
 │   │   │   ├── useRecall.ts                ← POST /recall, appends to conversationHistory
 │   │   │   ├── useTimeline.ts              ← fetches /timeline/day + /timeline/dates; Map cache; setSelectedDate()
 │   │   │   ├── useProjects.ts              ← fetches /projects; module-level 5-min cache; visibility-change refresh
-│   │   │   ├── useAnalytics.ts             ← PostHog wrapper — never call posthog directly
 │   │   │   ├── useOnboarding.ts            ← onboarding state, polls accessibility + browser automation every 3s; requestBrowserAutomation()
 │   │   │   ├── usePrivacySettings.ts       ← privacy API calls; excluded domains + normalizeDomain(); nativeBrowserEnabled + setNativeBrowserEnabled; file watching CRUD; screenContentEnabled + setScreenContentEnabled
 │   │   │   ├── useApiKeySettings.ts        ← generic BYOK hook (COST-001/002), parameterized by providerPath ("groq-key" | "voyage-key"): GET/POST/DELETE /settings/<provider>-key + POST .../test + .../enabled; exposes {configured, enabled}, never the raw key
@@ -288,9 +286,7 @@ orbit/
 │   │   ├── voyage_service.py               ← httpx singleton → Worker /embed, requires a personal Voyage key (COST-002 BYOK)
 │   │   ├── qdrant_service.py               ← QdrantClient local file singleton
 │   │   ├── time_parser.py                  ← extracts time ranges from natural language queries
-│   │   ├── redaction_service.py            ← inline redaction for browser-captured text (page_text, search queries)
-│   │   ├── analytics_service.py            ← PostHog Python singleton, fails silently
-│   │   └── sentry_service.py               ← sentry_sdk.init(), only if DSN is set
+│   │   └── redaction_service.py            ← inline redaction for browser-captured text (page_text, search queries)
 │   ├── models/
 │   │   ├── event.py                        ← Pydantic: CaptureEvent
 │   │   └── session.py                      ← Pydantic: Session
@@ -352,8 +348,7 @@ orbit/
 | Styling | Tailwind + ShadCN |
 | Animation | Framer Motion (Phase 4) |
 | State | Zustand — includes `conversationHistory: Message[]` |
-| Crash reporting | `@sentry/react` + `@sentry/vite-plugin` |
-| Analytics | `posthog-js` + `@posthog/react` (PostHogProvider in main.tsx) |
+| Crash reporting / analytics | None — removed entirely (OBS-001). No remote telemetry of any kind. |
 | Auto-updates | `tauri-plugin-updater` + `tauri-plugin-dialog` + `tauri-plugin-process` |
 
 ### Rust Crates
@@ -384,15 +379,14 @@ orbit/
 | `sqlalchemy` + `aiosqlite` | Async SQLite |
 | `pydantic` | Request/response schemas |
 | `python-dotenv` | Env var loading |
-| `httpx` | HTTP singleton → all Worker calls (Claude, Gemini, Voyage AI) |
+| `httpx` | HTTP singleton → Groq/Voyage AI, direct or via the Worker depending on BYOK (COST-001/002) |
 | `qdrant-client` | Vector store, local file mode — no fastembed, no Docker |
 | `apscheduler>=3.10,<4.0` | Session generation scheduler — `AsyncIOScheduler` from v3.x stable only |
-| `posthog` | Backend analytics singleton |
-| `sentry-sdk[fastapi]` | Crash reporting |
 
 **Never install:**
 `google-genai` `google-generativeai` `sentence-transformers` `torch`
-`onnxruntime` `qdrant-client[fastembed]`
+`onnxruntime` `qdrant-client[fastembed]` `posthog` `sentry-sdk` — no remote
+telemetry of any kind (OBS-001).
 
 **APScheduler:** Use `apscheduler>=3.10,<4.0` (v3.x stable). Never install bare
 `apscheduler` without a version pin — pip/uv may resolve to v4 pre-release.
@@ -448,12 +442,13 @@ either means designing and building that from scratch, not just flipping a flag.
 ### Infrastructure
 | Tool | Purpose |
 |---|---|
-| Cloudflare Worker | Proxy for ALL AI APIs. Keys never in app binary or on user machines. |
+| Cloudflare Worker | Lightweight BYOK passthrough for Groq/Voyage AI (COST-002) — holds no maintainer-owned key of any kind. |
 | Supabase | Waitlist DB (landing) + cloud sync opt-in (Phase 5) |
-| PostHog | Privacy-safe analytics (anonymous device ID, no PII) |
-| Sentry | Crash reporting (backend + frontend, two separate projects/DSNs) |
 | Lemon Squeezy | Payments (Phase 5) |
 | GitHub Releases | App distribution + auto-update server |
+
+No crash reporting or analytics infrastructure exists — removed entirely,
+not just disabled (OBS-001).
 
 ---
 
@@ -461,13 +456,11 @@ either means designing and building that from scratch, not just flipping a flag.
 
 | File | Purpose |
 |---|---|
-| `app/src/instrument.ts` | Sentry init. **Must be the first import in main.tsx.** Only initialises if `VITE_SENTRY_DSN` is set. |
-| `app/src/main.tsx` | First import: `./instrument`. Wraps app in `PostHogProvider` with `defaults: '2026-01-30'`, `autocapture: false`, `persistence: 'memory'`. |
+| `app/src/main.tsx` | App entry point. Renders `<App />` directly — no telemetry provider wrapper (OBS-001). |
 | `app/src/components/OnboardingFlow.tsx` | 5-step first-launch: Welcome → Accessibility (polls every 3s, auto-advances) → Browser Automation (Step 2 of 5 — polls `check_browser_automation_permission` every 3s, always skippable via `hasAdvanced` ref guard) → Chrome Extension (optional) → What to Expect. Blocks main UI until complete. |
-| `app/src/components/ErrorBoundary.tsx` | Class component. Catches render errors → Sentry.captureException → friendly message → restart button. |
+| `app/src/components/ErrorBoundary.tsx` | Class component. Catches render errors → `console.error` only, no remote reporting (OBS-001) → friendly message → restart button. |
 | `app/src/components/RecallSearch.tsx` | Recall UI. Renders `<ProjectCards>` in the scrollable area when `conversationHistory.length === 0 && !isStreaming`; passes `isVisible={inputValue.length === 0}` so cards fade on typing. Watches `pendingQuery` in Zustand and auto-submits queries from Timeline's "Ask Orbit" button. |
 | `app/src/hooks/useRecall.ts` | POST /recall. Sends `conversation_history`. Appends each turn to Zustand store. Max 4 turns enforced here. |
-| `app/src/hooks/useAnalytics.ts` | Wraps `usePostHog()`. All components call this — never import posthog-js directly. Strips forbidden property keys before capture. |
 | `app/src/hooks/useOnboarding.ts` | Checks accessibility + browser automation permission on mount. Polls every 3s while onboarding is open. `requestBrowserAutomation()` calls `trigger_browser_automation_prompt` then polls `check_browser_automation_permission` every 3s until granted or unmount. `shouldPollBrowserAutomation = useRef(false)` controls the loop without re-renders. Persists completion state. |
 | `app/src/hooks/usePrivacySettings.ts` | Loads privacy settings in parallel on mount (capture status, excluded apps, excluded domains, browser-capture settings, file-watch settings, screen-content settings). Exposes `screenContentEnabled` + `setScreenContentEnabled` (POSTs to `/privacy/screen-content`) alongside `nativeBrowserEnabled`, `setFileWatchEnabled`, `addWatchedFolder`, `removeWatchedFolder`, app/domain CRUD. `normalizeDomain()` strips URL to bare hostname. |
 | `app/src/store/orbitStore.ts` | Zustand global state. `conversationHistory: ConversationMessage[]` — reset on new topic, preserved within session. `pendingQuery: string \| null` — Timeline→Chat bridge: set by `TimelineView` "Ask Orbit" button, auto-submitted and cleared by `RecallSearch`. |
@@ -481,10 +474,10 @@ either means designing and building that from scratch, not just flipping a flag.
 | `app/src-tauri/src/lib.rs` | Tauri app setup + all `#[tauri::command]` functions via `generate_handler!`. Phase 2.7 additions: `check_browser_automation_permission` (probes each known browser via osascript), `trigger_browser_automation_prompt` (surfaces the macOS Automation dialog), `open_automation_system_settings` (deep-links to `Privacy_Automation` pane). `BROWSER_NAMES_FOR_AUTOMATION_PROBE` constant matches `KNOWN_BROWSER_APP_NAMES` in `unified_poller.rs`. |
 | `app/src-tauri/Info.plist` | `LSUIElement = true`. Never remove. Orbit never appears in the dock. |
 | `app/src-tauri/tauri.conf.json` | Two windows: `main` (panel, skipTaskbar, transparent, decorations:false) and `overlay` (Phase 4: fullscreen, alwaysOnTop, focus:false, transparent). |
-| `backend/main.py` | FastAPI with `@asynccontextmanager` lifespan. Inits Sentry, starts `asyncio.create_task(start_session_generation_loop())`. No APScheduler. GET /health endpoint. |
+| `backend/main.py` | FastAPI with `@asynccontextmanager` lifespan. No telemetry init of any kind (OBS-001). Starts the `AsyncIOScheduler` session-generation job via `create_session_scheduler()`. GET /health endpoint. |
 | `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + auto-sync triggers on startup. Events schema includes `page_text`, `link_target`, `metadata`, `file_path`, `is_user_active`, `screen_text` (Phase 2.9). FTS5 indexes 5 columns: `raw_content, app_name, url, page_text, screen_text`. `_migrate_schema()` drops + rebuilds FTS5 table + triggers when `screen_text` absent. `idx_events_url_timestamp` index on `events(url, timestamp)`. Sessions schema includes `last_action`, `key_resources`, `topics`, `active_minutes`, `activity`, `next_step`, `blockers` (Phase 2.9). `screen_content_settings` table (single row, id=1) seeded with `enabled=1`. `file_watch_settings` table seeded with default folders. `browser_capture_settings` table seeded with `native_enabled=1`. `search_events_fts()` SELECT now includes `file_path` and `screen_text`. `fetch_sessions_by_time_range(start_ms, end_ms, max_per_project=1)` returns the best session per distinct `project_name` within a time window — used by `recall.py` for time-range queries as the primary session source. |
 | `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now`. `generate_sessions_from_recent_events()`: fetch → `_split_events_at_system_boundaries()` → per batch: `_dedup_events_by_url_for_prompt()` → classify (`_classify_events_with_configured_provider()` → **Groq**, `classify_events_batch_groq`) → `_build_fused_signals()` (labelled text lines: `[HH:MM] APP focus / SCREEN text / FILE / CLIPBOARD / BROWSER / …`) → `FUSION_SESSION_SYSTEM_PROMPT` (detective triangulation) → **Groq** (`generate_session_summary_groq`, `openai/gpt-oss-120b`) → embed (Voyage) → mark processed. Claude/Gemini imports intentionally removed (see comment at top of file) — their Worker routes are gone too (COST-002), so restoring a fallback means rebuilding the Worker route first, not just re-importing. On Groq failure, batch is stamped `session_id='parse_failed'` (circuit breaker — prevents the same backlog being reclassified every 30-min cycle forever, a real incident observed in production before this existed) and picked up later by the bounded `_retry_parse_failed_events()` recovery lane (≤20 events/cycle). New session fields extracted: `activity`, `next_step`, `blockers`. `_ensure_sessions_schema_columns_exist()` adds `topics`, `active_minutes`, `activity`, `next_step`, `blockers`. SQL SELECTs include `screen_text, file_path, is_user_active, category`. |
-| `backend/routes/recall.py` | FTS5-first sequential pipeline. (1) Classify intent. (2) Parse time reference. (3) Optionally fetch system_state events. (4) FTS5 keyword search (returns `file_path` + `screen_text` columns now). (5) URL dedup. (6) Session lookup → AI SSE (**Groq** during the beta — `stream_recall_response_groq()`, `groq_service.py`; Claude's `stream_recall_response()` still exists in `claude_service.py`, unused). **Session lookup strategy differs by query type:** for queries WITHOUT a time range, uses Qdrant semantic search (up to 8 sessions, re-ranked by similarity × 0.7 + recency × 0.3); for queries WITH a time range ("yesterday", "today", etc.), uses `fetch_sessions_by_time_range()` as primary source (one session per distinct project_name, ordered by active_minutes then duration), then fills remaining slots up to 12 with Qdrant results for projects not already covered. This ensures "what did I work on yesterday?" returns all projects rather than only the semantically closest one. Context block: `screen_content` events formatted as `[time] In <app>: "<screen_text snippet>"`. Session block shows fused fields: `What you were doing: <activity>` (falls back to `Summary` for pre-Phase-2.9 sessions), `Goal`, `Where they left off: <next_step>`, `Left off: <last_action>`, `Blocked on: <blockers>`, `Topics`, `Resources`, `Active time`. The context label was renamed from `Next step:` to `Where they left off:` as part of the context-restoration UX philosophy change. **Two independent fallback tiers (COST-003, ADR-006):** semantic search (Qdrant/Voyage) soft-fails to an empty list on `VoyageKeyNotConfiguredError` or any `httpx` transport/status error — Groq synthesis still runs on FTS5-only (+ DB-scan, for time-range queries) context either way, so a Groq-keyed user with no Voyage key still gets a real AI-composed answer, not a raw dump. Only a *Groq*-side failure (no Groq key → the Worker's 401, COST-002; Worker down; rate-limited) triggers the plain-text offline fallback (`_format_fts5_fallback`, on `httpx.ConnectError`/`TimeoutException`/`HTTPStatusError`) — genuinely nothing AI-generated is available at that point. |
+| `backend/routes/recall.py` | FTS5-first sequential pipeline. (1) Classify intent. (2) Parse time reference. (3) Optionally fetch system_state events. (4) FTS5 keyword search (returns `file_path` + `screen_text` columns now). (5) URL dedup. (6) Session lookup → AI SSE (**Groq** during the beta — `stream_recall_response_groq()`, `groq_service.py`; Claude's `stream_recall_response()` still exists in `claude_service.py`, unused). **Session lookup strategy differs by query type:** for queries WITHOUT a time range, uses Qdrant semantic search (up to 8 sessions, re-ranked by similarity × 0.7 + recency × 0.3); for queries WITH a time range ("yesterday", "today", etc.), uses `fetch_sessions_by_time_range()` as primary source (one session per distinct project_name, ordered by active_minutes then duration), then fills remaining slots up to 12 with Qdrant results for projects not already covered. This ensures "what did I work on yesterday?" returns all projects rather than only the semantically closest one. Context block: `screen_content` events formatted as `[time] In <app>: "<screen_text snippet>"`. Session block shows fused fields: `What you were doing: <activity>` (falls back to `Summary` for pre-Phase-2.9 sessions), `Goal`, `Where they left off: <next_step>`, `Left off: <last_action>`, `Blocked on: <blockers>`, `Topics`, `Resources`, `Active time`. The context label was renamed from `Next step:` to `Where they left off:` as part of the context-restoration UX philosophy change. **Two independent fallback tiers (COST-003, ADR-006):** semantic search (Qdrant/Voyage) soft-fails to an empty list on `VoyageUnavailableError` or any `httpx` transport/status error — Groq synthesis still runs on FTS5-only (+ DB-scan, for time-range queries) context either way, so a Groq-keyed user with no Voyage key still gets a real AI-composed answer, not a raw dump. Only a *Groq*-side failure (no Groq key → the Worker's 401, COST-002; Worker down; rate-limited) triggers the plain-text offline fallback (`_format_fts5_fallback`, on `httpx.ConnectError`/`TimeoutException`/`HTTPStatusError`) — genuinely nothing AI-generated is available at that point. **COST-005:** the fallback message names the actual cause (`_describe_groq_unavailable_reason()` — no/bad key, rate-limited, network problem, or outage) instead of always guessing "you may be offline," and always states the search itself never left the device. |
 | `backend/routes/capture.py` | POST /capture (extension only — Rust writes direct). Checks pause state, excluded app names, and excluded domains (all cached 30s). Domain extracted via `urlparse().netloc` before every browser event. URL dedup: `_find_recent_url_event()` queries `events(url, timestamp)` with `_URL_DEDUP_WINDOW_MS = 10_000`; extension beats native_browser (drop native); if native in DB and extension arrives, DELETE native INSERT extension. `page_text` for `page_content` events and `raw_content` for `search_query` events are passed through `redact_sensitive_content()` before INSERT. GET /events for timeline. |
 | `backend/routes/privacy.py` | Excluded apps CRUD, pause/resume, capture status, full data wipe (SQLite + Qdrant). Wipe uses SQLite secure-delete, WAL truncation, and `VACUUM`; it deletes FTS rows, sessions, memory objects, and extension pairings before clearing Qdrant vectors. `GET/POST/DELETE /privacy/excluded-domains` — domain exclusion CRUD. `GET/POST /privacy/browser-capture` — native browser URL capture toggle; returns `{native_enabled, browsers: [...]}`. `GET/POST /privacy/screen-content` — on-screen content capture toggle; `SetScreenContentRequest(enabled: bool)` UPDATEs `screen_content_settings`. `GET/POST /privacy/file-watching` — enable/disable file activity capture. `POST/DELETE /privacy/watched-folders` — add/remove watched folder paths (JSON body). |
 | `backend/routes/feedback.py` | POST /feedback — stores rating + comment in SQLite. |
@@ -501,9 +494,7 @@ either means designing and building that from scratch, not just flipping a flag.
 | `backend/services/voyage_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/embed`. Body: `{"input": [text], "model": "voyage-3-lite", "input_type": "document"}`. Returns 512-dim float list. **BYOK-only since COST-002**: `database.get_voyage_api_key()` is read immediately before every call; with no personal key, raises `VoyageUnavailableError` immediately with no request sent (no maintainer-funded fallback exists) — callers (`qdrant_service.py`, `routes/recall.py`) already treat any embedding failure as non-fatal. **COST-005:** a 401/403 or 429 also raises `VoyageUnavailableError` immediately (no retry) and starts a module-level cooldown (`_voyage_rate_limited_until` — 300s for auth failures, `Retry-After`/90s default for rate limits) so the rest of a backlog batch doesn't independently rediscover the same failure; any other non-2xx or transport error retries up to 3 times total (1s, 2s backoff) before raising — bounded, never indefinite. `test_voyage_api_key()` validates a candidate key with one minimal real embed call — Voyage has no free introspection endpoint the way Groq's `/models` does. |
 | `backend/services/time_parser.py` | Standard-library time reference parser (no third-party deps). `extract_time_range_from_query(query, now_ms)` checks 11 patterns most-specific-first (e.g. "yesterday morning" before "yesterday") and returns `{"start_ms": int, "end_ms": int, "label": str}` or `None`. Used by `recall.py` to filter both FTS5 and Qdrant results to a concrete time window. |
 | `backend/services/redaction_service.py` | Inline sensitive-content redaction for browser-captured text. Ports Rust clipboard patterns as `re.sub()` — replaces only matched substrings (preserves article context). All 7 pattern steps run on every call. JWT uses `eyJ` anchor to avoid false positives in long text. API key pattern uses negative lookbehind + 8-char minimum body. Called by `capture.py` for `page_text` and search `raw_content` before DB write. |
-| `backend/services/qdrant_service.py` | `QdrantClient(path=QDRANT_STORAGE_PATH)` singleton (default `~/.orbit/qdrant_storage`). Collection `orbit_sessions`, 512 dims, cosine. Raw vector upsert (no fastembed). Storage is repaired to owner-only permissions the first time it's created. **Lazy end to end (COST-003, ADR-006):** `add_session_embedding()`/`search_sessions_semantic()` call `generate_text_embedding()` *before* touching the client — with no personal Voyage key that raises `VoyageKeyNotConfiguredError` immediately and Qdrant is never opened; only on a successful embedding do they call `initialize_qdrant_collection()` then `_get_client()`. |
-| `backend/services/analytics_service.py` | PostHog Python singleton. Device ID in `~/.orbit/device_id`, repaired to owner-only permissions. Strips forbidden property keys. try/except on every call — never crashes the app. |
-| `backend/services/sentry_service.py` | `sentry_sdk.init()` with `enable_logs=True`, `send_default_pii=False`. Only runs if `SENTRY_DSN` is set in env. |
+| `backend/services/qdrant_service.py` | `QdrantClient(path=QDRANT_STORAGE_PATH)` singleton (default `~/.orbit/qdrant_storage`). Collection `orbit_sessions`, 512 dims, cosine. Raw vector upsert (no fastembed). Storage is repaired to owner-only permissions the first time it's created. **Lazy end to end (COST-003, ADR-006):** `add_session_embedding()`/`search_sessions_semantic()` call `generate_text_embedding()` *before* touching the client — with no personal Voyage key that raises `VoyageUnavailableError` immediately and Qdrant is never opened; only on a successful embedding do they call `initialize_qdrant_collection()` then `_get_client()`. |
 | `extension/src/background.ts` | MV3 service worker. All state in `chrome.storage.session` (never global vars). Emits bare `url` events on tab navigation (deduped by `lastSentUrl`). Handles three content-script message types: `page_content`, `search_query`, `link_click` — relays them to POST /capture. `onMessage` callback is synchronous (fire-and-forget) to keep the MV3 message channel intact. Fails silently when backend unreachable. |
 | `extension/src/content.ts` | Runs in every page context. 5-second visibility filter — pages the user bounced off are discarded. On threshold: detects search queries first (Google, YouTube, Bing, DuckDuckGo); otherwise runs `@mozilla/readability` on a DOM clone to extract article body (≤2 000 chars), author, site_name, excerpt. Sends `page_content` or `search_query` to the background worker on tab departure (`visibilitychange` + `pagehide`). Left-click listener captures `link_click` events with 500 ms debounce. |
 | `extension/package.json` | Runtime dep: `@mozilla/readability@^0.6.0` — ships own `index.d.ts`; do **NOT** install `@types/mozilla-readability` (conflicts). DevDeps: `@crxjs/vite-plugin`, `@types/chrome`, `typescript`, `vite`. |
@@ -841,9 +832,6 @@ local macOS Keychain, never in `backend/.env` or any other config file.
 ### backend/.env (gitignored)
 ```
 WORKER_URL=https://your-worker.workers.dev
-SENTRY_DSN=your_backend_sentry_dsn
-POSTHOG_API_KEY=phc_your_key
-POSTHOG_HOST=https://us.i.posthog.com
 ORBIT_DB_PATH=~/.orbit/orbit.db
 QDRANT_STORAGE_PATH=~/.orbit/qdrant_storage
 APP_ENVIRONMENT=beta
@@ -853,23 +841,19 @@ PORT=8000
 
 ### app/.env (gitignored — VITE_* vars bundled into binary)
 ```
-VITE_SENTRY_DSN=your_frontend_sentry_dsn
 VITE_APP_ENVIRONMENT=beta
 VITE_APP_VERSION=0.1.0
-VITE_POSTHOG_PROJECT_KEY=phc_your_key
-VITE_POSTHOG_HOST=https://us.i.posthog.com
-SENTRY_ORG=your_org_slug
-SENTRY_PROJECT=orbit-frontend
-SENTRY_AUTH_TOKEN=your_token  ← build-time only, also add to GitHub Actions secrets
 ```
 
 ### GitHub Actions secrets (never in code or binary)
 ```
-SENTRY_AUTH_TOKEN
 TAURI_SIGNING_PRIVATE_KEY
 TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 APPLE_ID, APPLE_TEAM_ID, APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD
 ```
+
+No PostHog/Sentry secrets exist anywhere in this list — neither ships in
+the app at all (OBS-001).
 
 ---
 
@@ -1048,7 +1032,6 @@ and auto-advances when granted.
 - Functional components + hooks. No class components (except `ErrorBoundary`).
 - No `any`. All types in `types/`.
 - All `invoke()` calls in `hooks/`. Never in components.
-- All PostHog calls via `useAnalytics()`. Never import posthog-js in components.
 - Zustand only for global state. No prop drilling beyond 2 levels.
 - Tailwind utility classes. No inline styles.
 
@@ -1099,7 +1082,9 @@ and auto-advances when granted.
 - Use global variables in the Chrome Extension service worker.
 - Write sync FastAPI route handlers.
 - Use `any` in TypeScript.
-- Call posthog-js directly in components — use `useAnalytics()`.
+- Add any remote telemetry (crash reporting, analytics) back — removed
+  entirely and deliberately (OBS-001). If this ever changes, it needs a
+  genuine opt-in/revoke design, not just re-adding the old SDKs.
 - Use developer-specific language in any user-facing copy.
 - Run `xcodebuild` from the terminal — invalidates TCC permissions.
 - Log, store, or transmit keystroke content, key codes, mouse coordinates, or click targets. `CGEventSourceSecondsSinceLastEventType` is an IDLE TIMER ONLY — it returns seconds since last event, never what the event was.

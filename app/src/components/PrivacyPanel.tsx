@@ -6,7 +6,6 @@ import {
 } from "./CaptureConsentChoices";
 import { usePrivacySettings } from "../hooks/usePrivacySettings";
 import { useApiKeySettings } from "../hooks/useApiKeySettings";
-import { useAnalytics } from "../hooks/useAnalytics";
 
 interface PauseDurationOption {
   label: string;
@@ -160,7 +159,6 @@ function CaptureStatusSection({
 }: CaptureStatusSectionProps) {
   const [showDurationPicker, setShowDurationPicker] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const { captureEvent } = useAnalytics();
 
   async function handlePauseOptionClick(
     durationMinutes: number | null
@@ -168,7 +166,6 @@ function CaptureStatusSection({
     setActionError(null);
     try {
       await onPause(durationMinutes);
-      captureEvent("capture_paused");
       setShowDurationPicker(false);
     } catch {
       setActionError("Could not pause capture.");
@@ -1066,14 +1063,12 @@ function DangerZoneSection({ isWiping, onWipe }: DangerZoneSectionProps) {
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [wiped, setWiped] = useState(false);
   const [wipeError, setWipeError] = useState<string | null>(null);
-  const { captureEvent } = useAnalytics();
 
   async function handleConfirmWipe(): Promise<void> {
     setShowConfirmDialog(false);
     setWipeError(null);
     try {
       await onWipe();
-      captureEvent("all_memory_wiped");
       setWiped(true);
     } catch {
       setWipeError("Wipe failed.");

@@ -1,37 +1,15 @@
 import path from "path";
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { sentryVitePlugin } from "@sentry/vite-plugin";
 
 // https://vite.dev/config/
-export default defineConfig(({ mode }) => {
-  // loadEnv reads app/.env and app/.env.[mode] — gives the Sentry plugin
-  // access to SENTRY_AUTH_TOKEN without relying on process.env directly.
-  const env = loadEnv(mode, process.cwd(), "");
-
+export default defineConfig(() => {
   // @ts-expect-error process is a nodejs global
   const host = process.env.TAURI_DEV_HOST;
 
   return {
-    plugins: [
-      react(),
-      tailwindcss(),
-      // Sentry plugin uploads source maps on production builds so stack traces
-      // in the dashboard show original TypeScript lines, not minified output.
-      // `filesToDeleteAfterUpload` removes .map files after upload so they are
-      // never publicly served from the Tauri bundle.
-      // Skipped automatically in dev when SENTRY_AUTH_TOKEN is not set.
-      sentryVitePlugin({
-        org: env.SENTRY_ORG,
-        project: env.SENTRY_PROJECT,
-        authToken: env.SENTRY_AUTH_TOKEN,
-        disable: !env.SENTRY_AUTH_TOKEN,
-        sourcemaps: {
-          filesToDeleteAfterUpload: ["./**/*.map"],
-        },
-      }),
-    ],
+    plugins: [react(), tailwindcss()],
 
     resolve: {
       alias: {
@@ -40,9 +18,11 @@ export default defineConfig(({ mode }) => {
     },
 
     build: {
-      // "hidden" generates source maps and uploads them to Sentry, then
-      // deletes them — they never ship inside the Tauri .dmg bundle.
-      sourcemap: "hidden",
+      // No remote crash reporting (OBS-001) has any use for source maps, and
+      // an unreferenced one would otherwise still ship inside the Tauri
+      // bundle unless something explicitly strips it — simplest to just not
+      // generate them.
+      sourcemap: false,
     },
 
     // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

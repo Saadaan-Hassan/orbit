@@ -37,22 +37,13 @@ pub fn generate_local_api_session_token() -> String {
 // app state so the quit handler can cleanly terminate it.
 // ---------------------------------------------------------------------------
 
-/// Compile-time values baked into the sidecar at `pnpm tauri build` time.
+/// Compile-time value baked into the sidecar at `pnpm tauri build` time.
 /// Gemini and Voyage keys are NOT here — they live in Cloudflare Worker
-/// secrets and never touch the user's machine.
-/// In dev mode these are empty strings; the uv backend reads them from backend/.env.
+/// secrets and never touch the user's machine. No PostHog/Sentry constant
+/// exists here — neither ships in the app at all (OBS-001).
+/// In dev mode this is an empty string; the uv backend reads it from backend/.env.
 #[cfg(not(debug_assertions))]
 const SIDECAR_WORKER_URL: &str = match option_env!("WORKER_URL") {
-    Some(v) => v,
-    None => "",
-};
-#[cfg(not(debug_assertions))]
-const SIDECAR_POSTHOG_API_KEY: &str = match option_env!("POSTHOG_API_KEY") {
-    Some(v) => v,
-    None => "",
-};
-#[cfg(not(debug_assertions))]
-const SIDECAR_SENTRY_DSN: &str = match option_env!("SENTRY_DSN_BACKEND") {
     Some(v) => v,
     None => "",
 };
@@ -467,8 +458,6 @@ where
                     .env("ORBIT_DB_PATH", &orbit_db_path)
                     .env("QDRANT_STORAGE_PATH", &qdrant_path)
                     .env("WORKER_URL", SIDECAR_WORKER_URL)
-                    .env("POSTHOG_API_KEY", SIDECAR_POSTHOG_API_KEY)
-                    .env("SENTRY_DSN", SIDECAR_SENTRY_DSN)
                     .env("APP_ENVIRONMENT", "production")
                     .env("ORBIT_LOCAL_API_SESSION_TOKEN", &local_api_session_token)
                     .spawn()

@@ -164,11 +164,9 @@ export default function PrivacyPolicy() {
               (not yet available).
             </p>
             <p className="text-zinc-400">
-              Orbit also transmits non-personal telemetry for crash reporting
-              (Sentry) and anonymous usage analytics (PostHog). These never
-              include captured content, query text, or anything that identifies
-              what you were working on. You can disable analytics at any time
-              in the app.
+              Orbit sends no telemetry of any kind. There is no crash
+              reporting and no usage analytics — nothing about your device
+              or how you use the app is transmitted anywhere.
             </p>
           </div>
         </section>
