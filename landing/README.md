@@ -1,4 +1,11 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Orbit landing site
+
+A fully static Next.js site (no server, no database, no email — see
+`next.config.ts`'s `output: "export"`). See the root [`README.md`](../README.md)
+for what Orbit is and [`AGENTS.md`](../AGENTS.md) for the full architecture
+reference.
+
+This project was originally bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
 

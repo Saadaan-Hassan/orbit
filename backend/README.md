@@ -1,5 +1,9 @@
 # Orbit backend
 
+FastAPI backend (Python, `uv`). See the root [`README.md`](../README.md) for
+what Orbit is and how to build every workspace, and [`AGENTS.md`](../AGENTS.md)
+for the full architecture reference.
+
 ## Privacy regression suite
 
 From `backend/`, run the complete local privacy, consent, authentication, and

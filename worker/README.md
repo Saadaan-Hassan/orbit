@@ -2,7 +2,8 @@
 
 A lightweight, stateless Cloudflare Worker. It exists to relay two provider
 APIs — Groq and Voyage AI — from Orbit's desktop backend to `api.groq.com`
-and `api.voyageai.com`.
+and `api.voyageai.com`. See the root [`README.md`](../README.md) for what
+Orbit is and [`AGENTS.md`](../AGENTS.md) for the full architecture reference.
 
 ## What changed (COST-002)
 

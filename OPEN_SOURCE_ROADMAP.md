@@ -186,7 +186,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | OBS-001 | Agent | DONE | Remove default remote telemetry or make it genuine opt-in | MAN-000, PRIV-001 |
 | SITE-001 | Agent | DONE | Convert landing site to static, no-waitlist operation | MAN-000 |
 | DOC-001 | Agent | PARTIAL | Add chosen license and dependency/asset notices | MAN-002, MAN-005 |
-| DOC-002 | Agent | TODO | Create the root public README and build guide | COST-005, DOC-001 |
+| DOC-002 | Agent | PARTIAL | Create the root public README and build guide | COST-005, DOC-001 |
 | DOC-003 | Agent | TODO | Rewrite privacy policy and all product privacy claims | PRIV-006, OBS-001 |
 | DOC-004 | Agent | TODO | Add contribution, security, support, conduct, and governance files | MAN-004, DOC-001 |
 | DOC-005 | Agent | TODO | Add architecture, threat model, and exact data-flow documentation | SEC-004, PRIV-006, COST-005 |
@@ -1132,22 +1132,39 @@ Acceptance criteria:
 
 ### DOC-002 — Root README and build guide
 
+**Current status: PARTIAL (2026-09-25).** Root `README.md` written from
+scratch (none existed before). Every item below is met except screenshots —
+this environment has no way to launch the GUI app and capture real images
+of it, so that item is a genuine, flagged gap, not an oversight. Also
+replaced the default boilerplate `app/README.md` (still had the unedited
+`create-next-app`/Tauri template text) and added root-guide links to
+`backend/README.md`, `worker/README.md`, and `landing/README.md` (the
+latter also still had un-customized boilerplate intro text).
+
 The root README must include:
 
-- [ ] honest description and current maturity/status;
-- [ ] screenshots/demo whose content contains no private user data;
-- [ ] supported macOS/architecture matrix;
-- [ ] short architecture and capture-to-cloud data-flow summary;
-- [ ] exactly what is captured, stored, transmitted and excluded;
-- [ ] first-launch permission/consent behavior;
-- [ ] offline capability and optional BYOK setup;
-- [ ] source build prerequisites and commands for every workspace;
-- [ ] release downloads, checksums/signature verification and Gatekeeper guidance;
-- [ ] no instruction to disable Gatekeeper globally;
-- [ ] cost statement: no maintainer-hosted AI; users control provider charges;
-- [ ] links to privacy, security, contribution, support, roadmap and license;
-- [ ] known limitations and project roadmap;
-- [ ] statement that open-source software is provided without warranty.
+- [x] honest description and current maturity/status;
+- [ ] screenshots/demo whose content contains no private user data — not
+      done; no way to launch and capture the GUI app in this environment.
+      A maintainer should add real screenshots before public launch.
+- [x] supported macOS/architecture matrix;
+- [x] short architecture and capture-to-cloud data-flow summary;
+- [x] exactly what is captured, stored, transmitted and excluded;
+- [x] first-launch permission/consent behavior;
+- [x] offline capability and optional BYOK setup;
+- [x] source build prerequisites and commands for every workspace;
+- [x] release downloads, checksums/signature verification and Gatekeeper guidance
+      — checksum verification is honestly stated as not yet available
+      (tracked at `REL-002`) rather than described as if it exists.
+- [x] no instruction to disable Gatekeeper globally — explicit per-app-only
+      instruction, with an explicit "never disable globally" statement.
+- [x] cost statement: no maintainer-hosted AI; users control provider charges;
+- [x] links to privacy, security, contribution, support, roadmap and license
+      — security/contribution/support are honestly listed as "not
+      published yet" (`DOC-004`, not done) rather than linked to files
+      that don't exist.
+- [x] known limitations and project roadmap;
+- [x] statement that open-source software is provided without warranty.
 
 Replace empty/default component READMEs or link them clearly to the root guide.
 
@@ -1539,6 +1556,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-25 | OBS-001 | DONE | `backend/main.py`, `backend/scheduler.py`, `backend/routes/feedback.py`, `backend/routes/recall.py`, `backend/services/analytics_service.py` (deleted), `backend/services/sentry_service.py` (deleted), `backend/pyproject.toml`/`uv.lock`, `app/src/main.tsx`, `app/src/instrument.ts` (deleted), `app/src/hooks/useAnalytics.ts` (deleted), `app/src/hooks/useRecall.ts`, `app/src/components/{ErrorBoundary,MemoryViewer,PrivacyPanel}.tsx`, `app/vite.config.ts`, `app/package.json`/`pnpm-lock.yaml`, `app/src-tauri/src/lib.rs`, `app/src-tauri/tauri.conf.json`, `.github/workflows/release.yml`, `landing/src/app/privacy/page.tsx`, `docs/adr/ADR-005-tauri-shell-hardening.md` (update note), `docs/adr/ADR-007-remove-telemetry.md`, `AGENTS.md` | Maintainer confirmed removal over opt-in (see status note above). Deleted both service files and every `capture_analytics_event`/`useAnalytics`/`Sentry.captureException` call site; `ErrorBoundary` now logs render errors to `console.error` only. Removed `posthog`/`sentry-sdk[fastapi]` (backend, via `uv remove`) and `@posthog/react`/`@sentry/react`/`posthog-js`/`@sentry/vite-plugin` (frontend, via `pnpm remove`), and the `sentryVitePlugin`/hidden-sourcemap step from `vite.config.ts` (sourcemaps now off — nothing consumes them). Removed the `SIDECAR_POSTHOG_API_KEY`/`SIDECAR_SENTRY_DSN` compile-time constants and their `.env()` sidecar-spawn calls from `lib.rs` (`cargo check` confirmed clean). Removed the six telemetry secrets from the release workflow's Tauri build step. Narrowed the CSP's `connect-src` to drop `*.posthog.com`/`*.i.posthog.com`/`*.sentry.io` (nothing calls them anymore). Fixed the landing privacy policy's now-false claim that Orbit sends telemetry. Verification: backend `uv run python -m unittest discover -s tests -p 'test_*.py'` 66/66 unaffected; frontend `pnpm build` clean, bundle dropped 830 KB → 492 KB JS (652 → 313 modules, chunk-size warning gone); `cargo check --bin app` and `cargo test --bin app` 37/37 clean; `git diff --check` clean. | Historical `docs/PHASE_*.md` build logs still describe the old Sentry/PostHog setup as originally built — left alone, in scope for `DOC-006` (stale internal docs), not this task. Next: `SITE-001`. |
 | 2026-09-25 | SITE-001 | DONE | `landing/next.config.ts`, `landing/src/app/page.tsx`, `landing/src/app/opengraph-image.tsx`, `landing/src/app/beta/page.tsx`, `landing/src/app/not-found.tsx`, `landing/src/components/{header,footer}.tsx`, `landing/package.json`/`pnpm-lock.yaml`, `landing/.env.example`, `landing/README.md`, `landing/src/lib/waitlist-actions.ts` (deleted), `landing/src/lib/supabase.ts` (deleted), `landing/src/components/waitlist-form.tsx` (deleted), `landing/src/emails/waitlist-confirmation.tsx` (deleted), `landing/supabase-schema.sql` (deleted), `AGENTS.md` | Scope confirmed with the maintainer before implementing (see status note above): direct public download buttons on the main page, not a "watch releases" link. Deleted the waitlist form, its Server Action, the Supabase client, the React Email template, and the Supabase schema file; removed `@supabase/supabase-js`/`resend`/`react-email`/`zod` (all now-unused). Added `output: "export"` to `next.config.ts`. Rewrote `page.tsx`'s hero: same download buttons and unsigned/notarization "what to expect" disclosure `/beta` already has, using the same already-public `orbit-releases` URLs. Fixed two build errors static export surfaced: `opengraph-image.tsx` needed `export const dynamic = "force-static"`, which is incompatible with its existing `runtime = "edge"` (removed); every `next/image` usage (header, footer, beta, not-found) needed the `unoptimized` prop since default Image Optimization requires a server. Updated `package.json` (`start` removed — `next start` doesn't work against an export build; added `preview` via `npx serve out`) and `README.md` accordingly. Fixed copy that referenced "waitlist"/"Join the Waitlist" in `beta/page.tsx` and the OG image text, now stale. Fixed `privacy/page.tsx`'s telemetry claim while already there (see `OBS-001`'s entry — done as part of that task, not this one, but touches this same directory). Verification: `pnpm build` succeeds, every route reports `○` (static); inspected `out/` directly — pure static files, zero API routes, zero server bundle; `pnpm lint` clean. | None — all four acceptance criteria verified directly against the actual build output, no live-app gap this time. Next: `DOC-001`. |
 | 2026-09-25 | DOC-001 | PARTIAL | `LICENSE` (new), `THIRD_PARTY_NOTICES.md` (new), `backend/pyproject.toml`, `app/src-tauri/Cargo.toml`, `app/package.json`, `landing/package.json`, `worker/package.json`, `OPEN_SOURCE_ROADMAP.md` (`MAN-002` decision recorded, row left for maintainer to flip) | `MAN-002` resolved via direct conversation with the maintainer: Apache-2.0, after a background dependency-license scan (582 Rust crates, 40 Python packages, all JS/TS trees) confirmed nothing in the codebase would constrain the choice. Fetched the license text directly from `apache.org/licenses/LICENSE-2.0.txt` via `curl` (not retyped from memory) and diffed the written `LICENSE` file's body against it byte-for-byte before proceeding. Copyright line uses "Saadaan Hassan, 2026" (matches every commit author and the actual project start) — proposed, not separately confirmed; flagged in `MAN-002`'s own entry for the maintainer to correct if wrong. `THIRD_PARTY_NOTICES.md` documents the scan's findings in full, including the non-blocking borderline cases (MPL-2.0, LGPL, GPLv2-with-bootloader-exception, and a `BSL-1.0` naming false-alarm — Boost Software License, not Business Source License). Added `license = "Apache-2.0"` to all five workspace manifests; `worker/package.json` had been left at npm's `"ISC"` init default, never actually chosen — fixed. Verified: all three `package.json` files still valid JSON, `uv run` still resolves `pyproject.toml`, `cargo check --bin app` still compiles. | Two real gaps, both external to this session: asset notices (fonts/icons/images/logo) need `MAN-005`'s redistribution-rights review first, and GitHub's license auto-detection can't be confirmed without a live repo to check it against. Maintainer should also confirm the copyright-holder name in `LICENSE` is correct, then flip `MAN-002` to `DONE` themselves. Next: `DOC-002`. |
+| 2026-09-25 | DOC-002 | PARTIAL | `README.md` (new), `app/README.md`, `backend/README.md`, `worker/README.md`, `landing/README.md` | Wrote the root README from scratch — none existed before. Covers status/maturity (including the two honest caveats: unsigned/unnotarized, no checksum verification yet), what Orbit does, a full capture/never-capture inventory pulled from the codebase (not old marketing copy), first-launch consent behavior, the BYOK cost model, install instructions with the safe per-app Gatekeeper bypass only (explicitly states never to disable Gatekeeper globally), build commands for all four workspaces plus each one's test command, known limitations, and the warranty disclaimer. Replaced `app/README.md` (still the unedited `create-next-app`/Tauri boilerplate) and added a root-guide link to `backend/README.md`, `worker/README.md`, and `landing/README.md` (the last also still had un-customized boilerplate text). Verified the "Privacy tab" UI label referenced actually matches `App.tsx`'s tab button text, and simplified one heading to avoid an em-dash/anchor-link ambiguity. | Screenshots/demo images were not added — this environment can't launch and interact with the GUI app to capture real images of it; a maintainer should add some before public launch. Next: `DOC-003`. |
 | 2026-09-25 | APPSEC-001 | PARTIAL | `app/src-tauri/Cargo.toml`, `app/src-tauri/tauri.conf.json`, `app/src-tauri/capabilities/default.json`, `docs/adr/ADR-005-tauri-shell-hardening.md` | Removed the unconditional `devtools` Cargo feature (WRY still exposes devtools automatically in debug builds; release builds no longer force it on). Added a restrictive CSP (`default-src 'self'` plus a `connect-src` scoped to the fixed-port local backend, PostHog, and Sentry — the only hosts the webview itself calls; the Cloudflare Worker and AI providers are never in `connect-src` because only the Python backend calls them). Rewrote `capabilities/default.json` to grant exactly what the webview calls: removed `global-shortcut:default` and six unused `core:window:allow-*` permissions (the hotkey and those window transitions are Rust-native and were never gated by this file), and added the previously-missing `updater:allow-check`, `updater:allow-download-and-install`, `process:allow-restart`, and `dialog:allow-open` — without which auto-update and the watched-folder picker were silently non-functional (both call sites swallow errors by design). Existing entitlements were reviewed and left unchanged; each already carries an inline justification comment and is exercised by a real code path. `macOSPrivateApi: true` is required by the main window's `shadow: false` and the overlay window's transparency/click-through. Verification: `cargo check --bin app` (also validates the capabilities file against plugin permission schemas), `cargo test --bin app` 37/37, `pnpm build` (TypeScript + Vite), `git diff --check` all passed. | Required maintainer action: build a real `.dmg`, confirm right-click → Inspect Element is unavailable, and confirm the local API, PostHog/Sentry, the update check, and the folder picker all still work under the new CSP/capability grant. Record the outcome here before marking `APPSEC-001` DONE. Next: `COST-001`. `PRIV-002`/`PRIV-003` remain PARTIAL, independent of this task. |
 
 ---
