@@ -118,7 +118,6 @@ export function useMemoryData(): UseMemoryDataReturn {
       setEventsOffset(0);
       fetchEvents(0, filter, false);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
 
@@ -126,14 +125,12 @@ export function useMemoryData(): UseMemoryDataReturn {
     const nextOffset = eventsOffset + EVENTS_PAGE_SIZE;
     setEventsOffset(nextOffset);
     await fetchEvents(nextOffset, eventsTypeFilter, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventsOffset, eventsTypeFilter]);
 
   const loadMoreSessions = useCallback(async (): Promise<void> => {
     const nextOffset = sessionsOffset + SESSIONS_PAGE_SIZE;
     setSessionsOffset(nextOffset);
     await fetchSessions(nextOffset, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionsOffset]);
 
   const deleteEvent = useCallback(async (eventId: string): Promise<void> => {

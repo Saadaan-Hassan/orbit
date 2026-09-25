@@ -1,3 +1,9 @@
+// Loaded via <script type="module"> in popup.html. The `export {}` below is
+// only to make TypeScript treat this file as a module during type-checking
+// (so top-level `const status` doesn't collide with the DOM's ambient
+// `Window.status` global) — it has no effect on the bundled runtime output.
+export {};
+
 const status = document.querySelector<HTMLParagraphElement>("#status")!;
 const code = document.querySelector<HTMLInputElement>("#code")!;
 const pair = document.querySelector<HTMLButtonElement>("#pair")!;

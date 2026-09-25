@@ -7,6 +7,8 @@
  * within the same browser session.
  */
 
+import { isUrlCapturable } from "./lib/url-capture";
+
 const ORBIT_CAPTURE_ENDPOINT = "http://localhost:47821/capture";
 const ORBIT_PAIR_ENDPOINT = "http://localhost:47821/extension/pair";
 
@@ -52,27 +54,9 @@ type ReceivedContentMessage =
   | ReceivedSearchQuery
   | ReceivedLinkClick;
 
-// URL schemes that are browser-internal or local-filesystem and must never be
-// sent to Orbit. "file://" covers local HTML files; the extension:// variants
-// cover browser-internal extension pages across Chrome, Safari, and Chromium forks.
-const BLOCKED_URL_PREFIXES = [
-  "chrome://",
-  "chrome-extension://",
-  "safari-extension://",
-  "about:",
-  "edge://",
-  "brave://",
-  "file://",
-];
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function isUrlCapturable(url: string): boolean {
-  if (!url) return false;
-  return !BLOCKED_URL_PREFIXES.some((prefix) => url.startsWith(prefix));
-}
 
 async function readLastSentUrl(): Promise<string> {
   const stored = await chrome.storage.session.get("lastSentUrl");

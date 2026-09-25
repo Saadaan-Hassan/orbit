@@ -11,7 +11,8 @@
   },
   "homepage": "https://heyorbit.saadaan.dev",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "build": "vite build"
   },
   "keywords": [],
@@ -22,7 +23,8 @@
     "@crxjs/vite-plugin": "^2.4.0",
     "@types/chrome": "^0.1.43",
     "typescript": "^6.0.3",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vitest": "^4.1.11"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0"
