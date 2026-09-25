@@ -7,9 +7,11 @@ Usage:
   uv run python cleanup_orphan_qdrant_vectors.py
 """
 import os
+import sqlite3
+from uuid import UUID
+
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointIdsList
-import sqlite3
 
 QDRANT_PATH = os.path.expanduser("~/.orbit/qdrant_storage")
 DB_PATH     = os.path.expanduser("~/.orbit/orbit.db")
@@ -18,8 +20,10 @@ COLLECTION  = "orbit_sessions"
 client = QdrantClient(path=QDRANT_PATH)
 db     = sqlite3.connect(DB_PATH)
 
-# Get every point ID currently in Qdrant
-all_ids: list[int] = []
+# Get every point ID currently in Qdrant. Qdrant point IDs are typed as
+# int | str | UUID in general, even though every point this codebase
+# creates uses an int ID — match its real type rather than assume.
+all_ids: list[int | str | UUID] = []
 offset = None
 while True:
     result, next_offset = client.scroll(
@@ -45,7 +49,9 @@ if not all_ids:
 
 placeholders = ",".join(str(i) for i in all_ids)
 rows = db.execute(
-    f"SELECT CAST(embedding_id AS INTEGER) FROM sessions WHERE embedding_id IS NOT NULL AND CAST(embedding_id AS INTEGER) IN ({placeholders})"
+    "SELECT CAST(embedding_id AS INTEGER) FROM sessions "
+    "WHERE embedding_id IS NOT NULL "
+    f"AND CAST(embedding_id AS INTEGER) IN ({placeholders})"
 ).fetchall()
 db.close()
 

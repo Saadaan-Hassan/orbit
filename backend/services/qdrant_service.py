@@ -16,8 +16,8 @@ from pathlib import Path
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
-from services.provider_context_sanitizer import sanitize_provider_metadata
 from services.local_storage_security import secure_directory_tree
+from services.provider_context_sanitizer import sanitize_provider_metadata
 from services.voyage_service import generate_text_embedding
 
 logger = logging.getLogger(__name__)
@@ -109,12 +109,16 @@ async def initialize_qdrant_collection() -> None:
     _MAX_STARTUP_RETRIES = 5
     _RETRY_DELAY_SECONDS = 1.0
 
+    def _list_collection_names(client: QdrantClient) -> list[str]:
+        return [c.name for c in client.get_collections().collections]
+
     for attempt in range(1, _MAX_STARTUP_RETRIES + 1):
         try:
             client = _get_client()
-            existing_collection_names = await asyncio.to_thread(
-                lambda: [c.name for c in client.get_collections().collections]
-            )
+            # Passed as an argument (not a lambda closing over the loop
+            # variable) — client is reassigned on retry, and this avoids
+            # depending on that closure being resolved before it changes.
+            existing_collection_names = await asyncio.to_thread(_list_collection_names, client)
             break  # client opened successfully
         except RuntimeError as exc:
             if "already accessed" not in str(exc):
@@ -253,6 +257,9 @@ async def search_sessions_semantic(
     )
 
     return [
-        {"score": scored_point.score, **scored_point.payload}
+        # payload is typed as optional by qdrant-client's own stubs — guard
+        # against it even though every point this codebase upserts always
+        # includes one, rather than risk a TypeError unpacking None.
+        {"score": scored_point.score, **(scored_point.payload or {})}
         for scored_point in query_response.points
     ]

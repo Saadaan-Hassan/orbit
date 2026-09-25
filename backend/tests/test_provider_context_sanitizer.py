@@ -9,7 +9,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-
 LEGACY_SECRET = "gsk_orbit_legacy_secret_that_must_not_leave_the_device_123456"
 CUSTOM_SECRET = "orbit-private-phrase"
 LEGACY_PATH = "/Users/alice/Orbit/private-notes.txt"

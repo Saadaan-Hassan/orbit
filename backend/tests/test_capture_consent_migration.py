@@ -13,7 +13,10 @@ from unittest.mock import patch
 async def _read_consent(database_module):
     async with database_module._async_engine.connect() as connection:
         result = await connection.execute(
-            database_module.text("SELECT accepted_at, clipboard, app_window, browser, file_activity, screen_content FROM capture_consent WHERE id = 1")
+            database_module.text(
+                "SELECT accepted_at, clipboard, app_window, browser, file_activity, "
+                "screen_content FROM capture_consent WHERE id = 1"
+            )
         )
         consent = result.fetchone()
         result = await connection.execute(database_module.text("SELECT is_paused FROM capture_state WHERE id = 1"))
@@ -49,7 +52,10 @@ class CaptureConsentMigrationTests(unittest.TestCase):
         def prepare(path: Path) -> None:
             connection = sqlite3.connect(path)
             try:
-                connection.execute("CREATE TABLE capture_state (id INTEGER PRIMARY KEY, is_paused INTEGER, paused_until INTEGER)")
+                connection.execute(
+                    "CREATE TABLE capture_state "
+                    "(id INTEGER PRIMARY KEY, is_paused INTEGER, paused_until INTEGER)"
+                )
                 connection.execute("INSERT INTO capture_state VALUES (1, 0, NULL)")
                 connection.commit()
             finally:

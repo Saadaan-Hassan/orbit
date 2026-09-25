@@ -90,7 +90,7 @@ class LocalApiSecurityConfig:
     allowed_hosts: frozenset[str] = LOOPBACK_HOSTS
 
     @classmethod
-    def from_environment(cls) -> "LocalApiSecurityConfig":
+    def from_environment(cls) -> LocalApiSecurityConfig:
         token = os.getenv(SESSION_TOKEN_ENV, "")
         environment = os.getenv("APP_ENVIRONMENT", "development").strip().lower()
 
@@ -230,6 +230,7 @@ class LocalApiSecurityMiddleware(BaseHTTPMiddleware):
     @staticmethod
     async def _is_active_extension(extension_id: str, token: str | None = None) -> bool:
         from sqlalchemy import text
+
         from database import _async_engine
 
         async with _async_engine.connect() as connection:

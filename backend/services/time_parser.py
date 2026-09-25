@@ -9,9 +9,8 @@ No third-party dependencies — standard library only.
 """
 
 import re
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Callable
-
 
 # ---------------------------------------------------------------------------
 # Internal helpers

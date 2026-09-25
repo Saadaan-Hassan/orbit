@@ -7,7 +7,8 @@ user's timezone because the backend runs on the user's own machine.
 """
 
 import logging
-from datetime import datetime, date as date_type
+from datetime import date as date_type
+from datetime import datetime
 
 from fastapi import APIRouter, Query
 from sqlalchemy import text

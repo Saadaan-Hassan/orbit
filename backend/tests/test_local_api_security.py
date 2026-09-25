@@ -1,21 +1,21 @@
 """Regression tests for the universal loopback API guard."""
 
+import importlib
 import secrets
 import unittest
-import importlib
 from unittest.mock import patch
 
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
 
 from local_api_security import (
-    LocalApiSecurityConfig,
-    LocalApiSecurityMiddleware,
-    PairingCodeRegistry,
     DEVELOPMENT_WEBVIEW_ORIGIN,
     SESSION_TOKEN_ENV,
     TAURI_WEBVIEW_ORIGIN,
+    LocalApiSecurityConfig,
+    LocalApiSecurityMiddleware,
+    PairingCodeRegistry,
 )
 
 

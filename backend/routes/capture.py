@@ -10,16 +10,18 @@ Consent, pause, and exclusion filtering are enforced at two layers:
 
 import asyncio
 import json
-import time
 import logging
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import Row, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
 
+from database import _async_engine, get_db
 from models.event import CaptureEvent
-from database import get_db, _async_engine
 from services.exclusion_policy import (
     domain_is_excluded,
     normalize_app_name,
@@ -98,8 +100,8 @@ async def _refresh_cache_if_stale() -> None:
         browser_consent = False
         file_activity_consent = False
         screen_content_consent = False
-        excluded_rows = []
-        domain_rows = []
+        excluded_rows: Sequence[Row[Any]] = []
+        domain_rows: Sequence[Row[Any]] = []
         watched_folders: tuple[str, ...] = ()
 
         try:

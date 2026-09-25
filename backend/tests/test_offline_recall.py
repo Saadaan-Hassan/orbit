@@ -16,7 +16,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 
 async def _fake_stream_recall_response_groq(**_kwargs):
@@ -200,7 +200,13 @@ class OfflineRecallTests(unittest.TestCase):
                 return original_get_client()
 
             with patch.object(qdrant, "_get_client", side_effect=tracking_get_client):
-                with self.assertRaises(Exception):
+                # RuntimeError, not the reloaded module's own VoyageUnavailableError
+                # class — qdrant/voyage_service are importlib.reload()'d above,
+                # so a class imported at this file's top level would be a
+                # different (stale) object than the one actually raised, and
+                # assertRaises would silently never match it. RuntimeError is
+                # VoyageUnavailableError's builtin base, unaffected by reload.
+                with self.assertRaises(RuntimeError):
                     # Directly exercise the embedding path the scheduler
                     # would otherwise skip entirely (see scheduler.py's
                     # get_voyage_api_key() guard) — proves the failure mode

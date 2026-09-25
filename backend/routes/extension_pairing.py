@@ -1,7 +1,7 @@
 """Explicit, revocable pairing for the capture-only Chrome extension."""
 
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -33,7 +33,7 @@ async def pair_extension(request: Request, body: PairRequest) -> dict[str, str]:
     extension_id = match.group(1)
     token = secrets.token_urlsafe(32)
     token_hash = PairingCodeRegistry._hash_token(token)
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
     async with _async_engine.begin() as connection:
         await connection.execute(
             text("""
@@ -58,7 +58,7 @@ async def extension_status() -> dict[str, bool]:
 
 @router.delete("/pairing")
 async def revoke_extension_pairings() -> dict[str, bool]:
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
     async with _async_engine.begin() as connection:
         await connection.execute(
             text("UPDATE paired_extensions SET revoked_at = :now WHERE revoked_at IS NULL"), {"now": now_ms}

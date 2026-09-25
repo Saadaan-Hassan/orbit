@@ -1,6 +1,6 @@
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Response
@@ -12,8 +12,8 @@ from routes.extension_pairing import router as extension_pairing_router
 from routes.feedback import router as feedback_router
 from routes.memory import router as memory_router
 from routes.privacy import router as privacy_router
-from routes.recall import router as recall_router
 from routes.projects import router as projects_router
+from routes.recall import router as recall_router
 from routes.settings import router as settings_router
 from routes.timeline import router as timeline_router
 from scheduler import create_session_scheduler
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # In production, this raises before any database or scheduler startup
     # when the Tauri parent has not supplied a valid session token.
     app.state.local_api_security = LocalApiSecurityConfig.from_environment()

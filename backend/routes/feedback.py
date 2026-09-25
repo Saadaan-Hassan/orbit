@@ -4,10 +4,10 @@ Feedback endpoint — stores thumbs-up / thumbs-down ratings on recall responses
 Used to surface quality signals for future model or prompt improvements.
 """
 
-import uuid
 import logging
-from datetime import datetime, timezone
-from typing import Literal, Optional
+import uuid
+from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -26,10 +26,10 @@ logger = logging.getLogger(__name__)
 
 class FeedbackRequest(BaseModel):
     rating: Literal["positive", "negative"]
-    comment: Optional[str] = Field(default=None, max_length=4_000)
+    comment: str | None = Field(default=None, max_length=4_000)
     # Caller may attach the recall query or a snippet of the response so the
     # feedback row has enough context to be actionable without a separate join.
-    context: Optional[str] = Field(default=None, max_length=10_000)
+    context: str | None = Field(default=None, max_length=10_000)
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +40,7 @@ class FeedbackRequest(BaseModel):
 @router.post("/feedback")
 async def submit_feedback(request: FeedbackRequest) -> dict:
     feedback_id = str(uuid.uuid4())
-    timestamp_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    timestamp_ms = int(datetime.now(UTC).timestamp() * 1000)
 
     async with _async_engine.begin() as connection:
         await connection.execute(

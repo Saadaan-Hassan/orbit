@@ -9,7 +9,6 @@ the user's Mac.
 In development, this file is never used — Tauri spawns `uv run uvicorn` instead.
 """
 import sys
-import os
 
 # PyInstaller unpacks bundled modules to sys._MEIPASS at runtime.
 # Insert it at the front of sys.path so backend modules (main.py, routes/,

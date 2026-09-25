@@ -6,7 +6,7 @@ Nothing in this module touches the AI pipeline — it is purely data management.
 """
 
 import logging
-from typing import Optional
+from datetime import UTC
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -38,7 +38,7 @@ class AddExcludedDomainRequest(BaseModel):
 
 class PauseRequest(BaseModel):
     # Unix milliseconds. None means pause indefinitely.
-    paused_until_timestamp: Optional[int] = None
+    paused_until_timestamp: int | None = None
 
 
 class SetFileWatchingRequest(BaseModel):
@@ -82,14 +82,30 @@ async def get_capture_consent() -> dict:
         row = result.fetchone()
     if row is None:
         # Fail closed if a corrupt/partially migrated database lacks the row.
-        return {"consent_version": 1, "accepted": False, "clipboard": False, "app_window": False, "browser": False, "file_activity": False, "screen_content": False}
-    return {"consent_version": row.consent_version, "accepted": row.accepted_at is not None, "clipboard": bool(row.clipboard), "app_window": bool(row.app_window), "browser": bool(row.browser), "file_activity": bool(row.file_activity), "screen_content": bool(row.screen_content)}
+        return {
+            "consent_version": 1,
+            "accepted": False,
+            "clipboard": False,
+            "app_window": False,
+            "browser": False,
+            "file_activity": False,
+            "screen_content": False,
+        }
+    return {
+        "consent_version": row.consent_version,
+        "accepted": row.accepted_at is not None,
+        "clipboard": bool(row.clipboard),
+        "app_window": bool(row.app_window),
+        "browser": bool(row.browser),
+        "file_activity": bool(row.file_activity),
+        "screen_content": bool(row.screen_content),
+    }
 
 
 @router.post("/consent")
 async def save_capture_consent(request: CaptureConsentRequest) -> dict:
-    from datetime import datetime, timezone
-    accepted_at = int(datetime.now(timezone.utc).timestamp() * 1000)
+    from datetime import datetime
+    accepted_at = int(datetime.now(UTC).timestamp() * 1000)
     async with _async_engine.begin() as connection:
         await connection.execute(text("""
             UPDATE capture_consent SET accepted_at = :accepted_at, clipboard = :clipboard,
@@ -138,7 +154,7 @@ async def get_redaction_patterns() -> dict:
 @router.post("/redaction-patterns")
 async def add_redaction_pattern(request: RedactionPatternRequest) -> dict:
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     pattern = request.pattern.strip()
     if not pattern or len(pattern) > 256 or pattern == "[REDACTED:custom]":
@@ -155,7 +171,7 @@ async def add_redaction_pattern(request: RedactionPatternRequest) -> dict:
             {
                 "id": str(uuid.uuid4()),
                 "pattern": pattern,
-                "created_at": int(datetime.now(timezone.utc).timestamp() * 1000),
+                "created_at": int(datetime.now(UTC).timestamp() * 1000),
             },
         )
         result = await connection.execute(
@@ -196,14 +212,14 @@ async def get_excluded_apps() -> dict:
 @router.post("/excluded-apps")
 async def add_excluded_app(request: AddExcludedAppRequest) -> dict:
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     app_name = normalize_app_name(request.app_name)
     if not app_name:
         raise HTTPException(status_code=422, detail="Enter a valid application name.")
 
     new_id = str(uuid.uuid4())
-    added_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    added_at_ms = int(datetime.now(UTC).timestamp() * 1000)
 
     async with _async_engine.begin() as connection:
         # INSERT OR IGNORE so a duplicate app_name is a no-op, not an error.
@@ -250,14 +266,14 @@ async def get_excluded_domains() -> dict:
 @router.post("/excluded-domains")
 async def add_excluded_domain(request: AddExcludedDomainRequest) -> dict:
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     domain = normalize_domain(request.domain)
     if domain is None:
         raise HTTPException(status_code=422, detail="Enter a valid domain or URL.")
 
     new_id = str(uuid.uuid4())
-    added_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    added_at_ms = int(datetime.now(UTC).timestamp() * 1000)
 
     async with _async_engine.begin() as connection:
         # INSERT OR IGNORE so a duplicate domain is a no-op, not an error.
@@ -324,7 +340,10 @@ async def set_browser_capture(request: SetBrowserCaptureRequest) -> dict:
             ),
             {"enabled": 1 if request.native_enabled else 0},
         )
-        await connection.execute(text("UPDATE capture_consent SET browser = :enabled WHERE id = 1"), {"enabled": int(request.native_enabled)})
+        await connection.execute(
+            text("UPDATE capture_consent SET browser = :enabled WHERE id = 1"),
+            {"enabled": int(request.native_enabled)},
+        )
     return {"native_enabled": request.native_enabled}
 
 
@@ -352,7 +371,10 @@ async def set_screen_content(request: SetScreenContentRequest) -> dict:
             ),
             {"enabled": 1 if request.enabled else 0},
         )
-        await connection.execute(text("UPDATE capture_consent SET screen_content = :enabled WHERE id = 1"), {"enabled": int(request.enabled)})
+        await connection.execute(
+            text("UPDATE capture_consent SET screen_content = :enabled WHERE id = 1"),
+            {"enabled": int(request.enabled)},
+        )
     return {"enabled": request.enabled}
 
 
@@ -390,7 +412,10 @@ async def set_file_watching(request: SetFileWatchingRequest) -> dict:
             text("UPDATE file_watch_settings SET enabled = :enabled WHERE id = 1"),
             {"enabled": 1 if request.enabled else 0},
         )
-        await connection.execute(text("UPDATE capture_consent SET file_activity = :enabled WHERE id = 1"), {"enabled": int(request.enabled)})
+        await connection.execute(
+            text("UPDATE capture_consent SET file_activity = :enabled WHERE id = 1"),
+            {"enabled": int(request.enabled)},
+        )
     return {"enabled": request.enabled}
 
 

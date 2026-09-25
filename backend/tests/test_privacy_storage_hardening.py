@@ -33,7 +33,9 @@ class ExclusionPolicyTests(unittest.TestCase):
 
     def test_app_and_folder_normalization_preserve_boundaries(self) -> None:
         self.assertEqual(normalize_app_name("  KEYCHAIN   Access "), "keychain access")
-        watched = (normalize_folder_path("/Users/test/Documents"),)
+        normalized_folder = normalize_folder_path("/Users/test/Documents")
+        assert normalized_folder is not None  # this literal path always normalizes
+        watched = (normalized_folder,)
         self.assertTrue(
             path_is_within_watched_folder("/Users/test/Documents/note.txt", watched)
         )
@@ -54,7 +56,14 @@ class LocalStoragePermissionTests(unittest.TestCase):
 
             repair_orbit_storage(str(database), str(root / "qdrant_storage"))
 
-            for path in (root, database, database.with_name("orbit.db-wal"), database.with_name("orbit.db-shm"), qdrant_file):
+            paths_to_check = (
+                root,
+                database,
+                database.with_name("orbit.db-wal"),
+                database.with_name("orbit.db-shm"),
+                qdrant_file,
+            )
+            for path in paths_to_check:
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700 if path.is_dir() else 0o600)
 
 

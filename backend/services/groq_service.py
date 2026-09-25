@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import time
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import httpx
 
@@ -670,7 +670,7 @@ async def stream_recall_response_groq(
     system_prompt: str,
     user_prompt: str,
     conversation_history: list[dict] | None = None,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str]:
     """
     Streams a recall answer from Groq and yields raw text delta strings as
     they arrive. Goes straight to api.groq.com when a personal key is

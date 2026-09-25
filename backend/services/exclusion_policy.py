@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
+import unicodedata
 from pathlib import Path
 from urllib.parse import urlsplit
-import unicodedata
 
 # This is the only default-exclusion definition. database.py writes these
 # canonical values into SQLite; Rust and FastAPI only consume that shared data.

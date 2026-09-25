@@ -10,13 +10,14 @@ import json
 import logging
 import uuid
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 from sqlalchemy import text
 
 from database import _async_engine, get_voyage_api_key
+
 # Claude (services.claude_service) and Gemini (services.gemini_service) are
 # unused here — Groq is the sole provider for session generation and
 # classification. As of COST-002 the Worker no longer has a /chat or
@@ -275,7 +276,7 @@ def _build_fused_signals(events: list[dict]) -> str:
     for event in events:
         ts_ms = event.get("timestamp", 0)
         time_label = (
-            datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+            datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
             .astimezone()
             .strftime("%H:%M")
             if ts_ms else "??:??"
@@ -542,7 +543,11 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
         e.get("category") for e in project_events if e.get("category")
     )
     dominant_category: str = (
-        dominant_category_counter.most_common(1)[0][0]
+        # str(...) is a no-op at runtime — the "if e.get("category")" filter
+        # above already guarantees a truthy (non-None) value here; it's only
+        # to satisfy the type checker, which can't apply that narrowing
+        # through the Counter.
+        str(dominant_category_counter.most_common(1)[0][0])
         if dominant_category_counter
         else "work"
     )
@@ -762,7 +767,7 @@ async def generate_sessions_from_recent_events() -> None:
     # ------------------------------------------------------------------
     # Step 1 — Fetch unprocessed events: recent + stale force-process
     # ------------------------------------------------------------------
-    current_utc_ms          = int(datetime.now(timezone.utc).timestamp() * 1000)
+    current_utc_ms          = int(datetime.now(UTC).timestamp() * 1000)
     recent_cutoff_ms        = current_utc_ms - EVENT_LOOKBACK_SECONDS * 1000
     stale_force_cutoff_ms   = current_utc_ms - STALE_EVENT_FORCE_PROCESS_SECONDS * 1000
 
@@ -1034,6 +1039,6 @@ def create_session_scheduler() -> AsyncIOScheduler:
         id="generate_sessions",
         name="Generate sessions from recent activity events",
         max_instances=1,
-        next_run_time=datetime.now(timezone.utc),
+        next_run_time=datetime.now(UTC),
     )
     return scheduler

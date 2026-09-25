@@ -15,7 +15,7 @@ import json
 import logging
 import os
 import time
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import httpx
 from dotenv import load_dotenv
@@ -69,7 +69,7 @@ async def stream_recall_response(
     system_prompt: str,
     user_prompt: str,
     conversation_history: list[dict] | None = None,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str]:
     """
     Sends a streaming chat request to Claude via the Cloudflare Worker and
     yields raw text delta strings as they arrive over SSE.

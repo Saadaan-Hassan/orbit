@@ -13,10 +13,9 @@ so Groq is the sole AI provider across the whole app, recall included.
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
-
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -24,8 +23,8 @@ from pydantic import BaseModel, Field
 from database import fetch_sessions_by_time_range, fetch_system_state_events, search_events_fts
 from services.groq_service import stream_recall_response_groq
 from services.qdrant_service import search_sessions_semantic
-from services.voyage_service import VoyageUnavailableError
 from services.time_parser import extract_time_range_from_query
+from services.voyage_service import VoyageUnavailableError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -153,7 +152,7 @@ class RecallRequest(BaseModel):
 def _format_timestamp_as_human_readable(timestamp_milliseconds: int) -> str:
     """Converts a Unix millisecond timestamp to a readable local time string."""
     event_datetime = datetime.fromtimestamp(
-        timestamp_milliseconds / 1000, tz=timezone.utc
+        timestamp_milliseconds / 1000, tz=UTC
     ).astimezone()
     return event_datetime.strftime("%b %d %I:%M %p")
 
@@ -591,7 +590,7 @@ def _format_fts5_fallback(events: list[dict], reason: str = "Groq is temporarily
 async def _stream_sse_recall(
     query: str,
     conversation_history: list[dict] | None,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str]:
     """
     Runs the full recall pipeline and yields SSE-formatted strings.
 
@@ -796,8 +795,7 @@ async def _stream_sse_recall(
 
 # Make the generator type available for the annotation below without
 # importing AsyncGenerator from typing twice.
-from typing import AsyncGenerator  # noqa: E402  (placed after helper defs for readability)
-
+from collections.abc import AsyncGenerator  # noqa: E402  (placed after helper defs for readability)
 
 # ---------------------------------------------------------------------------
 # Route

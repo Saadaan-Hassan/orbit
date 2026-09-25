@@ -1,4 +1,4 @@
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -74,11 +74,11 @@ async def _save_key(
         raise HTTPException(status_code=422, detail=format_error)
     try:
         await store_key(key)
-    except KeychainUnavailableError:
+    except KeychainUnavailableError as err:
         raise HTTPException(
             status_code=503,
             detail="macOS Keychain is unavailable. Your key was not saved.",
-        )
+        ) from err
     # Saving a new key implies the intent to use it right away, even if a
     # previous key had been paused.
     await set_enabled(True)
@@ -91,11 +91,11 @@ async def _delete_key(
 ) -> dict:
     try:
         await delete_key()
-    except KeychainUnavailableError:
+    except KeychainUnavailableError as err:
         raise HTTPException(
             status_code=503,
             detail="macOS Keychain is unavailable. Your key was not removed.",
-        )
+        ) from err
     await set_enabled(True)
     return {"success": True}
 

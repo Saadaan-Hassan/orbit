@@ -13,7 +13,6 @@ from unittest.mock import AsyncMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-
 _CAPTURE_CATEGORY = {
     "clipboard": "clipboard",
     "window": "app_window",
@@ -83,7 +82,11 @@ class PrivacyRegressionSuite(unittest.TestCase):
             fields["file_path"] = f"/Users/privacy-test/Documents/{suffix}.txt"
         if event_type == "screen_content":
             fields["screen_text"] = "ordinary visible text"
-        return CaptureEvent(**fields)
+        # model_validate (not CaptureEvent(**fields)) is the correct Pydantic
+        # pattern for constructing from a loosely-typed dict — **fields makes
+        # mypy try to match dict[str, object] against each specific field
+        # type, which it can't do statically even though the values are fine.
+        return CaptureEvent.model_validate(fields)
 
     @staticmethod
     def _reset_capture_cache(capture) -> None:
@@ -277,7 +280,12 @@ class PrivacyRegressionSuite(unittest.TestCase):
                     )
                 )
                 secure_delete = await connection.execute(database.text("PRAGMA secure_delete"))
-            return result, counts.fetchone(), secure_delete.fetchone()[0], await database.search_events_fts("searchable")
+            return (
+                result,
+                counts.fetchone(),
+                secure_delete.fetchone()[0],
+                await database.search_events_fts("searchable"),
+            )
 
         result, counts, secure_delete, search_results = self._with_database(operation)
         self.assertEqual(result["status"], "ok")

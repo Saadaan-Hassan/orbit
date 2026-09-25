@@ -32,7 +32,14 @@ class _JsonResponse:
 
     def raise_for_status(self) -> None:
         if not self.is_success:
-            raise httpx.HTTPStatusError("synthetic", request=None, response=self)
+            # request=None and response=self (a duck-typed stand-in, not a
+            # real httpx.Response) are both intentional — this is a minimal
+            # test double for synthesizing provider failures without a real
+            # network call; nothing under test reads .request or relies on
+            # .response being a genuine httpx.Response.
+            raise httpx.HTTPStatusError(
+                "synthetic", request=None, response=self  # type: ignore[arg-type]
+            )
 
 
 class _SequencedPostClient:
@@ -191,7 +198,10 @@ class VoyageFailureModeTests(unittest.TestCase):
             voyage._http_client = _SequencedPostClient([
                 _JsonResponse({"error": "invalid key"}, status_code=401),
             ])
-            with self.assertRaises(Exception):
+            # The first call still hits the network and fails as an ordinary
+            # HTTP error; only a *second* call within the cooldown short-circuits
+            # to VoyageUnavailableError without another request (below).
+            with self.assertRaises(httpx.HTTPStatusError):
                 await voyage.generate_text_embedding("first")
             # A second call within the cooldown must not touch the network.
             with self.assertRaises(voyage.VoyageUnavailableError):
@@ -206,7 +216,9 @@ class VoyageFailureModeTests(unittest.TestCase):
             voyage._http_client = _SequencedPostClient([
                 _JsonResponse({"error": "rate limited"}, status_code=429, headers={"Retry-After": "60"}),
             ])
-            with self.assertRaises(Exception):
+            # Same reasoning as the 401 case above: first call fails as an
+            # ordinary HTTP error, second short-circuits via the cooldown.
+            with self.assertRaises(httpx.HTTPStatusError):
                 await voyage.generate_text_embedding("first")
             with self.assertRaises(voyage.VoyageUnavailableError):
                 await voyage.generate_text_embedding("second")

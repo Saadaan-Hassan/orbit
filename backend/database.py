@@ -1,13 +1,14 @@
+import json
 import os
 import re
 import uuid
-import json
-from datetime import datetime, timezone
-from dotenv import load_dotenv
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from pathlib import Path
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+
+from dotenv import load_dotenv
 from sqlalchemy import text
-from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from services.exclusion_policy import (
     DEFAULT_EXCLUDED_APPS,
@@ -328,7 +329,10 @@ async def create_all_tables() -> None:
         consent_result = await connection.execute(
             text("SELECT accepted_at FROM capture_consent WHERE id = 1")
         )
-        if consent_result.fetchone().accepted_at is None:
+        consent_row = consent_result.fetchone()
+        # consent_row is only None if the INSERT OR IGNORE above somehow
+        # didn't create the row — fail closed (pause) rather than crash.
+        if consent_row is None or consent_row.accepted_at is None:
             await connection.execute(text("UPDATE capture_state SET is_paused = 1, paused_until = NULL WHERE id = 1"))
 
         # Single-row table (id=1 always) that controls whether file activity
@@ -418,15 +422,15 @@ async def _normalize_exclusion_settings() -> None:
         )
         domain_rows = domain_result.fetchall()
         normalized_domains = {
-            normalized
+            normalized_domain
             for row in domain_rows
-            if (normalized := normalize_domain(row.domain))
+            if (normalized_domain := normalize_domain(row.domain))
         }
 
         # Exclusion row IDs are not referenced by other tables. Replacing the
         # set transactionally handles collisions such as `WWW.Example.com.`
         # and `example.com` without an intermediate UNIQUE conflict.
-        added_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        added_at_ms = int(datetime.now(UTC).timestamp() * 1000)
         if (
             len(app_rows) != len(normalized_apps)
             or {row.app_name for row in app_rows} != normalized_apps
@@ -495,7 +499,7 @@ async def _seed_default_excluded_apps() -> None:
         if row is not None and row.total > 0:
             return  # Already seeded — nothing to do.
 
-        added_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        added_at_ms = int(datetime.now(UTC).timestamp() * 1000)
         for app_name in DEFAULT_EXCLUDED_APPS:
             normalized_app_name = normalize_app_name(app_name)
             await connection.execute(
@@ -523,7 +527,7 @@ async def _seed_default_excluded_domains() -> None:
         if row is not None and row.total > 0:
             return  # Already seeded — nothing to do.
 
-        added_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        added_at_ms = int(datetime.now(UTC).timestamp() * 1000)
         for domain in DEFAULT_EXCLUDED_DOMAINS:
             normalized_domain = normalize_domain(domain)
             if normalized_domain is None:
@@ -737,7 +741,7 @@ async def fetch_sessions_by_time_range(
     return selected
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
+async def get_db() -> AsyncGenerator[AsyncSession]:
     async with _async_session_factory() as session:
         yield session
 
