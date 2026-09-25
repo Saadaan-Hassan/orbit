@@ -5,8 +5,7 @@ import {
   type CaptureConsentChoices,
 } from "./CaptureConsentChoices";
 import { usePrivacySettings } from "../hooks/usePrivacySettings";
-import { useProviderStatus } from "../hooks/useProviderStatus";
-import { useGroqKeySettings } from "../hooks/useGroqKeySettings";
+import { useApiKeySettings } from "../hooks/useApiKeySettings";
 import { useAnalytics } from "../hooks/useAnalytics";
 
 interface PauseDurationOption {
@@ -850,76 +849,52 @@ function FileActivitySection({
 }
 
 // ─── Section 6 — AI Provider ─────────────────────────────────────────────────
-function ProviderStatusRow({ label, enabled }: { label: string; enabled: boolean }) {
-  return (
-    <div className="flex items-center justify-between px-3.5 py-2.5 bg-zinc-50/20 dark:bg-zinc-900/10 rounded-2xl">
-      <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">{label}</span>
-      <div className="flex items-center gap-2">
-        <div
-          className={`w-2 h-2 rounded-full flex-shrink-0 ${
-            enabled ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"
-          }`}
-        />
-        <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-          {enabled ? "Active" : "Disabled"}
-        </span>
-      </div>
-    </div>
-  );
-}
+// ─── Section 6.5 — Bring Your Own Key (BYOK) ─────────────────────────────────
+// Orbit's Cloudflare Worker holds no maintainer-funded AI credential of any
+// kind (COST-002) — Groq and Voyage AI are pure BYOK. With no key configured
+// for a given provider, that provider's feature is simply unavailable:
+// recall/summaries fall back to Orbit's FTS5 keyword search (no Groq key),
+// and semantic search is skipped in favor of keyword-only results (no
+// Voyage key). Nothing about that is an error state — see each section's
+// "no key configured" copy below.
 
-function AiProviderSection() {
-  const { claudeEnabled, geminiEnabled, groqEnabled, isLoading } = useProviderStatus();
-
-  return (
-    <div className="flex flex-col gap-2">
-      <SectionHeading>AI Provider</SectionHeading>
-      <p className="text-xs text-zinc-400 dark:text-zinc-500 font-light leading-relaxed mb-1">
-        Orbit's built-in AI runs through one of the providers below — this
-        part is managed centrally. To use your own Groq account instead, see{" "}
-        <span className="font-semibold text-zinc-500 dark:text-zinc-400">
-          Your Own Groq Key
-        </span>{" "}
-        below.
-      </p>
-
-      {isLoading ? (
-        <div className="flex flex-col gap-1.5">
-          <div className="h-10 bg-zinc-100/50 dark:bg-zinc-900/20 rounded-2xl animate-pulse" />
-          <div className="h-10 bg-zinc-100/50 dark:bg-zinc-900/20 rounded-2xl animate-pulse" />
-          <div className="h-10 bg-zinc-100/50 dark:bg-zinc-900/20 rounded-2xl animate-pulse" />
-        </div>
-      ) : (
-        <div className="flex flex-col gap-1.5">
-          <ProviderStatusRow label="Claude" enabled={claudeEnabled} />
-          <ProviderStatusRow label="Gemini" enabled={geminiEnabled} />
-          <ProviderStatusRow label="Groq" enabled={groqEnabled} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Section 6.5 — Your Own Groq Key (BYOK) ──────────────────────────────────
-function formatTestReason(reason: string): string {
+function formatTestReason(providerLabel: string, reason: string): string {
   switch (reason) {
     case "invalid_format":
-      return "That doesn't look like a Groq key — it should start with \"gsk_\".";
+      return `That doesn't look like a valid ${providerLabel} key.`;
     case "invalid_key":
-      return "Groq rejected this key. Double-check it in your Groq console.";
+      return `${providerLabel} rejected this key. Double-check it in your ${providerLabel} console.`;
     case "rate_limited":
-      return "Groq is rate-limiting this key right now — it may still be valid.";
+      return `${providerLabel} is rate-limiting this key right now — it may still be valid.`;
     case "timeout":
     case "network_error":
-      return "Couldn't reach Groq. Check your connection and try again.";
+      return `Couldn't reach ${providerLabel}. Check your connection and try again.`;
     default:
-      return "Groq couldn't validate this key right now.";
+      return `${providerLabel} couldn't validate this key right now.`;
   }
 }
 
-function GroqPersonalKeySection() {
+interface ApiKeySectionProps {
+  providerPath: string;
+  providerLabel: string;
+  title: string;
+  description: string;
+  disclosureText: string;
+  keyPlaceholder: string;
+  notConfiguredText: string;
+}
+
+function ApiKeySection({
+  providerPath,
+  providerLabel,
+  title,
+  description,
+  disclosureText,
+  keyPlaceholder,
+  notConfiguredText,
+}: ApiKeySectionProps) {
   const { configured, enabled, isLoading, saveKey, removeKey, setEnabled, testKey } =
-    useGroqKeySettings();
+    useApiKeySettings(providerPath);
   const [inputValue, setInputValue] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
@@ -938,10 +913,10 @@ function GroqPersonalKeySection() {
       setTestMessage(
         result.valid
           ? { ok: true, text: "This key works." }
-          : { ok: false, text: formatTestReason(result.reason) }
+          : { ok: false, text: formatTestReason(providerLabel, result.reason) }
       );
     } catch {
-      setTestMessage({ ok: false, text: "Groq couldn't validate this key right now." });
+      setTestMessage({ ok: false, text: `${providerLabel} couldn't validate this key right now.` });
     } finally {
       setIsTesting(false);
     }
@@ -987,17 +962,12 @@ function GroqPersonalKeySection() {
 
   return (
     <div className="flex flex-col gap-2">
-      <SectionHeading>Your Own Groq Key</SectionHeading>
+      <SectionHeading>{title}</SectionHeading>
       <p className="text-xs text-zinc-400 dark:text-zinc-500 font-light leading-relaxed mb-1">
-        Add your own Groq API key to use your account instead of Orbit's. Your
-        key is stored only in macOS Keychain — Orbit never writes it to disk
-        elsewhere and never sends it back to this screen after saving.
+        {description}
       </p>
       <p className="text-[11px] text-amber-600 dark:text-amber-500 font-medium leading-relaxed bg-amber-500/10 rounded-xl px-3 py-2 mb-1">
-        When a Groq key is active, the activity Orbit selects for your
-        summaries and the questions you ask it leave your Mac and go directly
-        to Groq's servers over HTTPS — not through Orbit's infrastructure.
-        Nothing is sent to Groq unless a key is configured and enabled.
+        {disclosureText}
       </p>
 
       {isLoading ? (
@@ -1043,7 +1013,7 @@ function GroqPersonalKeySection() {
           </div>
         </div>
       ) : (
-        <p className="text-xs text-zinc-400 dark:text-zinc-500 italic px-1">No key configured — Orbit's built-in AI is used instead.</p>
+        <p className="text-xs text-zinc-400 dark:text-zinc-500 italic px-1">{notConfiguredText}</p>
       )}
 
       <div className="flex gap-2 mt-1">
@@ -1055,7 +1025,7 @@ function GroqPersonalKeySection() {
             setInputValue(e.target.value);
             setTestMessage(null);
           }}
-          placeholder={configured ? "Enter a new key to replace it" : "gsk_..."}
+          placeholder={configured ? "Enter a new key to replace it" : keyPlaceholder}
           className="flex-1 text-xs bg-zinc-100 dark:bg-zinc-900 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-zinc-400/20 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 border-0"
         />
         <button
@@ -1277,11 +1247,27 @@ export function PrivacyPanel() {
 
       <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
 
-      <AiProviderSection />
+      <ApiKeySection
+        providerPath="groq-key"
+        providerLabel="Groq"
+        title="Your Own Groq Key"
+        description="Add your own Groq API key to use your account for Orbit's chat and session summaries. Your key is stored only in macOS Keychain — Orbit never writes it to disk elsewhere and never sends it back to this screen after saving."
+        disclosureText="When a Groq key is active, the activity Orbit selects for your summaries and the questions you ask it leave your Mac and go directly to Groq's servers over HTTPS — not through Orbit's infrastructure. Nothing is sent to Groq unless a key is configured and enabled."
+        keyPlaceholder="gsk_..."
+        notConfiguredText="No key configured — chat and session summaries are unavailable; everything else still works."
+      />
 
       <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
 
-      <GroqPersonalKeySection />
+      <ApiKeySection
+        providerPath="voyage-key"
+        providerLabel="Voyage"
+        title="Your Own Voyage Key"
+        description="Add your own Voyage AI key to enable semantic search across your sessions, on top of Orbit's built-in keyword search. Your key is stored only in macOS Keychain — Orbit never writes it to disk elsewhere and never sends it back to this screen after saving."
+        disclosureText="When a Voyage key is active, short summaries of your sessions and your search queries leave your Mac and go directly to Voyage AI's servers over HTTPS to generate embeddings — not through Orbit's infrastructure. Nothing is sent to Voyage unless a key is configured and enabled."
+        keyPlaceholder="pa-..."
+        notConfiguredText="No key configured — keyword search still works fully; results just won't include semantic matches."
+      />
 
       <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
 

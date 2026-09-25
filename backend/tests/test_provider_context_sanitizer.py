@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 LEGACY_SECRET = "gsk_orbit_legacy_secret_that_must_not_leave_the_device_123456"
@@ -197,7 +197,10 @@ class ProviderContextSanitizerTests(unittest.TestCase):
                 {"data": [{"embedding": [0.0, 1.0]}]}
             )
             voyage._http_client = voyage_client
-            await voyage.generate_text_embedding(unsafe_text)
+            with patch.object(
+                voyage, "get_voyage_api_key", new=AsyncMock(return_value="voyage_test_key")
+            ):
+                await voyage.generate_text_embedding(unsafe_text)
 
             return [
                 json.dumps(claude_client.requests[0]["kwargs"]["json"], ensure_ascii=False),

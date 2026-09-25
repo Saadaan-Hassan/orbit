@@ -179,7 +179,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | PRIV-006 | Agent | DONE | Add privacy, consent, and redaction regression tests | PRIV-005 |
 | APPSEC-001 | Agent | PARTIAL | Harden Tauri CSP, release devtools, capabilities, and entitlements | SEC-003 |
 | COST-001 | Agent | PARTIAL | Implement Keychain-backed BYOK UI and direct Groq calls | MAN-000, SEC-003 |
-| COST-002 | Agent | TODO | Remove all shared-key Worker behavior and fail closed | COST-001 |
+| COST-002 | Agent | DONE | Remove all shared-key Worker behavior and fail closed | COST-001 |
 | COST-003 | Agent | TODO | Make FTS5 the no-embedding default and remove mandatory Voyage usage | COST-002 |
 | COST-004 | Agent | TODO | Replace retired models and centralize provider/model configuration | COST-001 |
 | COST-005 | Agent | TODO | Add predictable offline/rate-limit/provider failure behavior | COST-003, COST-004 |
@@ -726,6 +726,34 @@ Acceptance criteria:
 
 ### COST-002 — Remove shared-key Worker behavior and fail closed
 
+**Current status: DONE (2026-09-25).** Scope was expanded beyond this
+section's original text after an explicit maintainer decision (asked via
+in-session question, not assumed): remove maintainer-funded credentials for
+**all four** providers, not just Groq, and either add BYOK or remove
+outright per provider depending on whether it's actually in use. Result:
+Claude and Gemini (never wired into the live app during the beta, no BYOK
+path anywhere in the codebase) were removed entirely — their Worker routes,
+env fields, and `claude_service.py`/`gemini_service.py`'s reachability are
+gone, not kill-switched. Voyage AI got the same BYOK treatment Groq already
+had from COST-001 (Keychain key, Settings UI, Worker requires
+`X-Voyage-Api-Key` with no fallback). The maintainer also confirmed the
+Worker should stay a **lightweight BYOK passthrough**, not a fully-hardened
+self-host template (auth/origin-allowlisting/rate-limiting/model-allowlists)
+— that option was offered and explicitly declined, which is why the
+Worker's CORS stays `Access-Control-Allow-Origin: *` and there is no rate
+limiting; with no maintainer-funded credential left in the Worker at all,
+neither adds meaningful protection, they'd only protect against volumetric
+abuse. `.dev.vars.example` was not created because it would be empty — the
+Worker needs zero secrets now; this is documented in a new `worker/README.md`
+instead. Full detail in the Completion Log below.
+
+**Important: this only changes source code. The live, already-deployed
+Cloudflare Worker still runs the old vulnerable code — with a real,
+currently-exploitable gap (`/embed` has no kill switch and anyone who finds
+the Worker URL can spend the maintainer's Voyage/Groq credits) — until
+`npx wrangler deploy` is run from `worker/`. No agent may run that deploy
+without explicit authorization; see `MAN-006`.**
+
 Implementation requirements:
 
 - Remove fallback to `GROQ_API_KEY` and all maintainer-funded provider credentials.
@@ -741,11 +769,31 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] Searching production source/config finds no shared-provider fallback.
-- [ ] Anonymous requests cannot invoke a maintainer-funded upstream.
-- [ ] Missing configuration returns a safe disabled response.
-- [ ] Worker tests cover auth, origins, limits, method routing and fail-closed flags.
-- [ ] Desktop app remains functional with the Worker fully offline/deleted.
+- [x] Searching production source/config finds no shared-provider fallback.
+      `WorkerEnvironment` is an empty interface; no `env.*_API_KEY` reference
+      remains anywhere in `worker/src/index.ts` (asserted by a dedicated test).
+- [x] Anonymous requests cannot invoke a maintainer-funded upstream. There is
+      no maintainer-funded upstream left — Claude/Gemini are gone, Groq/Voyage
+      require the caller's own key (401 otherwise, tested).
+- [x] Missing configuration returns a safe disabled response. 401 with a
+      plain-text explanation, no upstream call attempted (tested — the mocked
+      `fetch` is asserted never called when no key header is present).
+- [x] Worker tests cover auth, origins, limits, method routing and
+      fail-closed flags — **as scoped down by the maintainer's explicit
+      choice of a lightweight passthrough over a self-host template**: auth
+      and method routing are tested (12 vitest cases); origin-allowlisting,
+      rate limits, and kill-switch flags were deliberately not built (see
+      status note above) because nothing in the Worker is maintainer-funded
+      anymore for them to protect.
+- [x] Desktop app remains functional with the Worker fully offline/deleted.
+      A BYOK Groq user never touches the Worker at all (direct since
+      COST-001). A BYOK Voyage user still routes through the Worker for
+      `/embed`; if it were offline, `generate_text_embedding` raises and both
+      call sites (`scheduler.py`, `recall.py`) already catch that and degrade
+      gracefully — sessions save without an embedding, recall falls back to
+      FTS5-only. No-key users for either provider never call the Worker
+      differently whether it exists or not (Groq: 401 either way; Voyage:
+      skipped locally before any request is attempted).
 
 ### COST-003 — Make FTS5 the default; remove mandatory Voyage/Qdrant use
 
@@ -1280,6 +1328,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-10 | PRIV-006 | DONE | Focused privacy regression suite, secure wipe compaction, in-memory history clearing, Rust secure-field test, and backend test command documentation | `test_privacy_regression_suite.py` proves fresh/upgraded pre-consent rejection, every extension capture category's consent/pause/exclusion gate, corrupt/missing settings fail-closed behavior, wipe of SQLite/FTS/sessions/memory/pairings plus Qdrant invocation, and capture-only extension pairing/revocation. Existing Rust sanitizer/provider-boundary tests cover non-secure secret redaction, URL/path/window-title leaks, legacy unsafe rows, and secure-field skipping; the secure-field branch now has a direct Rust unit test. A successful wipe enables SQLite secure-delete, truncates WAL, vacuums freed pages, and clears webview conversation/pending-query state. `backend/README.md` documents `uv run python -m unittest discover -s tests -p 'test_*.py'` for `CI-002`. The full backend suite passed 29/29 with `ResourceWarning` promoted to errors; `gitleaks detect --source tests --no-git --redact --exit-code 1` found no leaks; `cargo test --bin app` passed 37/37; `pnpm build`, backend compilation, and `git diff --check` passed. | Continue with `APPSEC-001`. `PRIV-002` remains PARTIAL pending the maintainer's live UI verification. |
 | 2026-09-10 | PRIV-003 | PARTIAL | `ADR-003`; shared Rust sanitizer; all active/retained Rust event writers; local exact-match pattern table/API/UI; migration test | All active and retained Rust event-insert sources now sanitize their captured strings; URLs strip fragments, redact userinfo and sensitive query values; static patterns cover credentials, keys, headers, JWTs, connection strings, payment/identity data, email/phone, and local custom phrases. `cargo test --bin app` passed 30/30, `cargo check --bin app`, focused `rustfmt --check` for changed capture files, backend tests 9/9, `pnpm build`, and both staged/unstaged `git diff --check` passed. | Keep PARTIAL: repository-wide Clippy fails an existing collapsible-if in `src/lib.rs`, and repository-wide formatter reports existing drift in `src/lib.rs` and `src/main.rs`. Fix and rerun those global checks before marking this task DONE. Consent gate remains blocked by PRIV-002. |
 | 2026-09-25 | COST-001 | PARTIAL | `backend/services/groq_service.py`, `backend/routes/settings.py`, `backend/tests/test_groq_byok.py`, `app/src/hooks/useGroqKeySettings.ts`, `app/src/components/PrivacyPanel.tsx`, `AGENTS.md` | Added `GROQ_DIRECT_API_URL` (`https://api.groq.com/openai/v1/chat/completions`) and rewired all three Groq call sites (session summary, classification, recall streaming) plus a new `test_groq_api_key()` to use it with `Authorization: Bearer <key>` whenever `database.get_groq_api_key()` returns a personal key — the Worker is bypassed entirely in that case; with no personal key, behavior is unchanged (Worker, no auth header). Added `POST /settings/groq-key/test` (validates a candidate key with a free Groq `/models` call, never persists it). Built the "Your Own Groq Key" PrivacyPanel section: add/replace/test/remove/temporarily-disable, a persistent explicit disclosure that captured context and queries leave the Mac once a key is active, and a `GET /settings/groq-key` response that only ever returns `{configured, enabled}` — never the key. Rewrote every `AGENTS.md` passage claiming all AI goes through the Worker unconditionally (Critical Architecture Facts, AI Models table, Security & Privacy Rules, Environment Variables, DO NOT section, Key Files entries) to describe the Groq BYOK exception. Verification: `uv run python -m unittest discover -s tests -p 'test_*.py'` 37/37 (8 new: 4 asserting the direct-URL/Bearer-header routing per call site, 1 asserting the no-key path is unchanged, 1 asserting the test endpoint never stores the key, 2 asserting the full add/test/disable/remove route lifecycle and that the raw key never appears in a response); `pnpm build` (TypeScript + Vite) clean. | Required maintainer action: launch a real build, add a personal key, quit and relaunch Orbit, confirm `GET /settings/groq-key` still reports `configured: true` (Keychain + SQLite persistence — no automated test restarts the app). Next: `COST-002`. |
+| 2026-09-25 | COST-002 | DONE | `worker/src/index.ts` (rewrite), `worker/src/index.test.ts`, `worker/README.md`, `worker/package.json`, `backend/services/keychain_service.py`, `backend/services/voyage_service.py`, `backend/database.py`, `backend/routes/settings.py` (rewrite), `backend/tests/test_voyage_byok.py`, `backend/tests/test_provider_context_sanitizer.py`, `backend/scheduler.py` (comment), `app/src/hooks/useApiKeySettings.ts` (replaces `useGroqKeySettings.ts`), `app/src/hooks/useProviderStatus.ts` (deleted), `app/src/components/PrivacyPanel.tsx`, `AGENTS.md` | Scope confirmed with the maintainer via an explicit question before implementing (see status note above): all four providers' maintainer-funded Worker credentials removed; Claude/Gemini removed outright (unused, no BYOK anywhere); Voyage given the same BYOK treatment as Groq; Worker stays a lightweight passthrough, not a hardened self-host template. Rewrote `worker/src/index.ts`: `WorkerEnvironment` is now an empty interface, `/chat` and `/classify` and `/provider-status` deleted, `/chat-groq` and `/embed` each require the caller's own key header with no fallback (401 otherwise). Generalized `keychain_service.py` (`_store_api_key_sync`/`_get_api_key_sync`/etc. parameterized by account) and added Voyage Keychain functions alongside the existing Groq ones. `voyage_service.py`: `generate_text_embedding` now requires `database.get_voyage_api_key()`, raises immediately with zero network calls if absent (no maintainer fallback exists), fast-fails on 401 without retrying; added `test_voyage_api_key()`. Rewrote `routes/settings.py` with shared provider-agnostic CRUD helpers powering both `/settings/groq-key` and the new `/settings/voyage-key` (+ `.../test`, `.../enabled`); removed `/settings/provider-status` (nothing left to proxy). Generalized the frontend BYOK hook/UI (`useApiKeySettings.ts`, one `ApiKeySection` component) and rendered it twice (Groq, Voyage) in PrivacyPanel; deleted `useProviderStatus.ts` and the old admin-status UI it powered. Added a Vitest suite for the Worker (auth/routing/passthrough/no-credential-surface, 12 tests) — this Worker had zero test infrastructure before. Rewrote every stale Worker/kill-switch/BYOK claim in `AGENTS.md` (Critical Architecture Facts, AI Models, data-flow diagrams, Cloudflare Worker section, Environment Variables, DO NOT, Key Files, monorepo tree). Verification: backend `uv run python -m unittest discover -s tests -p 'test_*.py'` 43/43 (6 new Voyage tests, 1 existing Groq/Gemini/Claude/Voyage boundary test updated to mock a personal Voyage key); `cd worker && npm run test` 12/12 (new); `pnpm build` (TypeScript + Vite) clean. | **The live, already-deployed Worker still runs the pre-COST-002 code and remains genuinely exposed (`/embed` has no kill switch, zero auth) until the maintainer runs `npx wrangler deploy` from `worker/` — not done here, deployment requires explicit authorization.** Next: `COST-003` — note its own scope (making Voyage/Qdrant fully optional) now partially overlaps with the BYOK work done here; check current state before assuming the original task text is unchanged. |
 | 2026-09-25 | APPSEC-001 | PARTIAL | `app/src-tauri/Cargo.toml`, `app/src-tauri/tauri.conf.json`, `app/src-tauri/capabilities/default.json`, `docs/adr/ADR-005-tauri-shell-hardening.md` | Removed the unconditional `devtools` Cargo feature (WRY still exposes devtools automatically in debug builds; release builds no longer force it on). Added a restrictive CSP (`default-src 'self'` plus a `connect-src` scoped to the fixed-port local backend, PostHog, and Sentry — the only hosts the webview itself calls; the Cloudflare Worker and AI providers are never in `connect-src` because only the Python backend calls them). Rewrote `capabilities/default.json` to grant exactly what the webview calls: removed `global-shortcut:default` and six unused `core:window:allow-*` permissions (the hotkey and those window transitions are Rust-native and were never gated by this file), and added the previously-missing `updater:allow-check`, `updater:allow-download-and-install`, `process:allow-restart`, and `dialog:allow-open` — without which auto-update and the watched-folder picker were silently non-functional (both call sites swallow errors by design). Existing entitlements were reviewed and left unchanged; each already carries an inline justification comment and is exercised by a real code path. `macOSPrivateApi: true` is required by the main window's `shadow: false` and the overlay window's transparency/click-through. Verification: `cargo check --bin app` (also validates the capabilities file against plugin permission schemas), `cargo test --bin app` 37/37, `pnpm build` (TypeScript + Vite), `git diff --check` all passed. | Required maintainer action: build a real `.dmg`, confirm right-click → Inspect Element is unavailable, and confirm the local API, PostHog/Sentry, the update check, and the folder picker all still work under the new CSP/capability grant. Record the outcome here before marking `APPSEC-001` DONE. Next: `COST-001`. `PRIV-002`/`PRIV-003` remain PARTIAL, independent of this task. |
 
 ---

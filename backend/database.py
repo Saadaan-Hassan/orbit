@@ -786,6 +786,26 @@ async def get_groq_api_key() -> str | None:
     return await get_keychain_groq_api_key()
 
 
+async def get_voyage_key_enabled() -> bool:
+    """Defaults to enabled (True) unless the user has explicitly disabled it —
+    keeps existing configured keys active without requiring a migration."""
+    value = await get_setting("voyage_key_enabled")
+    return value != "0"
+
+
+async def set_voyage_key_enabled(enabled: bool) -> None:
+    await set_setting("voyage_key_enabled", "1" if enabled else "0")
+
+
+async def get_voyage_api_key() -> str | None:
+    """Reads a user key from Keychain only immediately before provider use."""
+    if not await get_voyage_key_enabled():
+        return None
+    from services.keychain_service import get_voyage_api_key as get_keychain_voyage_api_key
+
+    return await get_keychain_voyage_api_key()
+
+
 async def migrate_legacy_groq_api_key_to_keychain() -> bool:
     """Migrates a legacy SQLite key without replacing an existing Keychain key.
 

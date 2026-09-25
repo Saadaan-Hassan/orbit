@@ -33,11 +33,11 @@ same experience, AI adapts to what they actually do.
 | Fact | Detail |
 |---|---|
 | **AI goes through the Cloudflare Worker, unless the user brings their own Groq key** | Claude, Gemini, and Voyage AI always route through the Worker — no direct calls to those. Groq is the one exception (COST-001): if the user has configured a personal key (Settings → Your Own Groq Key), the backend calls `api.groq.com` directly with that key and the Worker is never involved for that request. With no personal key, Groq also goes through the Worker exactly like the others, using the Worker's own shared secret. |
-| **Worker routes** | `/chat` → Claude. `/classify` → Gemini Flash. `/chat-groq` → Groq (OpenAI-compatible). `/embed` → Voyage AI. `/provider-status` → admin kill switch status (GET, no auth). `/tts` → ElevenLabs (stub). `/stt-token` → STT (stub). |
-| **No AI API keys in backend/.env** | `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `VOYAGE_API_KEY`, `GROQ_API_KEY` live in Cloudflare Worker secrets ONLY. `backend/.env` has no AI provider keys. |
-| **Groq is Orbit's default AI provider (beta) — BYOK-capable since COST-001** | Session generation, event classification, AND recall (user-facing chat) all run on Groq — `services/groq_service.py` on the backend. With no personal key, it's centrally funded via the Worker's own `GROQ_API_KEY` secret — the backend never requires a per-user key for basic use. A user-configured key (Settings → Your Own Groq Key, `database.get_groq_api_key()` / `POST /settings/groq-key`) is stored in the macOS Keychain (`com.heyorbit.orbit` / `groq-api-key`), not SQLite, and is read only immediately before use. When present, `groq_service.py` sends requests **directly to `https://api.groq.com/openai/v1/chat/completions`** with `Authorization: Bearer <key>` — the Worker is bypassed entirely, so the user's key and the request content never reach it. With no personal key, requests still go through the Worker's `/chat-groq` route with no `Authorization`/`X-Groq-Api-Key` header, and the Worker uses its own shared secret. Models: `openai/gpt-oss-120b` (session summaries, `reasoning_effort: "low"` — it's a reasoning model whose chain-of-thought otherwise eats the max_tokens budget before writing the answer), `llama-3.1-8b-instant` (classification — cheap/fast, but has an observed repetition-loop tendency on long single-shot lists; classification groups are capped at 30 events for this reason, a quality ceiling not a rate limit), `llama-3.3-70b-versatile` (recall, OpenAI-compatible streaming — different SSE wire format from Claude's `content_block_delta`, needs its own parser: `stream_recall_response_groq()`). |
-| **Admin kill switch (Claude / Gemini / Groq)** | Three independent Cloudflare Worker secrets — `CLAUDE_ENABLED`, `GEMINI_ENABLED`, `GROQ_PROXY_ENABLED` — each gate their route server-side, returning HTTP 503 when set to the literal string `"false"` (absent/unset = enabled, fail-open). Flip with `npx wrangler secret put CLAUDE_ENABLED` from `worker/` — takes effect on the next request, no redeploy. Every backend AI call already treats a non-2xx response as "provider unavailable" and degrades gracefully (session-gen skips the batch via the `parse_failed` circuit breaker, classification defaults events to `work`, recall falls back to the offline FTS5 message) — **no backend code change is ever needed to use the kill switch**, only the Worker secret. Read-only status is exposed to the app via `GET /settings/provider-status` (backend proxy of the Worker's `/provider-status`) and rendered in PrivacyPanel's "AI Provider" section — 3 status rows, no user controls. Currently live: Claude and Gemini disabled, Groq enabled (beta cost control — Claude/Gemini are Orbit-funded per-token; Groq's shared key is dramatically cheaper, see Tech Stack). |
-| **google-genai SDK not installed** | Gemini is called via `httpx` → Worker `/classify`. The `google-genai` package is not a dependency. |
+| **Worker routes (COST-002: BYOK-only, zero Worker secrets)** | `/chat-groq` → Groq (OpenAI-compatible; requires caller's `X-Groq-Api-Key`, 401 without it). `/embed` → Voyage AI (requires caller's `X-Voyage-Api-Key`, 401 without it). `/tts` → stub. `/stt-token` → stub. `/chat` (Claude) and `/classify` (Gemini) and `/provider-status` (admin kill switch) no longer exist — removed, not disabled; see "Cloudflare Worker" below. |
+| **No AI API keys anywhere the app controls** | The Worker holds no provider secret at all (`WorkerEnvironment` is an empty interface). A user's own Groq/Voyage key lives only in their local macOS Keychain (COST-001/002 BYOK) and is attached per-request as a header — never in `backend/.env`, SQLite, or the Worker. |
+| **Groq is Orbit's only chat/session-summary provider — BYOK-only since COST-002** | Session generation, event classification, AND recall (user-facing chat) all run on Groq — `services/groq_service.py` on the backend. There is no maintainer-funded fallback: `database.get_groq_api_key()` reads a user-configured key (Settings → Your Own Groq Key, `POST /settings/groq-key`) from the macOS Keychain (`com.heyorbit.orbit` / `groq-api-key`), not SQLite, immediately before use. With a key, `groq_service.py` sends requests **directly to `https://api.groq.com/openai/v1/chat/completions`** with `Authorization: Bearer <key>` — the Worker is bypassed entirely. With no key, the backend still attempts the Worker's `/chat-groq` route (no auth header) purely as an existing code path — the Worker now always rejects that with 401, since it holds no shared secret either, so the net effect is "no key = no Groq," handled by the same graceful-degrade error handling as any other provider failure. Models: `openai/gpt-oss-120b` (session summaries, `reasoning_effort: "low"` — it's a reasoning model whose chain-of-thought otherwise eats the max_tokens budget before writing the answer), `llama-3.1-8b-instant` (classification — cheap/fast, but has an observed repetition-loop tendency on long single-shot lists; classification groups are capped at 30 events for this reason, a quality ceiling not a rate limit), `llama-3.3-70b-versatile` (recall, OpenAI-compatible streaming — different SSE wire format from Claude's `content_block_delta`, needs its own parser: `stream_recall_response_groq()`). |
+| **No more admin kill switch (COST-002)** | The former `CLAUDE_ENABLED`/`GEMINI_ENABLED`/`GROQ_PROXY_ENABLED` Worker secrets and `GET /provider-status`/`/settings/provider-status` route are gone, along with the Claude/Gemini routes they gated. There is nothing left to centrally enable/disable — Groq and Voyage are pure BYOK (a missing key simply means that feature is unavailable, not "disabled by admin"), and Claude/Gemini support was removed outright rather than kept behind a switch. |
+| **google-genai SDK not installed, and Gemini support has been removed** | `gemini_service.py` still exists (calls `httpx` → the Worker's former `/classify` route) but that route no longer exists on the Worker — nothing in the app calls this file. The `google-genai` package was never a dependency. |
 | **APScheduler v3.x (stable)** | Session generation uses `AsyncIOScheduler` from `apscheduler.schedulers.asyncio` — this is v3.x stable. Import path: `from apscheduler.schedulers.asyncio import AsyncIOScheduler`. Never use APScheduler v4 (`from apscheduler import AsyncScheduler`) — that is explicitly pre-release and unstable. |
 | **Rust writes SQLite directly** | Clipboard + window + file_activity + browser_url events → SQLite directly from Rust. Never through FastAPI. Only the Chrome Extension POSTs to FastAPI. `unified_poller.rs` writes `type='url', source='native_browser'` events. |
 | **No Docker for Qdrant** | `QdrantClient(path="~/.orbit/qdrant_storage")` local file mode. No server, no Docker. |
@@ -66,7 +66,7 @@ same experience, AI adapts to what they actually do.
 | **File watch settings (privacy control)** | `file_watch_settings` table in SQLite (single row, id=1): `enabled` INTEGER + `watched_folders` JSON TEXT array of canonical absolute paths. Seeded on first run with `~/Documents`, `~/Desktop`, `~/Downloads`. `file_activity.rs` reads this table on startup and every 5 s via a `tokio::select!` refresh tick, syncs the `notify` watcher using a `currently_watched: HashSet<String>` diff, and verifies every event remains within a configured root before writing. Disabling sets the desired set to empty, unwatching everything. Managed via `GET/POST /privacy/file-watching` and `POST/DELETE /privacy/watched-folders`; surfaced in PrivacyPanel under "File Activity". |
 | **On-screen content capture (Rust)** | `screen_content.rs` polls the focused UI element every 8 s via the macOS AXUIElement API. Uses raw `extern "C"` bindings to ApplicationServices + CoreFoundation — **not** a third-party accessibility crate. All AX calls run in `spawn_blocking` to avoid stalling the async runtime. `ScreenContentCaptureCache` reads `screen_content_settings.enabled`, pause state, and excluded apps every 30 s. **`AXSecureTextField` is skipped unconditionally at every traversal depth** — password fields are never read. Traversal cap: max depth 3, max 30 elements, text truncated to 1 500 chars, deduped by text equality before INSERT. `AXErrorAPIDisabled` is logged once via `AtomicBool` then silently suppressed. Writes `type='screen_content'` events with `raw_content=window_title`, `screen_text=accessible_text`. Requires Accessibility permission (same grant as the window tracking in `unified_poller.rs`). |
 | **`screen_content_settings` table** | Single row (id=1): `enabled INTEGER NOT NULL DEFAULT 1`. Seeded by FastAPI on startup. `screen_content.rs` reads this every 30 s — fallback to `true` if absent. Managed via `GET/POST /privacy/screen-content`. The On-Screen Content toggle is placed **FIRST** in PrivacyPanel (most powerful capture gets most prominent control). |
-| **Signal fusion session prompt** | Phase 2.9 replaces the flat per-event JSON prompt with a labelled text-line format. `_build_fused_signals()` serialises each event chronologically as one readable line: `[14:30] APP focus: VS Code — window: "billing.service.ts"`, `[14:31] SCREEN text: "..."`, `[14:31] FILE modified: /path/to/file`, etc. `FUSION_SESSION_SYSTEM_PROMPT` instructs the model to act as a detective: triangulate overlapping signals, name real files/topics/tickets, produce a concrete `next_step`. Session generation runs on **Groq** (`generate_session_summary_groq()`, `openai/gpt-oss-120b`) during the beta — see "Groq is Orbit's default AI provider" above; `SUMMARY_MODEL`/`generate_session_summary()` (Claude Haiku, `claude_service.py`) still exist and are unused, not deleted, for whenever Claude is re-enabled. New session columns: `activity` (what specifically they did), `next_step` (concrete continuation), `blockers` (what they seemed stuck on). |
+| **Signal fusion session prompt** | Phase 2.9 replaces the flat per-event JSON prompt with a labelled text-line format. `_build_fused_signals()` serialises each event chronologically as one readable line: `[14:30] APP focus: VS Code — window: "billing.service.ts"`, `[14:31] SCREEN text: "..."`, `[14:31] FILE modified: /path/to/file`, etc. `FUSION_SESSION_SYSTEM_PROMPT` instructs the model to act as a detective: triangulate overlapping signals, name real files/topics/tickets, produce a concrete `next_step`. Session generation runs on **Groq** (`generate_session_summary_groq()`, `openai/gpt-oss-120b`) — see "Groq is Orbit's only chat/session-summary provider" above; `SUMMARY_MODEL`/`generate_session_summary()` (Claude Haiku, `claude_service.py`) still exist in the file but the Worker route they call no longer exists (COST-002) — nothing invokes them. New session columns: `activity` (what specifically they did), `next_step` (concrete continuation), `blockers` (what they seemed stuck on). |
 | **FTS5 indexes screen_text** | `events_fts` virtual table now indexes 5 columns: `raw_content, app_name, url, page_text, screen_text`. Keyword recall queries that match on-screen text snippets return `screen_content` events. `_migrate_schema()` in `database.py` drops and rebuilds the FTS5 table + triggers when `screen_text` is absent from an existing index. |
 | **`next_step` column — user-facing label only** | The DB column `sessions.next_step` and all API field names are unchanged. Only user-visible labels changed: session cards show **"Where you left off"** (MemoryViewer, TimelineView) instead of "Next step". The `RECALL_SYSTEM_PROMPT` instructs Claude to *describe where the user was* rather than prescribe what to do next. The context block sent to Claude labels the field `Where they left off:` instead of `Next step:`. Never rename the DB column or API field. |
 | **Activity Timeline tab** | New "Timeline" tab in the app (fourth option in the header selector; calendar icon in the collapsed pill). `TimelineView.tsx` fetches `GET /timeline/day?date=YYYY-MM-DD` and `GET /timeline/dates` via `useTimeline.ts`. Shows a proportional horizontal strip with coloured session blocks, date pill navigation (last 10 days), 3 stat cards, and a threaded session list. "Ask Orbit about this" on a session card sets `pendingQuery` in Zustand and switches the active panel to "chat". |
@@ -133,9 +133,12 @@ _split_events_at_system_boundaries()
     │
     │  (per batch — repeated for each content batch:)
     ▼
-httpx → Worker /classify → Gemini Flash API
+httpx → api.groq.com direct (BYOK) or Worker /chat-groq (no key, always 401)
+    │  → llama-3.1-8b-instant (classify_events_batch_groq)
     │  classifies: work / research / personal / system / communication
     │  updates events.category in SQLite
+    │  (Gemini classification via gemini_service.py/Worker /classify no longer
+    │   exists — removed in COST-002, was already unused during the beta)
     ▼
 _build_fused_signals() → labelled text lines per event
     │  [HH:MM] APP focus: <app> — window: "<title>"
@@ -144,16 +147,18 @@ _build_fused_signals() → labelled text lines per event
     │  [HH:MM] CLIPBOARD: "<redacted-safe text>"
     │  [HH:MM] BROWSER: <url> — "<page title>"  etc.
     ▼
-httpx → Worker /chat-groq → openai/gpt-oss-120b  (structured extraction, runs every 30 min)
-    │  Beta default is Groq (generate_session_summary_groq, reasoning_effort="low");
-    │  Claude Haiku 4.5 (SUMMARY_MODEL) still exists in claude_service.py, unused —
-    │  swap back in scheduler.py if Claude is re-enabled via the admin kill switch.
+httpx → api.groq.com direct (BYOK) or Worker /chat-groq (no key, always 401) → openai/gpt-oss-120b
+    │  (structured extraction, runs every 30 min; generate_session_summary_groq, reasoning_effort="low")
+    │  Claude Haiku 4.5 (SUMMARY_MODEL) still exists in claude_service.py — its Worker
+    │  route was removed in COST-002, not just disabled; nothing calls this file now.
     │  FUSION_SESSION_SYSTEM_PROMPT: detective triangulation across overlapping signals
     │  generates: {project_name, goal, activity, summary, last_action, next_step, blockers, key_resources, topics, evidence}
     │  active_minutes = (window events with is_user_active=1) × 30 s ÷ 60
     │  INSERT INTO sessions  (includes activity, next_step, blockers, active_minutes, topics)
     ▼
-httpx → Worker /embed → Voyage AI
+httpx → Worker /embed (requires X-Voyage-Api-Key — BYOK only, COST-002) → Voyage AI
+    │  no personal Voyage key configured → raises immediately, no request sent;
+    │  caught by scheduler.py, session saved with embedding_id=NULL (graceful — see below)
     │  512-dim vector: project_name | goal | activity | next_step | summary | topics
     └► Qdrant local upsert  (payload includes activity, next_step, blockers, active_minutes)
 ```
@@ -179,16 +184,18 @@ FTS5 keyword search (SQLite, local — always runs, even offline)
     │               Qdrant (up to 8) fills slots for projects not in DB results
     │               total capped at 12; one entry per distinct project_name
     │           else (no time range):
-    │               httpx → Worker /embed → Voyage AI → Qdrant semantic search
+    │               httpx → Worker /embed (BYOK, COST-002) → Voyage AI → Qdrant semantic search
+    │               no personal Voyage key → skipped, falls through to FTS5-only results
     │               returns: up to 8 sessions
     │               re-rank: (similarity × 0.7) + (recency × 0.3)
     │                   │
     │                   ▼
-    │           httpx → Worker /chat-groq → llama-3.3-70b-versatile (user-facing, beta default)
+    │           httpx → api.groq.com direct (BYOK) or Worker /chat-groq (no key, always 401)
+    │                   → llama-3.3-70b-versatile (user-facing)
     │                   stream_recall_response_groq() in groq_service.py — OpenAI-compatible SSE,
     │                   a different wire format from Claude's content_block_delta events.
-    │                   Claude Sonnet 4.6 (stream_recall_response, claude_service.py) still exists,
-    │                   unused while Claude is disabled via the admin kill switch.
+    │                   Claude Sonnet 4.6 (stream_recall_response, claude_service.py) still exists —
+    │                   its Worker route was removed in COST-002; nothing calls this file now.
     │                   receives: time label + intent hint + FTS5 events (incl. screen_content)
     │                             + re-ranked sessions (incl. activity / next_step / blockers)
     │                             + conversation_history
@@ -232,7 +239,7 @@ orbit/
 │   │   │   ├── Timeline/
 │   │   │   │   └── TimelineView.tsx        ← Timeline tab: date nav pills, stat cards, proportional strip, session list
 │   │   │   ├── MemoryViewer.tsx            ← view + delete events/sessions (two-tab UI)
-│   │   │   ├── PrivacyPanel.tsx            ← capture toggle, excluded apps, excluded websites, browser tracking toggle (BrowserTrackingSection), file activity watching, wipe button; ScreenContentSection rendered FIRST; AiProviderSection (read-only Claude/Gemini/Groq status rows, no user controls — admin kill switch only)
+│   │   │   ├── PrivacyPanel.tsx            ← capture toggle, excluded apps, excluded websites, browser tracking toggle (BrowserTrackingSection), file activity watching, wipe button; ScreenContentSection rendered FIRST; two `ApiKeySection` instances (Groq, Voyage — add/replace/test/remove/disable BYOK, COST-001/002)
 │   │   │   └── OrbWidget.tsx               ← floating companion orb (Phase 4)
 │   │   ├── store/
 │   │   │   └── orbitStore.ts               ← Zustand: conversationHistory: Message[] + pendingQuery (Timeline→Chat bridge)
@@ -243,8 +250,7 @@ orbit/
 │   │   │   ├── useAnalytics.ts             ← PostHog wrapper — never call posthog directly
 │   │   │   ├── useOnboarding.ts            ← onboarding state, polls accessibility + browser automation every 3s; requestBrowserAutomation()
 │   │   │   ├── usePrivacySettings.ts       ← privacy API calls; excluded domains + normalizeDomain(); nativeBrowserEnabled + setNativeBrowserEnabled; file watching CRUD; screenContentEnabled + setScreenContentEnabled
-│   │   │   ├── useProviderStatus.ts        ← fetches /settings/provider-status on mount; read-only {claudeEnabled, geminiEnabled, groqEnabled}; fails open (all true) if unreachable — no setters, admin-only control
-│   │   │   ├── useGroqKeySettings.ts       ← BYOK (COST-001): GET/POST/DELETE /settings/groq-key + POST .../test + .../enabled; exposes {configured, enabled}, never the raw key
+│   │   │   ├── useApiKeySettings.ts        ← generic BYOK hook (COST-001/002), parameterized by providerPath ("groq-key" | "voyage-key"): GET/POST/DELETE /settings/<provider>-key + POST .../test + .../enabled; exposes {configured, enabled}, never the raw key
 │   │   │   └── useMemoryData.ts            ← memory viewer: events, sessions, pagination
 │   │   └── types/                          ← all TypeScript types
 │   └── src-tauri/
@@ -269,17 +275,17 @@ orbit/
 │   ├── scheduler.py                        ← while True: asyncio.sleep(1800) loop
 │   ├── routes/
 │   │   ├── capture.py                      ← POST /capture (extension only), GET /events
-│   │   ├── recall.py                       ← POST /recall: FTS5 + Qdrant → Groq SSE (beta default; Claude code path intact, unused)
+│   │   ├── recall.py                       ← POST /recall: FTS5 + Qdrant → Groq SSE (BYOK; Claude code path intact but its Worker route is gone, unreachable)
 │   │   ├── privacy.py                      ← excluded apps CRUD, pause/resume, wipe
-│   │   ├── settings.py                     ← GET/POST/DELETE /settings/groq-key (per-user override, no UI currently); GET /settings/provider-status (proxies Worker kill switch, powers PrivacyPanel)
+│   │   ├── settings.py                     ← BYOK CRUD for GET/POST/DELETE /settings/groq-key and /settings/voyage-key + .../test + .../enabled (COST-001/002); GET /settings/provider-status removed, no admin kill switch left to proxy
 │   │   ├── feedback.py                     ← POST /feedback
 │   │   ├── timeline.py                     ← GET /timeline/day, GET /timeline/dates
 │   │   └── projects.py                     ← GET /projects (aggregated cards, case-insensitive dedup)
 │   ├── services/
-│   │   ├── claude_service.py               ← httpx singleton → Worker /chat — unused during beta (Claude disabled via kill switch)
-│   │   ├── gemini_service.py               ← httpx singleton → Worker /classify — unused during beta (Gemini disabled via kill switch)
-│   │   ├── groq_service.py                 ← httpx singleton → Worker /chat-groq — beta default for session summaries, classification, AND recall streaming
-│   │   ├── voyage_service.py               ← httpx singleton → Worker /embed
+│   │   ├── claude_service.py               ← httpx singleton → Worker /chat — route deleted in COST-002, this file is unreachable
+│   │   ├── gemini_service.py               ← httpx singleton → Worker /classify — route deleted in COST-002, this file is unreachable
+│   │   ├── groq_service.py                 ← httpx singleton → direct api.groq.com (BYOK) or Worker /chat-groq (no key, always 401) — session summaries, classification, AND recall streaming
+│   │   ├── voyage_service.py               ← httpx singleton → Worker /embed, requires a personal Voyage key (COST-002 BYOK)
 │   │   ├── qdrant_service.py               ← QdrantClient local file singleton
 │   │   ├── time_parser.py                  ← extracts time ranges from natural language queries
 │   │   ├── redaction_service.py            ← inline redaction for browser-captured text (page_text, search queries)
@@ -394,24 +400,28 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 
 ### AI Models
 
-**Beta default — Groq, centrally funded unless the user brings their own key (COST-001 BYOK), Claude and Gemini disabled via the admin kill switch:**
+**BYOK-only — no maintainer-funded fallback exists for any provider (COST-001/COST-002):**
 
 | Task | Model | Route |
 |---|---|---|
-| User recall + conversation | `llama-3.3-70b-versatile` (`GROQ_RECALL_MODEL`, `groq_service.py`) | Worker `/chat-groq` (no personal key) or direct `api.groq.com` (personal key configured) |
-| Background session summaries (signal fusion) | `openai/gpt-oss-120b` (`GROQ_SESSION_MODEL`), `reasoning_effort: "low"` | Worker `/chat-groq` or direct `api.groq.com`, same rule — every 30 min |
-| Event classification | `llama-3.1-8b-instant` (`GROQ_CLASSIFY_MODEL`) | Worker `/chat-groq` or direct `api.groq.com`, same rule — groups capped at 30 events (quality ceiling, see Critical Architecture Facts) |
-| Session embeddings | Voyage AI `voyage-3-lite` (512 dims) | Worker `/embed` — unaffected by the kill switch |
+| User recall + conversation | `llama-3.3-70b-versatile` (`GROQ_RECALL_MODEL`, `groq_service.py`) | Direct `api.groq.com` if a personal Groq key is configured; otherwise unavailable (falls back to the offline FTS5 message) |
+| Background session summaries (signal fusion) | `openai/gpt-oss-120b` (`GROQ_SESSION_MODEL`), `reasoning_effort: "low"` | Same rule as above — every 30 min |
+| Event classification | `llama-3.1-8b-instant` (`GROQ_CLASSIFY_MODEL`) | Same rule — groups capped at 30 events (quality ceiling, see Critical Architecture Facts) |
+| Session embeddings | Voyage AI `voyage-3-lite` (512 dims) | Worker `/embed`, requires a personal Voyage key (`X-Voyage-Api-Key`); otherwise skipped — sessions save with `embedding_id=NULL`, semantic search just has nothing to search |
 | Voice STT (Phase 4) | Whisper.cpp → Apple Speech fallback | local only |
 | Voice TTS (Phase 4) | Kokoro TTS → ElevenLabs Pro | local / Worker `/tts` |
 
-**Disabled during the beta (`CLAUDE_ENABLED=false`, `GEMINI_ENABLED=false` — Worker secrets, `npx wrangler secret put <NAME>` to flip), code paths intact for re-enabling:**
+**Removed entirely (COST-002), not just disabled — no Worker route, no BYOK path, no maintainer-funded key remains for either:**
 
-| Task | Model | Route |
+| Task | Model | Former route |
 |---|---|---|
-| User recall + conversation | Claude Sonnet 4.6 (`RECALL_MODEL`, `claude_service.py`) | Worker `/chat` |
-| Background session summaries (signal fusion) | Claude Haiku 4.5 (`SUMMARY_MODEL`, `claude_service.py`) | Worker `/chat` |
-| Event classification | `gemini-3.1-flash-lite` (`gemini_service.py`) | Worker `/classify` |
+| User recall + conversation | Claude Sonnet 4.6 (`RECALL_MODEL`, `claude_service.py`) | Worker `/chat` — deleted |
+| Background session summaries (signal fusion) | Claude Haiku 4.5 (`SUMMARY_MODEL`, `claude_service.py`) | Worker `/chat` — deleted |
+| Event classification | `gemini-3.1-flash-lite` (`gemini_service.py`) | Worker `/classify` — deleted |
+
+Neither was in active use during the beta (both were already kill-switched off),
+and neither has ever had a BYOK path built for it in this codebase — restoring
+either means designing and building that from scratch, not just flipping a flag.
 
 ### Storage
 | Layer | Tool | Notes |
@@ -473,8 +483,8 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `app/src-tauri/tauri.conf.json` | Two windows: `main` (panel, skipTaskbar, transparent, decorations:false) and `overlay` (Phase 4: fullscreen, alwaysOnTop, focus:false, transparent). |
 | `backend/main.py` | FastAPI with `@asynccontextmanager` lifespan. Inits Sentry, starts `asyncio.create_task(start_session_generation_loop())`. No APScheduler. GET /health endpoint. |
 | `backend/database.py` | SQLAlchemy async engine. Creates all tables + FTS5 virtual table + auto-sync triggers on startup. Events schema includes `page_text`, `link_target`, `metadata`, `file_path`, `is_user_active`, `screen_text` (Phase 2.9). FTS5 indexes 5 columns: `raw_content, app_name, url, page_text, screen_text`. `_migrate_schema()` drops + rebuilds FTS5 table + triggers when `screen_text` absent. `idx_events_url_timestamp` index on `events(url, timestamp)`. Sessions schema includes `last_action`, `key_resources`, `topics`, `active_minutes`, `activity`, `next_step`, `blockers` (Phase 2.9). `screen_content_settings` table (single row, id=1) seeded with `enabled=1`. `file_watch_settings` table seeded with default folders. `browser_capture_settings` table seeded with `native_enabled=1`. `search_events_fts()` SELECT now includes `file_path` and `screen_text`. `fetch_sessions_by_time_range(start_ms, end_ms, max_per_project=1)` returns the best session per distinct `project_name` within a time window — used by `recall.py` for time-range queries as the primary session source. |
-| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now`. `generate_sessions_from_recent_events()`: fetch → `_split_events_at_system_boundaries()` → per batch: `_dedup_events_by_url_for_prompt()` → classify (`_classify_events_with_configured_provider()` → **Groq**, `classify_events_batch_groq`) → `_build_fused_signals()` (labelled text lines: `[HH:MM] APP focus / SCREEN text / FILE / CLIPBOARD / BROWSER / …`) → `FUSION_SESSION_SYSTEM_PROMPT` (detective triangulation) → **Groq** (`generate_session_summary_groq`, `openai/gpt-oss-120b`) → embed (Voyage) → mark processed. Claude/Gemini imports intentionally removed during the beta (see comment at top of file) — reintroduce them to restore a fallback path. On Groq failure, batch is stamped `session_id='parse_failed'` (circuit breaker — prevents the same backlog being reclassified every 30-min cycle forever, a real incident observed in production before this existed) and picked up later by the bounded `_retry_parse_failed_events()` recovery lane (≤20 events/cycle). New session fields extracted: `activity`, `next_step`, `blockers`. `_ensure_sessions_schema_columns_exist()` adds `topics`, `active_minutes`, `activity`, `next_step`, `blockers`. SQL SELECTs include `screen_text, file_path, is_user_active, category`. |
-| `backend/routes/recall.py` | FTS5-first sequential pipeline. (1) Classify intent. (2) Parse time reference. (3) Optionally fetch system_state events. (4) FTS5 keyword search (returns `file_path` + `screen_text` columns now). (5) URL dedup. (6) Session lookup → AI SSE (**Groq** during the beta — `stream_recall_response_groq()`, `groq_service.py`; Claude's `stream_recall_response()` still exists in `claude_service.py`, unused). **Session lookup strategy differs by query type:** for queries WITHOUT a time range, uses Qdrant semantic search (up to 8 sessions, re-ranked by similarity × 0.7 + recency × 0.3); for queries WITH a time range ("yesterday", "today", etc.), uses `fetch_sessions_by_time_range()` as primary source (one session per distinct project_name, ordered by active_minutes then duration), then fills remaining slots up to 12 with Qdrant results for projects not already covered. This ensures "what did I work on yesterday?" returns all projects rather than only the semantically closest one. Context block: `screen_content` events formatted as `[time] In <app>: "<screen_text snippet>"`. Session block shows fused fields: `What you were doing: <activity>` (falls back to `Summary` for pre-Phase-2.9 sessions), `Goal`, `Where they left off: <next_step>`, `Left off: <last_action>`, `Blocked on: <blockers>`, `Topics`, `Resources`, `Active time`. The context label was renamed from `Next step:` to `Where they left off:` as part of the context-restoration UX philosophy change. The offline FTS5 fallback (`_format_fts5_fallback`, on `httpx.ConnectError`/`TimeoutException`/`HTTPStatusError`) now also fires automatically when the admin kill switch disables Groq — no special-casing needed, the 503 from the Worker raises the same exception types. |
+| `backend/scheduler.py` | `AsyncIOScheduler` (APScheduler v3.x stable). `create_session_scheduler()` returns a configured scheduler with 30-min interval and `next_run_time=now`. `generate_sessions_from_recent_events()`: fetch → `_split_events_at_system_boundaries()` → per batch: `_dedup_events_by_url_for_prompt()` → classify (`_classify_events_with_configured_provider()` → **Groq**, `classify_events_batch_groq`) → `_build_fused_signals()` (labelled text lines: `[HH:MM] APP focus / SCREEN text / FILE / CLIPBOARD / BROWSER / …`) → `FUSION_SESSION_SYSTEM_PROMPT` (detective triangulation) → **Groq** (`generate_session_summary_groq`, `openai/gpt-oss-120b`) → embed (Voyage) → mark processed. Claude/Gemini imports intentionally removed (see comment at top of file) — their Worker routes are gone too (COST-002), so restoring a fallback means rebuilding the Worker route first, not just re-importing. On Groq failure, batch is stamped `session_id='parse_failed'` (circuit breaker — prevents the same backlog being reclassified every 30-min cycle forever, a real incident observed in production before this existed) and picked up later by the bounded `_retry_parse_failed_events()` recovery lane (≤20 events/cycle). New session fields extracted: `activity`, `next_step`, `blockers`. `_ensure_sessions_schema_columns_exist()` adds `topics`, `active_minutes`, `activity`, `next_step`, `blockers`. SQL SELECTs include `screen_text, file_path, is_user_active, category`. |
+| `backend/routes/recall.py` | FTS5-first sequential pipeline. (1) Classify intent. (2) Parse time reference. (3) Optionally fetch system_state events. (4) FTS5 keyword search (returns `file_path` + `screen_text` columns now). (5) URL dedup. (6) Session lookup → AI SSE (**Groq** during the beta — `stream_recall_response_groq()`, `groq_service.py`; Claude's `stream_recall_response()` still exists in `claude_service.py`, unused). **Session lookup strategy differs by query type:** for queries WITHOUT a time range, uses Qdrant semantic search (up to 8 sessions, re-ranked by similarity × 0.7 + recency × 0.3); for queries WITH a time range ("yesterday", "today", etc.), uses `fetch_sessions_by_time_range()` as primary source (one session per distinct project_name, ordered by active_minutes then duration), then fills remaining slots up to 12 with Qdrant results for projects not already covered. This ensures "what did I work on yesterday?" returns all projects rather than only the semantically closest one. Context block: `screen_content` events formatted as `[time] In <app>: "<screen_text snippet>"`. Session block shows fused fields: `What you were doing: <activity>` (falls back to `Summary` for pre-Phase-2.9 sessions), `Goal`, `Where they left off: <next_step>`, `Left off: <last_action>`, `Blocked on: <blockers>`, `Topics`, `Resources`, `Active time`. The context label was renamed from `Next step:` to `Where they left off:` as part of the context-restoration UX philosophy change. The offline FTS5 fallback (`_format_fts5_fallback`, on `httpx.ConnectError`/`TimeoutException`/`HTTPStatusError`) also fires automatically when no personal Groq key is configured — no special-casing needed, the 401 the Worker now always returns (COST-002 — no shared key) raises the same exception types. |
 | `backend/routes/capture.py` | POST /capture (extension only — Rust writes direct). Checks pause state, excluded app names, and excluded domains (all cached 30s). Domain extracted via `urlparse().netloc` before every browser event. URL dedup: `_find_recent_url_event()` queries `events(url, timestamp)` with `_URL_DEDUP_WINDOW_MS = 10_000`; extension beats native_browser (drop native); if native in DB and extension arrives, DELETE native INSERT extension. `page_text` for `page_content` events and `raw_content` for `search_query` events are passed through `redact_sensitive_content()` before INSERT. GET /events for timeline. |
 | `backend/routes/privacy.py` | Excluded apps CRUD, pause/resume, capture status, full data wipe (SQLite + Qdrant). Wipe uses SQLite secure-delete, WAL truncation, and `VACUUM`; it deletes FTS rows, sessions, memory objects, and extension pairings before clearing Qdrant vectors. `GET/POST/DELETE /privacy/excluded-domains` — domain exclusion CRUD. `GET/POST /privacy/browser-capture` — native browser URL capture toggle; returns `{native_enabled, browsers: [...]}`. `GET/POST /privacy/screen-content` — on-screen content capture toggle; `SetScreenContentRequest(enabled: bool)` UPDATEs `screen_content_settings`. `GET/POST /privacy/file-watching` — enable/disable file activity capture. `POST/DELETE /privacy/watched-folders` — add/remove watched folder paths (JSON body). |
 | `backend/routes/feedback.py` | POST /feedback — stores rating + comment in SQLite. |
@@ -484,11 +494,11 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `app/src/hooks/useProjects.ts` | Fetches `GET /projects` on mount. Module-level `moduleCache` (not a ref) holds data + `fetchedAt` timestamp — shared across re-renders, skipped if younger than 5 minutes. Force-refreshes on `document.visibilitychange`. Fails silently — returns empty `projects` array on error. |
 | `app/src/components/Timeline/TimelineView.tsx` | Full Timeline tab UI. Three sub-components: `TimelineStrip` (proportional horizontal bar — session blocks sized by `widthPercent`, positioned by `leftPercent`, colored by `getProjectColor`; 2-hour tick marks in local time; hover tooltip); `SessionCard` (color dot, time range, activity summary, topics, blockers, resources, "Where you left off" label for `next_step`, "Ask Orbit" button); `TimelineView` (date pill selector for last 10 days, stat cards, strip, threaded session list). Uses `onAskOrbit` prop which calls `setPendingQuery` + `setActivePanel("chat")` in App.tsx. |
 | `app/src/components/ProjectCards.tsx` | Project cards dashboard. Shown inside `RecallSearch` when `conversationHistory` is empty. Receives `isVisible` prop — when `false`, sets `opacity: 0` and `pointer-events: none` (0.2 s ease-out CSS transition). Card body click calls `onPrefill(query)` (sets input value + focus, does NOT submit). `→` arrow calls `onSubmit(query)` (submits immediately). Shows loading shimmer while `isLoading`. Returns `null` if `projects.length === 0` after load (clean empty state on first install). |
-| `backend/services/claude_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/chat`. Handles SSE streaming. `RECALL_MODEL = "claude-sonnet-4-6"`, `SUMMARY_MODEL = "claude-haiku-4-5-20251001"`. **Currently unused during the beta** — Claude is disabled via the Worker's `CLAUDE_ENABLED` kill switch and Groq (`groq_service.py`) handles both recall and session summaries instead. Code is intact, not deleted — re-wire `scheduler.py`/`recall.py` to call back into this file to restore Claude. |
-| `backend/services/gemini_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/classify`. Builds Gemini REST API body. Extracts text from `candidates[0].content.parts[0].text`. Sends `id, type, app_name, url, raw_content` — raw_content is already redacted at capture, so it's safe and needed for accurate classification. Falls back to `category='work'` if JSON parse fails. **Currently unused during the beta** — Gemini is disabled via `GEMINI_ENABLED`; `groq_service.py` handles classification instead. |
+| `backend/services/claude_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/chat`. Handles SSE streaming. `RECALL_MODEL = "claude-sonnet-4-6"`, `SUMMARY_MODEL = "claude-haiku-4-5-20251001"`. **Unreachable, not just unused** — the Worker's `/chat` route was removed entirely in COST-002 (Claude was never wired to `scheduler.py`/`recall.py` in the first place during the beta); a call from this file would now get a 404 from the Worker. Left in place as-is; re-adding Claude support would mean re-adding the Worker route (with its own BYOK/kill-switch design) before this file becomes useful again. |
+| `backend/services/gemini_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/classify`. Builds Gemini REST API body. Extracts text from `candidates[0].content.parts[0].text`. Sends `id, type, app_name, url, raw_content` — raw_content is already redacted at capture, so it's safe and needed for accurate classification. Falls back to `category='work'` if JSON parse fails. **Unreachable, not just unused** — the Worker's `/classify` route was removed entirely in COST-002; `groq_service.py` has handled classification since before the beta and this file was never called from `scheduler.py`. |
 | `backend/services/groq_service.py` | Singleton `httpx.AsyncClient` (180 s timeout — classification of a large backlog can legitimately need minutes; recall uses a separate 30 s timeout, `_GROQ_RECALL_TIMEOUT_SECONDS`, since it's a live user-facing request). Three provider-facing functions: `generate_session_summary_groq()` (session fusion, `reasoning_effort="low"` — critical, see Critical Architecture Facts), `classify_events_batch_groq()` (event classification, content-aware group splitting via `_split_events_by_estimated_size()`, hard-capped at 30 events/group, sanity-checks response size against a 1.5× threshold to reject repetition-loop garbage), `stream_recall_response_groq()` (user-facing streaming, OpenAI-compatible SSE parser — NOT the same wire format as Claude's). All three call `database.get_groq_api_key()`: if a personal key exists, the request goes straight to `GROQ_DIRECT_API_URL` (`https://api.groq.com/openai/v1/chat/completions`) with `Authorization: Bearer <key>` — the Worker is bypassed entirely (COST-001 BYOK); otherwise the request goes to the Worker's `/chat-groq` route with no auth header, and the Worker uses its own shared `GROQ_API_KEY` secret. `test_groq_api_key()` validates a candidate key with a free `GET /models` call directly against `api.groq.com` — never persisted, used for exactly one request. `_call_groq_chat()` is the shared low-level POST helper — 429 sets a per-model cooldown (`_groq_rate_limited_until` dict), 413 logs and returns None (payload-size problem, not time-based — no cooldown), empty completions are logged with `finish_reason` for diagnosis. No branch ever logs headers, request bodies, or response bodies — only `log_provider_diagnostic()`'s coarse provider/model/status/duration/error-kind fields. |
-| `backend/routes/settings.py` | `GET/POST/DELETE /settings/groq-key` + `POST /settings/groq-key/test` — the BYOK settings surface (COST-001), wired to PrivacyPanel's "Your Own Groq Key" section via `useGroqKeySettings.ts`. `GET` returns only `{configured, enabled}` — the raw key is never returned to the webview after saving. `POST` validates the `gsk_`-prefixed shape, stores to Keychain, and force-enables. `POST .../test` validates a candidate key against Groq directly (via `groq_service.test_groq_api_key()`) without ever storing it — used for the UI's "Test" action before committing. `DELETE` removes the Keychain entry. `POST /settings/groq-key/enabled` pauses/resumes use of the stored key without discarding it (falls back to Orbit's shared-key path while disabled). `GET /settings/provider-status` is unrelated — it proxies the Worker's admin kill switch, fails open (`{claude: true, gemini: true, groq: true}`) if the Worker is unreachable, and powers the separate read-only "AI Provider" status rows via `useProviderStatus.ts`. |
-| `backend/services/voyage_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/embed`. Body: `{"input": [text], "model": "voyage-3-lite", "input_type": "document"}`. Returns 512-dim float list. |
+| `backend/routes/settings.py` | The BYOK settings surface (COST-001/002) for both `groq-key` and `voyage-key`: `GET/POST/DELETE /settings/<provider>-key` + `POST .../test` + `POST .../enabled`, wired to PrivacyPanel's two `ApiKeySection` instances via `useApiKeySettings.ts`. Shared CRUD logic (`_get_key_status`/`_save_key`/`_delete_key`) is provider-agnostic; each provider supplies its own key-format validator (`_is_plausible_groq_key`/`_is_plausible_voyage_key`) and test function (`groq_service.test_groq_api_key`/`voyage_service.test_voyage_api_key`). `GET` returns only `{configured, enabled}` — the raw key is never returned to the webview after saving. `POST` validates the format, stores to Keychain, and force-enables. `POST .../test` validates a candidate key directly against the provider without ever storing it. `DELETE` removes the Keychain entry. `POST .../enabled` pauses/resumes use of the stored key without discarding it. `GET /settings/provider-status` no longer exists (COST-002 — there is no more admin kill switch to proxy). |
+| `backend/services/voyage_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/embed`. Body: `{"input": [text], "model": "voyage-3-lite", "input_type": "document"}`. Returns 512-dim float list. **BYOK-only since COST-002**: `database.get_voyage_api_key()` is read immediately before every call; with no personal key, raises immediately with no request sent (no maintainer-funded fallback exists) — callers (`qdrant_service.py`) already treat any embedding failure as non-fatal. A 401 response (invalid/revoked key) also fails fast, skipping the retry/backoff loop. `test_voyage_api_key()` validates a candidate key with one minimal real embed call — Voyage has no free introspection endpoint the way Groq's `/models` does. |
 | `backend/services/time_parser.py` | Standard-library time reference parser (no third-party deps). `extract_time_range_from_query(query, now_ms)` checks 11 patterns most-specific-first (e.g. "yesterday morning" before "yesterday") and returns `{"start_ms": int, "end_ms": int, "label": str}` or `None`. Used by `recall.py` to filter both FTS5 and Qdrant results to a concrete time window. |
 | `backend/services/redaction_service.py` | Inline sensitive-content redaction for browser-captured text. Ports Rust clipboard patterns as `re.sub()` — replaces only matched substrings (preserves article context). All 7 pattern steps run on every call. JWT uses `eyJ` anchor to avoid false positives in long text. API key pattern uses negative lookbehind + 8-char minimum body. Called by `capture.py` for `page_text` and search `raw_content` before DB write. |
 | `backend/services/qdrant_service.py` | `QdrantClient(path=QDRANT_STORAGE_PATH)` singleton (default `~/.orbit/qdrant_storage`). Collection `orbit_sessions`, 512 dims, cosine. Raw vector upsert (no fastembed). Storage is repaired to owner-only permissions at startup. |
@@ -497,7 +507,7 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `extension/src/background.ts` | MV3 service worker. All state in `chrome.storage.session` (never global vars). Emits bare `url` events on tab navigation (deduped by `lastSentUrl`). Handles three content-script message types: `page_content`, `search_query`, `link_click` — relays them to POST /capture. `onMessage` callback is synchronous (fire-and-forget) to keep the MV3 message channel intact. Fails silently when backend unreachable. |
 | `extension/src/content.ts` | Runs in every page context. 5-second visibility filter — pages the user bounced off are discarded. On threshold: detects search queries first (Google, YouTube, Bing, DuckDuckGo); otherwise runs `@mozilla/readability` on a DOM clone to extract article body (≤2 000 chars), author, site_name, excerpt. Sends `page_content` or `search_query` to the background worker on tab departure (`visibilitychange` + `pagehide`). Left-click listener captures `link_click` events with 500 ms debounce. |
 | `extension/package.json` | Runtime dep: `@mozilla/readability@^0.6.0` — ships own `index.d.ts`; do **NOT** install `@types/mozilla-readability` (conflicts). DevDeps: `@crxjs/vite-plugin`, `@types/chrome`, `typescript`, `vite`. |
-| `worker/src/index.ts` | Routes: `/chat` → Claude, `/classify` → Gemini REST, `/chat-groq` → Groq (OpenAI-compatible; prefers caller's `X-Groq-Api-Key` header, falls back to `env.GROQ_API_KEY`; response body piped through unbuffered so streaming works), `/provider-status` (GET, no auth — reads the kill switch flags), `/embed` → Voyage AI, `/tts` → stub, `/stt-token` → stub. `isEnabled(flag)` / `providerDisabledResponse()` implement the admin kill switch — `CLAUDE_ENABLED`/`GEMINI_ENABLED`/`GROQ_PROXY_ENABLED` Worker secrets, `"false"` disables, anything else (including absent) is enabled. All secrets in Cloudflare env. CORS headers (`GET, POST, OPTIONS`) on every response. |
+| `worker/src/index.ts` | Zero-secret BYOK-only passthrough (COST-002). `WorkerEnvironment` is an intentionally empty interface. Routes: `/chat-groq` → Groq (OpenAI-compatible; requires the caller's `X-Groq-Api-Key`, 401 without it, no fallback; response body piped through unbuffered so streaming works), `/embed` → Voyage AI (requires `X-Voyage-Api-Key`, 401 without it), `/tts` → stub, `/stt-token` → stub. `/chat` (Claude), `/classify` (Gemini), and `/provider-status`/admin kill switch have been deleted, not disabled. `worker/README.md` has the full rationale. CORS headers (`GET, POST, OPTIONS`) on every response. Tested with `vitest` (`worker/src/index.test.ts`) — auth, routing, and passthrough behavior with a mocked `fetch`. |
 | `landing/src/app/page.tsx` | Landing page — Server Component. Hero, "How it works" 3-card section, privacy callout strip. Uses header, footer, background-orbit, waitlist-form. |
 | `landing/src/app/layout.tsx` | Root layout. Sets `metadataBase`, explicit `openGraph` and `twitter` metadata. Canonical URL resolves via `NEXT_PUBLIC_APP_URL` env var. |
 | `landing/src/app/opengraph-image.tsx` | Edge runtime `ImageResponse` — auto-wired by Next.js to og:image and twitter:image metadata. 1200×630 px dark PNG with orbit ring decoration, headline, and "Early Access" badge. No explicit metadata entry needed. |
@@ -693,22 +703,20 @@ Event is still written — Orbit knows you copied something from which app, not 
 **The principle:** Secrets are redacted at capture time (Rust). Everything that
 reaches the database is already safe. AI services need real content to write
 useful summaries — app names alone are meaningless. So we DO send content, but
-only content that has already passed through redaction. This principle is
-identical regardless of which provider is currently active — Groq (beta
-default) receives exactly the same redacted fields Claude/Gemini would.
+only content that has already passed through redaction. This applies equally
+to whichever provider is being called (Groq — Claude/Gemini no longer exist,
+COST-002).
 
-- **Classification** (Groq `llama-3.1-8b-instant` during the beta; Gemini
-  `gemini-3.1-flash-lite` when re-enabled) receives: `id, type, app_name, url,
-  raw_content` (raw_content is already redacted — `[REDACTED:type]` for any
-  secret). Needs the content to classify accurately ("is this work or
+- **Classification** (`llama-3.1-8b-instant`) receives: `id, type, app_name,
+  url, raw_content` (raw_content is already redacted — `[REDACTED:type]` for
+  any secret). Needs the content to classify accurately ("is this work or
   personal?").
-- **Session summaries** (Groq `openai/gpt-oss-120b` during the beta; Claude
-  Haiku when re-enabled) receives: classified events with `app_name`, `url`,
-  `window title`, and `raw_content` — all already redacted. Needs this to
-  write a summary that actually describes what the user did.
-- **Recall** (Groq `llama-3.3-70b-versatile` during the beta; Claude Sonnet
-  when re-enabled) receives: session summaries + matching events (window
-  titles, URLs, redacted clipboard content).
+- **Session summaries** (`openai/gpt-oss-120b`) receives: classified events
+  with `app_name`, `url`, `window title`, and `raw_content` — all already
+  redacted. Needs this to write a summary that actually describes what the
+  user did.
+- **Recall** (`llama-3.3-70b-versatile`) receives: session summaries +
+  matching events (window titles, URLs, redacted clipboard content).
 
 **What makes this safe:**
 - Secrets never reach the database — redaction happens in `clipboard.rs` before
@@ -783,10 +791,10 @@ User controls via `PrivacyPanel.tsx → FileActivitySection`:
 
 ### Other Rules
 - All data local by default. Cloud sync opt-in, Phase 5 only.
-- No maintainer-owned AI provider keys on user machines — those stay in
-  Worker secrets only. A user's own Groq key (optional, BYOK) lives only in
-  their local macOS Keychain, never in SQLite, the app binary, or Orbit's
-  infrastructure.
+- No maintainer-owned AI provider keys exist anywhere in this system anymore
+  (COST-002 — the Worker holds none). A user's own Groq/Voyage key
+  (optional, BYOK) lives only in their local macOS Keychain, never in
+  SQLite, the app binary, or Orbit's infrastructure.
 - One-click full memory wipe (PrivacyPanel).
 - User can view/delete any stored item (MemoryViewer).
 
@@ -794,57 +802,41 @@ User controls via `PrivacyPanel.tsx → FileActivitySection`:
 
 ## Cloudflare Worker
 
-All AI calls go through the Worker. No exceptions.
+The Worker is a stateless BYOK passthrough. It holds no provider secret of
+any kind (COST-002) — every request must carry the caller's own key, and the
+backend is the only legitimate caller. Full rationale in `worker/README.md`.
 
 | Route | Upstream | Status |
 |---|---|---|
-| `POST /chat` | `api.anthropic.com/v1/messages` | ✅ Live, disabled via `CLAUDE_ENABLED=false` (beta) |
-| `POST /classify` | Gemini Flash REST API | ✅ Live, disabled via `GEMINI_ENABLED=false` (beta) |
-| `POST /chat-groq` | `api.groq.com/openai/v1/chat/completions` | ✅ Live — Orbit's default provider during the beta. Uses caller's `X-Groq-Api-Key` header if present, else the Worker's own `GROQ_API_KEY` secret. Pipes the response body straight through (not buffered) so streaming (recall) works. |
-| `GET /provider-status` | — (reads Worker secrets directly) | ✅ Live — no auth, returns `{"claude": bool, "gemini": bool, "groq": bool}`. Powers the read-only status rows in PrivacyPanel. |
-| `POST /embed` | `api.voyageai.com/v1/embeddings` | ✅ Live |
+| `POST /chat-groq` | `api.groq.com/openai/v1/chat/completions` | ✅ Live — requires the caller's `X-Groq-Api-Key`; 401 without it. No fallback of any kind. Pipes the response body straight through (not buffered) so streaming (recall) works. |
+| `POST /embed` | `api.voyageai.com/v1/embeddings` | ✅ Live — requires the caller's `X-Voyage-Api-Key`; 401 without it. |
 | `POST /tts` | ElevenLabs | 🔲 Stub (Phase 4) |
 | `POST /stt-token` | STT provider | 🔲 Stub (Phase 4) |
+| `POST /chat` (Claude) | — | ❌ Removed (COST-002). Never wired to the app during the beta; no BYOK path exists for it. |
+| `POST /classify` (Gemini) | — | ❌ Removed (COST-002). `groq_service.py` has handled classification since before the beta. |
+| `GET /provider-status` | — | ❌ Removed (COST-002). There is no more admin kill switch to report on. |
 
-### Admin kill switch
-
-`CLAUDE_ENABLED` / `GEMINI_ENABLED` / `GROQ_PROXY_ENABLED` — plain Worker secrets (not tied to any provider's own credential), each gate their route independently. Set the literal string `"false"` to disable; absent/unset/any other value = enabled (fail-open by design — a misconfigured or missing secret must never silently take the app down).
-
-```bash
-cd worker
-npx wrangler secret put CLAUDE_ENABLED       # type: false (or true to re-enable)
-npx wrangler secret put GEMINI_ENABLED       # type: false
-npx wrangler secret put GROQ_PROXY_ENABLED   # type: false — pauses Groq app-wide if ever needed
-```
-
-Takes effect on the next request — no redeploy. Every backend caller already treats the resulting HTTP 503 as "provider unavailable" and degrades gracefully through existing error handling (no backend code changes needed to use this).
-
-**Wrangler secrets:** `ANTHROPIC_API_KEY` `GEMINI_API_KEY` `VOYAGE_API_KEY` `GROQ_API_KEY` `CLAUDE_ENABLED` `GEMINI_ENABLED` `GROQ_PROXY_ENABLED` `ELEVENLABS_API_KEY` (Phase 4)
+**No secrets to configure.** `WorkerEnvironment` is an empty interface — there
+is nothing to `wrangler secret put` and no `.dev.vars` file to create. An
+anonymous caller who finds this Worker's URL can only ever spend *their own*
+Groq/Voyage credentials, never the maintainer's.
 
 ```bash
 cd worker
-npx wrangler secret put ANTHROPIC_API_KEY
-npx wrangler secret put GEMINI_API_KEY
-npx wrangler secret put VOYAGE_API_KEY
-npx wrangler secret put GROQ_API_KEY
+npm install
+npm run test      # vitest — auth, routing, passthrough behavior
+npx wrangler dev   # local dev, no secrets needed
 npx wrangler deploy
-```
-
-**worker/.dev.vars (gitignored):**
-```
-ANTHROPIC_API_KEY=your_key
-GEMINI_API_KEY=your_key
-VOYAGE_API_KEY=your_key
-GROQ_API_KEY=your_key
 ```
 
 ---
 
 ## Environment Variables
 
-**Rule:** Maintainer-owned AI provider keys → Cloudflare Worker secrets only.
-Backend `.env` has no AI keys. A user's own Groq key (BYOK, COST-001) never
-goes in `.env` either — it lives only in the local macOS Keychain.
+**Rule:** No AI provider key lives in an env file anywhere, maintainer- or
+user-owned. The Worker holds none at all (COST-002 — `WorkerEnvironment` is
+empty). A user's own Groq/Voyage key (BYOK, COST-001/002) lives only in the
+local macOS Keychain, never in `backend/.env` or any other config file.
 
 ### backend/.env (gitignored)
 ```
@@ -1079,14 +1071,20 @@ and auto-advances when granted.
 ## DO NOT
 
 - Add features, refactors, or improvements beyond exact scope.
-- Call Gemini, Voyage AI, or Claude directly — those always go through the
-  Cloudflare Worker. Groq is the sole, deliberate exception: call it directly
-  only when a personal key is configured (COST-001 BYOK); with no personal
-  key, Groq also goes through the Worker like the others.
+- Call Claude or Gemini at all — both were removed entirely in COST-002
+  (no Worker route, no BYOK path). Call Groq/Voyage directly (bypassing the
+  Worker) only when a personal key is configured; with no personal key, the
+  Worker call is still attempted for Groq as an existing code path but will
+  always 401 (no shared secret exists to fall back to), and Voyage skips the
+  network call entirely and raises immediately.
 - Create new `httpx.AsyncClient`, `QdrantClient`, or `reqwest::Client` per request.
-- Put `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `VOYAGE_API_KEY`, or `GROQ_API_KEY` in any `.env` file — Worker secrets only.
+- Put any AI provider key — maintainer- or user-owned, for any provider — in
+  any `.env` file. There are no maintainer-owned keys left anywhere in this
+  system; user keys go in macOS Keychain only.
 - Give `max_tokens` a generous, "just to be safe" budget on any Groq call. This model family has an observed repetition-loop failure mode on long single-shot outputs — a generous budget doesn't prevent it, it just lets a bad roll burn far more tokens (and cost) before hitting the ceiling. Size `max_tokens` tightly to what a legitimate response needs.
-- Re-add a Claude/Gemini fallback inside `scheduler.py`'s Groq call sites without first checking whether the admin kill switch is still meant to be on — the branches were deliberately removed (not commented out), see `services.claude_service`/`services.gemini_service` import comment at the top of `scheduler.py`.
+- Re-add a Worker route or maintainer-funded key for Claude or Gemini without
+  a real plan for keeping it safe from anonymous abuse (auth, rate limits,
+  or a BYOK design) — this is exactly the exposure COST-002 removed.
 - Assume the auto-updater endpoint or release download links point at the source repo (`Saadaan-Hassan/orbit`) — they point at the public `Saadaan-Hassan/orbit-releases` repo. The source repo is private and its release assets are not publicly downloadable.
 - Install `google-genai` `google-generativeai` `sentence-transformers` `torch` `onnxruntime` `qdrant-client[fastembed]`.
 - Install APScheduler v4 (`from apscheduler import AsyncScheduler`) — pre-release, unstable. Use v3.x only (`from apscheduler.schedulers.asyncio import AsyncIOScheduler`).

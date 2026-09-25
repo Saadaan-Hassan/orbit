@@ -13,6 +13,7 @@ import sys
 
 KEYCHAIN_SERVICE = "com.heyorbit.orbit"
 GROQ_KEYCHAIN_ACCOUNT = "groq-api-key"
+VOYAGE_KEYCHAIN_ACCOUNT = "voyage-api-key"
 _SECURITY_BINARY = "/usr/bin/security"
 
 
@@ -48,12 +49,12 @@ def _run_security(arguments: list[str], *, secret_input: str | None = None) -> s
     return result
 
 
-def _store_groq_api_key_sync(api_key: str) -> None:
+def _store_api_key_sync(account: str, api_key: str) -> None:
     _run_security(
         [
             "add-generic-password",
             "-a",
-            GROQ_KEYCHAIN_ACCOUNT,
+            account,
             "-s",
             KEYCHAIN_SERVICE,
             "-U",
@@ -63,13 +64,13 @@ def _store_groq_api_key_sync(api_key: str) -> None:
     )
 
 
-def _get_groq_api_key_sync() -> str | None:
+def _get_api_key_sync(account: str) -> str | None:
     try:
         result = _run_security(
             [
                 "find-generic-password",
                 "-a",
-                GROQ_KEYCHAIN_ACCOUNT,
+                account,
                 "-s",
                 KEYCHAIN_SERVICE,
                 "-w",
@@ -81,14 +82,14 @@ def _get_groq_api_key_sync() -> str | None:
     return value or None
 
 
-def _has_groq_api_key_sync() -> bool:
+def _has_api_key_sync(account: str) -> bool:
     try:
         # Deliberately omit -w: Keychain returns metadata/status, not the key.
         _run_security(
             [
                 "find-generic-password",
                 "-a",
-                GROQ_KEYCHAIN_ACCOUNT,
+                account,
                 "-s",
                 KEYCHAIN_SERVICE,
             ]
@@ -98,13 +99,13 @@ def _has_groq_api_key_sync() -> bool:
         return False
 
 
-def _delete_groq_api_key_sync() -> None:
+def _delete_api_key_sync(account: str) -> None:
     try:
         _run_security(
             [
                 "delete-generic-password",
                 "-a",
-                GROQ_KEYCHAIN_ACCOUNT,
+                account,
                 "-s",
                 KEYCHAIN_SERVICE,
             ]
@@ -113,17 +114,37 @@ def _delete_groq_api_key_sync() -> None:
         return
 
 
+def _store_groq_api_key_sync(api_key: str) -> None:
+    _store_api_key_sync(GROQ_KEYCHAIN_ACCOUNT, api_key)
+
+
 async def store_groq_api_key(api_key: str) -> None:
-    await asyncio.to_thread(_store_groq_api_key_sync, api_key)
+    await asyncio.to_thread(_store_api_key_sync, GROQ_KEYCHAIN_ACCOUNT, api_key)
 
 
 async def get_groq_api_key() -> str | None:
-    return await asyncio.to_thread(_get_groq_api_key_sync)
+    return await asyncio.to_thread(_get_api_key_sync, GROQ_KEYCHAIN_ACCOUNT)
 
 
 async def has_groq_api_key() -> bool:
-    return await asyncio.to_thread(_has_groq_api_key_sync)
+    return await asyncio.to_thread(_has_api_key_sync, GROQ_KEYCHAIN_ACCOUNT)
 
 
 async def delete_groq_api_key() -> None:
-    await asyncio.to_thread(_delete_groq_api_key_sync)
+    await asyncio.to_thread(_delete_api_key_sync, GROQ_KEYCHAIN_ACCOUNT)
+
+
+async def store_voyage_api_key(api_key: str) -> None:
+    await asyncio.to_thread(_store_api_key_sync, VOYAGE_KEYCHAIN_ACCOUNT, api_key)
+
+
+async def get_voyage_api_key() -> str | None:
+    return await asyncio.to_thread(_get_api_key_sync, VOYAGE_KEYCHAIN_ACCOUNT)
+
+
+async def has_voyage_api_key() -> bool:
+    return await asyncio.to_thread(_has_api_key_sync, VOYAGE_KEYCHAIN_ACCOUNT)
+
+
+async def delete_voyage_api_key() -> None:
+    await asyncio.to_thread(_delete_api_key_sync, VOYAGE_KEYCHAIN_ACCOUNT)

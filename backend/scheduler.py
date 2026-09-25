@@ -19,11 +19,13 @@ from sqlalchemy import text
 from database import _async_engine
 from services.analytics_service import capture_analytics_event
 # Claude (services.claude_service) and Gemini (services.gemini_service) are
-# unused here during the beta — Groq is the sole provider for session
-# generation and classification, disabled/re-enabled via the Worker's admin
-# kill switch rather than in this file. Re-import SUMMARY_MODEL /
-# generate_session_summary / classify_events_batch if reinstating them as a
-# fallback.
+# unused here — Groq is the sole provider for session generation and
+# classification. As of COST-002 the Worker no longer has a /chat or
+# /classify route at all (removed, not kill-switched) and holds no
+# maintainer-funded key for either provider — restoring them means designing
+# a Worker route (auth/BYOK) before this file becomes relevant again, not
+# just re-importing SUMMARY_MODEL / generate_session_summary /
+# classify_events_batch.
 from services.groq_service import classify_events_batch_groq, generate_session_summary_groq
 from services.qdrant_service import add_session_embedding, initialize_qdrant_collection
 

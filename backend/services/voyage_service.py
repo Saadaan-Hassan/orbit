@@ -1,10 +1,13 @@
 """
 Voyage AI embedding service.
 
-Generates text embeddings via the Cloudflare Worker /embed route.
-The Worker holds the VOYAGE_AI_API_KEY in secrets and injects the
-Authorization header before forwarding to api.voyageai.com — the key
-never lives on the user's machine.
+Generates text embeddings via the Cloudflare Worker /embed route. The Worker
+holds no maintainer-funded Voyage credential (COST-002) — every request must
+carry the user's own key. `database.get_voyage_api_key()` reads it from
+macOS Keychain immediately before use and attaches it as X-Voyage-Api-Key;
+with no personal key configured, embeddings are simply unavailable (session
+generation and recall already degrade gracefully without them — semantic
+search is a supplement to FTS5, never a requirement).
 
 One httpx.AsyncClient is created at module level and reused for every
 request — never instantiate a new client per call.
@@ -18,6 +21,7 @@ import time
 import httpx
 from dotenv import load_dotenv
 
+from database import get_voyage_api_key
 from services.provider_context_sanitizer import (
     log_provider_diagnostic,
     sanitize_embedding_text,
@@ -89,10 +93,28 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
         "input_type": "document",
     }
 
+    personal_api_key = await get_voyage_api_key()
+    if not personal_api_key:
+        # No maintainer-funded fallback exists (COST-002) — without a
+        # personal key the Worker would only ever return 401. Fail
+        # immediately rather than spend three retries proving that.
+        log_provider_diagnostic(
+            provider="voyage",
+            model=VOYAGE_EMBEDDING_MODEL,
+            operation="embedding",
+            started_at=time.monotonic(),
+            status=None,
+            error=RuntimeError("no personal Voyage key configured"),
+        )
+        raise RuntimeError("No Voyage API key configured")
+    request_headers = {"X-Voyage-Api-Key": personal_api_key}
+
     for attempt_number in range(3):
         started_at = time.monotonic()
         try:
-            response = await _http_client.post("/embed", json=request_body)
+            response = await _http_client.post(
+                "/embed", json=request_body, headers=request_headers
+            )
 
             if response.is_success:
                 try:
@@ -115,7 +137,10 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
                 started_at=started_at,
                 status=response.status_code,
             )
-            if attempt_number < 2:
+            if response.status_code == 401:
+                # An invalid/revoked key won't become valid on retry.
+                response.raise_for_status()
+            elif attempt_number < 2:
                 await asyncio.sleep(2 ** attempt_number)
             else:
                 response.raise_for_status()
@@ -135,3 +160,31 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
 
     # Unreachable — the loop always raises or returns on the last attempt.
     raise RuntimeError("generate_text_embedding: exhausted retries without returning")
+
+
+async def test_voyage_api_key(api_key: str) -> tuple[bool, str]:
+    """
+    Validates a candidate key with a single minimal embedding request — Voyage
+    has no free introspection endpoint, so this costs a few tokens on the
+    cheapest model, unlike Groq's free /models check. The key is used for
+    exactly this one request and is never logged or persisted.
+    """
+    try:
+        response = await _http_client.post(
+            "/embed",
+            json={"input": ["test"], "model": VOYAGE_EMBEDDING_MODEL, "input_type": "document"},
+            headers={"X-Voyage-Api-Key": api_key},
+            timeout=10.0,
+        )
+    except httpx.TimeoutException:
+        return False, "timeout"
+    except httpx.TransportError:
+        return False, "network_error"
+
+    if response.status_code == 200:
+        return True, "ok"
+    if response.status_code in (401, 403):
+        return False, "invalid_key"
+    if response.status_code == 429:
+        return False, "rate_limited"
+    return False, "provider_error"
