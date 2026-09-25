@@ -126,7 +126,7 @@ uv run uvicorn main:app --reload --port 47821
 **Cloudflare Worker** (BYOK passthrough for Groq/Voyage AI — holds no
 secrets of its own, nothing to configure):
 ```bash
-cd worker && npm install && npx wrangler dev
+cd worker && npm install && npx wrangler types && npx wrangler dev
 ```
 
 **Landing site** (static Next.js export, no backend of its own):

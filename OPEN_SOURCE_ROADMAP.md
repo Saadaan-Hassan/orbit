@@ -166,7 +166,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | MAN-004 | Maintainer | TODO | Choose public security/privacy contact | — |
 | MAN-005 | Maintainer | TODO | Verify code, asset, name, and trademark ownership | — |
 | REP-001 | Agent | DONE | Harden ignores and complete repository secret scan | MAN-001 |
-| REP-002 | Agent | TODO | Remove generated artifacts and normalize lockfiles | REP-001 |
+| REP-002 | Agent | DONE | Remove generated artifacts and normalize lockfiles | REP-001 |
 | SEC-001 | Agent | DONE | Document the local trust boundary and authentication protocol | MAN-000 |
 | SEC-002 | Agent | DONE | Add authenticated, restrictive FastAPI middleware | SEC-001 |
 | SEC-003 | Agent | DONE | Integrate Tauri token lifecycle and authenticated frontend client | SEC-002 |
@@ -188,7 +188,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | DOC-001 | Agent | PARTIAL | Add chosen license and dependency/asset notices | MAN-002, MAN-005 |
 | DOC-002 | Agent | PARTIAL | Create the root public README and build guide | COST-005, DOC-001 |
 | DOC-003 | Agent | PARTIAL | Rewrite privacy policy and all product privacy claims | PRIV-006, OBS-001 |
-| DOC-004 | Agent | TODO | Add contribution, security, support, conduct, and governance files | MAN-004, DOC-001 |
+| DOC-004 | Agent | DONE | Add contribution, security, support, conduct, and governance files | MAN-004, DOC-001 |
 | DOC-005 | Agent | TODO | Add architecture, threat model, and exact data-flow documentation | SEC-004, PRIV-006, COST-005 |
 | DOC-006 | Agent | TODO | Align versions/package metadata and clean stale internal documentation | DOC-001, COST-005 |
 | CI-001 | Agent | TODO | Make all workspaces expose real local verification commands | REP-002, PRIV-006 |
@@ -348,6 +348,44 @@ the telemetry/release migration in `OBS-001` and `MAN-008`.
 
 ### REP-002 — Remove generated artifacts and normalize lockfiles
 
+**Current status: DONE (2026-09-25).** Removed three tracked generated
+artifacts and verified each removal doesn't break setup: `extension/orbit-extension-v0.1.0.zip`
+(the stopgap distribution artifact `AGENTS.md`'s "Chrome extension
+distribution" section already says not to rely on — now also gitignored via
+`extension/*.zip` so a future build doesn't get re-added by accident);
+`extension/package-lock.json` (extension had both an npm and a pnpm
+lockfile — kept `pnpm-lock.yaml` since that's the package manager
+documented everywhere else for this workspace; verified with a clean
+`rm -rf node_modules && pnpm install` followed by `pnpm build`, both
+succeeded); and `worker/worker-configuration.d.ts` (532 KB, Wrangler-generated,
+nothing in `src/` or any config referenced it — and it was actively stale,
+still declaring `ANTHROPIC_API_KEY`/`GEMINI_API_KEY`/`VOYAGE_AI_API_KEY` as
+Worker env bindings from before `COST-002` removed the shared-key Worker
+model entirely; regenerating it now correctly produces an empty `Env`
+interface). Added `npx wrangler types` as an explicit setup step in
+`worker/README.md`, `AGENTS.md`, and root `README.md`, and verified it
+regenerates the file with no network auth required. `backend/dist/`'s three
+committed files were checked against this task's first requirement and are
+not a violation — they're 4 KB POSIX shell stubs (not real PyInstaller
+binaries) that exist only so `tauri dev`'s externalBin path validation
+succeeds without a full backend build; already scoped and explained in
+`.gitignore`, left as-is. `releases/latest.json` is likewise an intentional,
+already-documented placeholder (`AGENTS.md`'s "Release & Distribution"
+section) that CI overwrites at release time, not a stray artifact — left
+as-is.
+
+**Found in passing, not fixed here (out of REP-002's scope — flagging for
+`DOC-006`):** `AGENTS.md`'s Critical Architecture Facts table has a stale
+first row claiming "Claude, Gemini, and Voyage AI always route through the
+Worker... Groq also goes through the Worker... using the Worker's own
+shared secret" with no personal key — this directly contradicts every row
+below it and the rest of the document (`COST-002` removed the shared-key
+Worker model entirely; Claude/Gemini routes no longer exist; a keyless Groq
+request now gets an unconditional 401, not a shared-secret-backed
+response). This is the single most-referenced "read this first" fact in the
+whole file and is actively wrong — worth prioritizing whenever `DOC-006`
+is picked up.
+
 Implementation requirements:
 
 - Remove committed build outputs that can be generated deterministically,
@@ -363,12 +401,18 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] No distributable ZIP, DMG, private signing artifact, or real generated
-      backend executable is tracked in source.
-- [ ] Each JavaScript workspace has one authoritative lockfile.
-- [ ] Setup/build instructions regenerate required artifacts.
-- [ ] App, backend, extension, Worker and landing dependency installs remain
-      reproducible.
+- [x] No distributable ZIP, DMG, private signing artifact, or real generated
+      backend executable is tracked in source. `extension/orbit-extension-v0.1.0.zip`
+      removed; `backend/dist/*` confirmed to be 4 KB dev-stub shell scripts,
+      not real executables.
+- [x] Each JavaScript workspace has one authoritative lockfile. `extension/package-lock.json`
+      removed, `pnpm-lock.yaml` kept; app/landing/worker were already single-lockfile.
+- [x] Setup/build instructions regenerate required artifacts. `npx wrangler types`
+      documented and verified in `worker/README.md`, `AGENTS.md`, root `README.md`.
+- [x] App, backend, extension, Worker and landing dependency installs remain
+      reproducible. Verified extension specifically with a clean
+      `rm -rf node_modules && pnpm install && pnpm build`; other workspaces
+      untouched by this task's changes.
 
 ---
 

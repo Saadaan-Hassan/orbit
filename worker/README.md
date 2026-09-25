@@ -47,6 +47,7 @@ incrementally.
 
 ```bash
 npm install
+npx wrangler types   # regenerates worker-configuration.d.ts — gitignored, not committed
 npm run test    # vitest — routing, auth, and passthrough behavior, mocked fetch
 npx wrangler dev
 ```

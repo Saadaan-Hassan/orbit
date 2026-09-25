@@ -811,6 +811,7 @@ Groq/Voyage credentials, never the maintainer's.
 ```bash
 cd worker
 npm install
+npx wrangler types # regenerates worker-configuration.d.ts — gitignored, not committed (REP-002)
 npm run test      # vitest — auth, routing, passthrough behavior
 npx wrangler dev   # local dev, no secrets needed
 npx wrangler deploy
@@ -940,7 +941,7 @@ Each matrix leg also publishes a **version-agnostic copy** of its `.dmg` (`Orbit
 
 ### Chrome extension distribution
 
-**Do not distribute the extension as a zip for "Load Unpacked" beyond an initial/temporary stopgap.** Chrome does not auto-update developer-mode (unpacked) extensions, and as of Chrome 149 (2026) actively disables sideloaded/unpacked extensions periodically as a trust measure — every future code change would need manual re-sharing, and some testers' copies will silently stop working over time regardless. `extension/orbit-extension-v0.1.0.zip` is exactly this kind of stopgap artifact, not a real distribution channel.
+**Do not distribute the extension as a zip for "Load Unpacked" beyond an initial/temporary stopgap.** Chrome does not auto-update developer-mode (unpacked) extensions, and as of Chrome 149 (2026) actively disables sideloaded/unpacked extensions periodically as a trust measure — every future code change would need manual re-sharing, and some testers' copies will silently stop working over time regardless. A one-off zip like this may be handed to an individual tester directly, but is never committed to the repo (`extension/*.zip` is gitignored, REP-002) — it is exactly this kind of stopgap artifact, not a real distribution channel.
 
 **The real fix is the Chrome Web Store (Unlisted visibility)** — Chrome auto-updates Web Store extensions in the background (checks roughly every 5-6 hours), with zero action from beta testers. `.github/workflows/publish-extension.yml` automates every update *after* a one-time manual setup (full instructions in the workflow's header comment):
 1. Register as a Chrome Web Store developer (one-time $5 fee).
