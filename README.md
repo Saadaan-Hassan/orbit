@@ -134,13 +134,17 @@ cd worker && npm install && npx wrangler types && npx wrangler dev
 cd landing && pnpm install && pnpm dev
 ```
 
-Run each workspace's own test suite before sending a change:
+Run each workspace's own checks before sending a change — see
+`CONTRIBUTING.md` for the full list (lint/typecheck/test per workspace,
+Rust fmt/Clippy, and security/license scanning). Short version:
 
 ```bash
-cd backend && uv run python -m unittest discover -s tests -p 'test_*.py'
-cd app/src-tauri && cargo test --bin app
-cd worker && npm run test
-cd app && pnpm build   # TypeScript + production build
+cd backend && uv run ruff check . && uv run mypy . && uv run python -m unittest discover -s tests -p 'test_*.py'
+cd app/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --bin app
+cd app && pnpm typecheck && pnpm lint && pnpm test && pnpm build
+cd extension && pnpm typecheck && pnpm test && pnpm build
+cd worker && npm run typecheck && npm run test
+cd landing && pnpm lint && pnpm build
 ```
 
 ## Known limitations

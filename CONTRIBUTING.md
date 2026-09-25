@@ -60,13 +60,55 @@ cd landing && pnpm install && pnpm dev
 
 ## Tests
 
-Run the relevant workspace's suite before sending a PR:
+Run the relevant workspace's checks before sending a PR — each workspace
+has real lint/typecheck/test commands, not placeholders (`CI-001`):
 
+**Backend** (Python — ruff for lint, mypy for types, unittest for tests):
 ```bash
-cd backend && uv run python -m unittest discover -s tests -p 'test_*.py'
-cd app/src-tauri && cargo test --bin app
-cd worker && npm run test
-cd app && pnpm build   # TypeScript + production build
+cd backend
+uv run ruff check .
+uv run mypy .
+uv run python -m unittest discover -s tests -p 'test_*.py'
+```
+
+**Desktop app, Rust side** (`app/src-tauri`):
+```bash
+cd app/src-tauri
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --bin app
+```
+
+**Desktop app, frontend** (`app`):
+```bash
+cd app
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+```
+
+**Chrome extension**:
+```bash
+cd extension
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+**Cloudflare Worker**:
+```bash
+cd worker
+npm run typecheck
+npm run test
+```
+
+**Landing site** (no test suite — it's a static site; lint + a successful
+static build are the checks):
+```bash
+cd landing
+pnpm lint
+pnpm build
 ```
 
 If you bumped the app version (`app/src-tauri/tauri.conf.json`), backend, or
@@ -77,7 +119,38 @@ root — it checks that `app/package.json`, `Cargo.toml`, and
 
 Changes to capture, redaction, or AI provider request/response handling
 need test coverage — these paths handle real personal data, and a
-regression here is a privacy incident, not just a bug.
+regression here is a privacy incident, not just a bug. None of these tests
+make a real network/provider call: backend tests mock every provider HTTP
+call (`_SequencedPostClient`-style test doubles), worker tests mock
+`fetch`, and the JS/TS test suites (app, extension) only cover pure logic
+with no network dependency.
+
+## Dependency security and license scanning
+
+Not run on every PR, but check periodically or after adding a dependency —
+these aren't wired into a required CI gate yet:
+
+```bash
+# JS/TS workspaces (app, extension, landing) — pnpm's built-in scanner
+cd app && pnpm audit        # or extension, landing
+# worker uses npm, not pnpm
+cd worker && npm audit
+
+# Python
+cd backend && uvx pip-audit
+
+# Rust (one-time: cargo install cargo-audit --locked)
+cd app/src-tauri && cargo audit
+```
+
+`cargo audit` will likely report a handful of `unmaintained`/`unsound`
+warnings on transitive dependencies of Tauri's own dependency tree that
+aren't fixable from this repo (no patched version exists upstream, or the
+crate is genuinely unreachable from any build target despite appearing in
+`Cargo.lock` — verify with `cargo tree -i <crate> --target all` before
+assuming a finding is real). Real, fixable findings should be addressed
+(bump the direct dependency, or add a `pnpm.overrides`-equivalent — see
+each workspace's `pnpm-workspace.yaml` if one exists) rather than ignored.
 
 ## Privacy and safety rules
 

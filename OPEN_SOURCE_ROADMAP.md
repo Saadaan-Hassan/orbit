@@ -191,7 +191,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | DOC-004 | Agent | DONE | Add contribution, security, support, conduct, and governance files | MAN-004, DOC-001 |
 | DOC-005 | Agent | TODO | Add architecture, threat model, and exact data-flow documentation | SEC-004, PRIV-006, COST-005 |
 | DOC-006 | Agent | DONE | Align versions/package metadata and clean stale internal documentation | DOC-001, COST-005 |
-| CI-001 | Agent | TODO | Make all workspaces expose real local verification commands | REP-002, PRIV-006 |
+| CI-001 | Agent | DONE | Make all workspaces expose real local verification commands | REP-002, PRIV-006 |
 | CI-002 | Agent | TODO | Add pull-request CI, dependency updates, and security scans | CI-001 |
 | REL-001 | Agent | TODO | Harden the release workflow and secret permissions | CI-002, DOC-006 |
 | REL-002 | Agent | TODO | Add checksums, SBOM/provenance, smoke tests, and updater validation | REL-001 |
@@ -1497,6 +1497,135 @@ Acceptance criteria:
 
 ### CI-001 — Real local verification commands
 
+**Current status: DONE (2026-09-25).** Every workspace now has real
+lint/typecheck/test commands; none existed for several before this pass.
+
+**Rust** (`app/src-tauri`): `cargo fmt --check` failed on real drift
+already in the tree (fixed by running `cargo fmt`). `cargo clippy
+--all-targets -- -D warnings` found 6 real findings — a genuine
+`duplicated_attributes` false positive on stacked `#[link(...)]` framework
+attributes (suppressed with an explained `#[allow]`, not silenced blindly),
+2 unnecessary-cast findings, a collapsible-if, and 2 test-only findings —
+all fixed; `cargo test --bin app` (37 tests) unaffected throughout.
+
+**Backend** (Python): added `ruff` and `mypy` as dev dependencies.
+Ruff's zero-config default for this version pulled in a much broader rule
+set than expected (bandit-style security rules, pylint refactor
+suggestions, tryceratops) — deliberately curated down to `E/F/I/UP/B`
+instead of accepting that implicitly, documented in `pyproject.toml`. Fixed
+all 73 resulting findings: mostly import sorting and line-length (raised
+`line-length` to 120 to match the codebase's actual established style
+rather than reformat ~9,800 lines to fit ruff's 88-char default), plus a
+handful of real bugs — 2 missing `from err` exception-chain losses in
+`routes/settings.py`, a genuine (if latent) loop-variable-closure risk in
+`qdrant_service.py`'s retry lambda (replaced with a named function that
+takes `client` as an argument, also fixing a `mypy` "cannot infer lambda
+type" finding), and an unguarded `**payload` unpack in the same file that
+would `TypeError` if Qdrant ever returned a point with no payload (payload
+is optional in qdrant-client's own stubs). `mypy` (default settings, first
+run) found 23 errors; the two most notable weren't cosmetic — `database.py`
+had an unguarded `.fetchone().accepted_at` that could crash if a
+just-inserted consent row somehow wasn't found (now fail-closed, matching
+this codebase's own established pattern), and two tests used
+`self.assertRaises(Exception)` where the *first* call in a two-call
+cooldown test actually raises a different type than the second — the blind
+`Exception` masked that the assertion wasn't verifying what the test
+intended; narrowed to the real types. All 66 backend tests still pass.
+
+**JS/TS workspaces** — added real tooling from scratch where none existed:
+- `worker`: no `tsconfig.json` existed at all — added one (using the
+  Wrangler-generated types, `REP-002`), so `Worker typecheck` from this
+  task's own requirement list was previously impossible to satisfy.
+- `extension`: `"test"` was the literal `echo "Error: no test specified"
+  && exit 1` placeholder this task calls out by name. Extracted
+  `isUrlCapturable` (from `background.ts`) and `detectSearchQuery` (from
+  `content.ts`) into `src/lib/` modules — both were previously private,
+  unexported functions entangled with `chrome.*`/DOM side effects at
+  module scope, making them untestable without mocking globals; extracting
+  them is a behavior-preserving move that also makes them independently
+  testable. 15 real tests added (URL-scheme exclusion correctness,
+  per-engine search detection). Also found and fixed a real bug this
+  surfaced: `popup.ts` had no top-level `import`/`export`, so TypeScript
+  treated it as a global script — its `const status` collided with the
+  DOM's ambient `Window.status`, silently typing two lines as operations on
+  a `string` instead of the actual `HTMLParagraphElement`. Fixed with
+  `export {}` (the file is already loaded as `<script type="module">` at
+  runtime, so this changes nothing except what the type checker sees).
+- `app`: no ESLint config and no test framework existed. Added a standard
+  flat-config ESLint setup (`typescript-eslint` + `react-hooks` +
+  `react-refresh`) — found 10 warnings (0 errors) on the existing
+  codebase, fixed the 3 that were dead `eslint-disable` comments; left 7
+  `react-hooks/exhaustive-deps` warnings and 1 fast-refresh warning
+  untouched, since blindly adding missing effect dependencies risks
+  changing runtime behavior in ways that need per-component review, not a
+  lint-wiring pass. Added `vitest` + 10 real tests, including one that
+  caught a live architecture violation: `getProjectColor()` was duplicated
+  verbatim in both `ProjectCards.tsx` and `TimelineView.tsx` (exactly the
+  drift risk `AGENTS.md`'s own "Project color palette" fact warns about) —
+  extracted to `app/src/lib/project-color.ts`, both components now import
+  the single copy, `AGENTS.md` updated to describe the fix.
+
+**Dependency security scanning** (not in this task's original acceptance
+criteria list explicitly, but implied by "license/security checks" in the
+implementation requirements, and worth doing given how much was found):
+`pnpm audit`/`npm audit`/`cargo audit`/`pip-audit` across every workspace.
+Backend: `pip-audit` was already clean. Worker had 8 (fixed via `npm audit
+fix` for 6, a direct `vitest` 3→5 bump for the remaining 2 — all 12 tests
+still pass).
+
+JS workspaces via pnpm — `app` (10), `extension` (6), and `landing` (**60,
+including 2 critical**) — were resolved through a mix of direct dependency
+bumps (`vitest` 3→4 for app/extension; `next` 16.2.7→16.3.3 for landing, a
+deliberately-pinned exact version kept in lockstep with `eslint-config-next`,
+bumped directly rather than overridden since it's a normal dependency
+update, not a workaround) and `pnpm.overrides` for the rest. Getting the
+override mechanism right took a real false start, worth recording plainly:
+`pnpm audit --fix` reports the overrides it plans to apply as JSON but
+initially appeared to do nothing, which led to manually copying that JSON
+into a `"pnpm": { "overrides": {...} }` block in each `package.json` —
+this pnpm version silently ignores that location (a deprecation warning
+fires, but the block has zero effect; confirmed by removing it entirely
+and re-auditing with no change). The actual mechanism is
+`pnpm-workspace.yaml`'s `overrides`/`allowBuilds` keys — and `pnpm audit
+--fix` had already been writing there correctly the whole time, which is
+why `app`'s and `extension`'s vulnerability counts dropped when it ran,
+before any manual `package.json` edit. **This caused a real mistake**:
+`app/` and `landing/` both already had a `pnpm-workspace.yaml` (pre-dating
+this session, with their own `allowBuilds` entries for unrelated packages
+— `@sentry/cli`/`core-js`/`esbuild` for `app`; `esbuild`/`sharp` for
+`landing`, alongside `msw`/`unrs-resolver` newly needed here). Not
+realizing `landing/pnpm-workspace.yaml` already existed, it was created
+fresh with the `Write` tool instead of read-then-edited, silently dropping
+its pre-existing `esbuild`/`sharp` entries. Caught by reviewing the full
+`git status` before treating this pass as finished (a modified-not-new
+file is a signal to check `git diff` before trusting an edit was additive)
+— restored both entries, reinstalled clean, reverified 0 vulnerabilities
+and a working build. The corrected end state: `app/pnpm-workspace.yaml`
+and `extension/pnpm-workspace.yaml` hold their pnpm-audit-generated
+overrides (mostly transitive `nanoid`/`postcss`/`browserslist` bumps —
+`extension`'s file was created fresh, since none existed there before);
+`landing/pnpm-workspace.yaml` holds one hand-picked override (`postcss`,
+via `shadcn` and `@tailwindcss/postcss`, neither of which expose a
+bumpable direct dependency) plus its full, now-restored `allowBuilds` list.
+All of app, extension, worker, and landing are at 0 known vulnerabilities,
+verified with a full clean reinstall (`rm -rf node_modules && pnpm
+install`) after every change in this section, not just an incremental one.
+`cargo audit` (installed via `cargo install cargo-audit --locked`, not a
+project dependency — Rust has no per-project dev-tool mechanism like
+`uvx`/`pnpm dlx`) found 9 real vulnerabilities + 12 unmaintained-crate
+warnings; `cargo update` plus bumping the direct `sqlx` dependency 0.7→0.8
+(verified compiling and all 37 Rust tests still passing) brought this down
+to 1 vulnerability (`rsa`, `RUSTSEC-2023-0071`) + 7 warnings. That
+remaining `rsa` finding was investigated, not just left: `cargo tree -i rsa
+--target all -e normal,build,dev` finds **zero reachable paths** to it from
+any target or dependency-edge kind, even after a full `Cargo.lock`
+regeneration — it appears to be a stale/orphaned lockfile entry (most
+likely from `sqlx`'s MySQL driver, present in earlier resolutions before
+the 0.8 bump) rather than something actually linked into the shipped
+binary. Documented, not silently dropped: a maintainer with more Cargo
+internals familiarity should double-check this reasoning before treating
+it as fully resolved.
+
 Implementation requirements:
 
 - Replace intentionally failing placeholder test scripts.
@@ -1510,10 +1639,22 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] Every workspace has a meaningful non-placeholder test/check command.
-- [ ] Commands fail on real errors and pass on the audited baseline.
-- [ ] No test makes a billable network/provider call.
-- [ ] README and contributing guide contain exact commands.
+- [x] Every workspace has a meaningful non-placeholder test/check command.
+      backend (ruff+mypy+unittest), app (typecheck+lint+test+build),
+      extension (typecheck+test+build — real tests replacing the literal
+      failing placeholder), worker (typecheck+test), landing (lint+build),
+      app/src-tauri (fmt+clippy+test).
+- [x] Commands fail on real errors and pass on the audited baseline.
+      Verified per-command: each was run against the as-found repo first
+      (confirmed real failures/findings), then against the fixed state
+      (confirmed a clean pass) — not just written and assumed to work.
+- [x] No test makes a billable network/provider call. Backend mocks every
+      provider HTTP call; worker mocks `fetch`; app/extension tests cover
+      pure logic only, no network.
+- [x] README and contributing guide contain exact commands. `README.md`'s
+      "Building from source" section has the short form; `CONTRIBUTING.md`'s
+      Tests section has the full per-workspace breakdown plus a new
+      "Dependency security and license scanning" section.
 
 ### CI-002 — Pull-request CI and automated maintenance
 
