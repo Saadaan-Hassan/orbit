@@ -24,8 +24,7 @@ fn secure_path_permissions(path: &Path, mode: u32) {
 }
 
 fn prepare_orbit_storage(orbit_directory_path: &str, orbit_database_file_path: &str) {
-    std::fs::create_dir_all(orbit_directory_path)
-        .expect("Failed to create ~/.orbit directory");
+    std::fs::create_dir_all(orbit_directory_path).expect("Failed to create ~/.orbit directory");
     secure_path_permissions(Path::new(orbit_directory_path), 0o700);
 
     // SQLite may create these asynchronously when WAL mode is enabled, so
@@ -59,11 +58,11 @@ fn resolve_uv_executable_path() -> String {
     let home_directory = std::env::var("HOME").unwrap_or_default();
 
     let candidate_paths = [
-        format!("{}/.local/bin/uv", home_directory),   // official install script default
-        format!("{}/.cargo/bin/uv", home_directory),   // cargo install uv
-        "/opt/homebrew/bin/uv".to_string(),             // Homebrew on Apple Silicon
-        "/usr/local/bin/uv".to_string(),                // Homebrew on Intel / manual
-        "/usr/bin/uv".to_string(),                      // system package manager
+        format!("{}/.local/bin/uv", home_directory), // official install script default
+        format!("{}/.cargo/bin/uv", home_directory), // cargo install uv
+        "/opt/homebrew/bin/uv".to_string(),          // Homebrew on Apple Silicon
+        "/usr/local/bin/uv".to_string(),             // Homebrew on Intel / manual
+        "/usr/bin/uv".to_string(),                   // system package manager
     ];
 
     for candidate_path in &candidate_paths {
@@ -117,8 +116,7 @@ fn main() {
         .build()
         .expect("Failed to create tokio async runtime");
 
-    let home_directory_path = std::env::var("HOME")
-        .expect("HOME environment variable must be set");
+    let home_directory_path = std::env::var("HOME").expect("HOME environment variable must be set");
 
     let orbit_directory_path = format!("{}/.orbit", home_directory_path);
 
@@ -210,21 +208,19 @@ fn main() {
         // CARGO_MANIFEST_DIR is set at compile time to the absolute path of
         // app/src-tauri/. The backend/ folder sits two levels up from there:
         //   app/src-tauri/../../backend  →  orbit/backend/
-        let backend_directory_path = std::env::var("ORBIT_BACKEND_PATH")
-            .unwrap_or_else(|_| {
-                let src_tauri_directory = env!("CARGO_MANIFEST_DIR");
-                format!("{}/../../backend", src_tauri_directory)
-            });
+        let backend_directory_path = std::env::var("ORBIT_BACKEND_PATH").unwrap_or_else(|_| {
+            let src_tauri_directory = env!("CARGO_MANIFEST_DIR");
+            format!("{}/../../backend", src_tauri_directory)
+        });
 
         // A port collision is handled by the authenticated readiness probe; do
         // not kill or trust an arbitrary process that owns the shared port.
-        let fastapi_child_process =
-            spawn_fastapi_backend(
-                &backend_directory_path,
-                &local_api_session_token,
-                &orbit_database_file_path,
-                &qdrant_storage_path,
-            );
+        let fastapi_child_process = spawn_fastapi_backend(
+            &backend_directory_path,
+            &local_api_session_token,
+            &orbit_database_file_path,
+            &qdrant_storage_path,
+        );
 
         // Wrap the child handle in Arc<Mutex<Option<Child>>> so it can be moved
         // into the Tauri exit hook.

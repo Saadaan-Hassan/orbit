@@ -1,10 +1,10 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use rand::{rngs::OsRng, RngCore};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use rand::{rngs::OsRng, RngCore};
 
 fn secure_local_path(path: &std::path::Path, mode: u32) {
     #[cfg(unix)]
@@ -291,7 +291,7 @@ where
             // restart_app can also run this cleanup — previously only the
             // tray menu's "Quit" item could reach it.
             app.manage(ExitHookState(std::sync::Mutex::new(Some(
-                Box::new(on_exit_hook) as Box<dyn FnOnce() + Send>
+                Box::new(on_exit_hook) as Box<dyn FnOnce() + Send>,
             ))));
             app.manage(LocalApiSessionToken(local_api_session_token.clone()));
 
@@ -304,18 +304,24 @@ where
             let shortcut_plugin = tauri_plugin_global_shortcut::Builder::new()
                 .with_shortcuts(["alt+space"])?
                 .with_handler(|app_handle, shortcut, event| {
-                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        if shortcut.matches(tauri_plugin_global_shortcut::Modifiers::ALT, tauri_plugin_global_shortcut::Code::Space) {
-                            if let Some(main_window) = app_handle.get_webview_window("main") {
-                                let is_visible = main_window.is_visible().unwrap_or(false);
-                                if is_visible {
-                                    let _ = main_window.hide();
-                                } else {
-                                    position_window_on_active_monitor(&main_window, PositionMode::Expanded);
-                                    let _ = main_window.show();
-                                    let _ = main_window.set_focus();
-                                    let _ = app_handle.emit("navigate", "chat");
-                                }
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed
+                        && shortcut.matches(
+                            tauri_plugin_global_shortcut::Modifiers::ALT,
+                            tauri_plugin_global_shortcut::Code::Space,
+                        )
+                    {
+                        if let Some(main_window) = app_handle.get_webview_window("main") {
+                            let is_visible = main_window.is_visible().unwrap_or(false);
+                            if is_visible {
+                                let _ = main_window.hide();
+                            } else {
+                                position_window_on_active_monitor(
+                                    &main_window,
+                                    PositionMode::Expanded,
+                                );
+                                let _ = main_window.show();
+                                let _ = main_window.set_focus();
+                                let _ = app_handle.emit("navigate", "chat");
                             }
                         }
                     }
@@ -323,50 +329,23 @@ where
                 .build();
             app.handle().plugin(shortcut_plugin)?;
 
-            let orbit_item = MenuItem::with_id(
-                app,
-                "orbit",
-                "Orbit",
-                true,
-                None::<&str>,
-            )?;
+            let orbit_item = MenuItem::with_id(app, "orbit", "Orbit", true, None::<&str>)?;
 
-            let memory_item = MenuItem::with_id(
-                app,
-                "memory",
-                "Memory",
-                true,
-                None::<&str>,
-            )?;
+            let memory_item = MenuItem::with_id(app, "memory", "Memory", true, None::<&str>)?;
 
-            let privacy_item = MenuItem::with_id(
-                app,
-                "privacy",
-                "Privacy",
-                true,
-                None::<&str>,
-            )?;
+            let privacy_item = MenuItem::with_id(app, "privacy", "Privacy", true, None::<&str>)?;
 
-            let quit_item = MenuItem::with_id(
-                app,
-                "quit",
-                "Quit",
-                true,
-                None::<&str>,
-            )?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
-            let tray_menu = Menu::with_items(
-                app,
-                &[&orbit_item, &memory_item, &privacy_item, &quit_item],
-            )?;
+            let tray_menu =
+                Menu::with_items(app, &[&orbit_item, &memory_item, &privacy_item, &quit_item])?;
 
             // Load the dedicated tray icon at compile time so the correct
             // Orbit icon always appears in the menu bar, regardless of what
             // Tauri infers as the "default window icon" from the bundle.
-            let tray_icon = tauri::image::Image::from_bytes(
-                include_bytes!("../icons/trayicon.png"),
-            )
-            .expect("trayicon.png must be a valid PNG");
+            let tray_icon =
+                tauri::image::Image::from_bytes(include_bytes!("../icons/trayicon.png"))
+                    .expect("trayicon.png must be a valid PNG");
 
             TrayIconBuilder::new()
                 .icon(tray_icon)
@@ -377,14 +356,18 @@ where
                         button: tauri::tray::MouseButton::Left,
                         button_state: tauri::tray::MouseButtonState::Up,
                         ..
-                    } = event {
+                    } = event
+                    {
                         let app_handle = tray.app_handle();
                         if let Some(main_window) = app_handle.get_webview_window("main") {
                             let is_visible = main_window.is_visible().unwrap_or(false);
                             if is_visible {
                                 let _ = main_window.hide();
                             } else {
-                                position_window_on_active_monitor(&main_window, PositionMode::Expanded);
+                                position_window_on_active_monitor(
+                                    &main_window,
+                                    PositionMode::Expanded,
+                                );
                                 let _ = main_window.show();
                                 let _ = main_window.set_focus();
                                 let _ = app_handle.emit("navigate", "chat");
@@ -404,10 +387,11 @@ where
                                 menu_event.id.as_ref()
                             };
 
-                            if let Some(main_window) =
-                                app_handle.get_webview_window("main")
-                            {
-                                position_window_on_active_monitor(&main_window, PositionMode::Expanded);
+                            if let Some(main_window) = app_handle.get_webview_window("main") {
+                                position_window_on_active_monitor(
+                                    &main_window,
+                                    PositionMode::Expanded,
+                                );
                                 let _ = main_window.show();
                                 let _ = main_window.set_focus();
                             }
@@ -545,18 +529,25 @@ fn position_window_on_active_monitor(window: &tauri::WebviewWindow, mode: Positi
         PositionMode::Collapsed => (230.0, 60.0),
         PositionMode::Expanded | PositionMode::Center => (720.0, 800.0),
     };
-    let size = tauri::PhysicalSize::new((logical_w * scale_factor) as u32, (logical_h * scale_factor) as u32);
-    
+    let size = tauri::PhysicalSize::new(
+        (logical_w * scale_factor) as u32,
+        (logical_h * scale_factor) as u32,
+    );
+
     let cursor_pos = match window.cursor_position() {
         Ok(pos) => pos,
         Err(_) => {
             // Fallback: just use current monitor
             if let Ok(Some(monitor)) = window.current_monitor() {
-                let x = monitor.position().x + (monitor.size().width as i32 - size.width as i32) / 2;
+                let x =
+                    monitor.position().x + (monitor.size().width as i32 - size.width as i32) / 2;
                 let y = match mode {
                     PositionMode::Collapsed => monitor.position().y + (30.0 * scale_factor) as i32,
                     PositionMode::Expanded => monitor.position().y + (80.0 * scale_factor) as i32,
-                    PositionMode::Center => monitor.position().y + (monitor.size().height as i32 - size.height as i32) / 2,
+                    PositionMode::Center => {
+                        monitor.position().y
+                            + (monitor.size().height as i32 - size.height as i32) / 2
+                    }
                 };
                 let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
             }
@@ -571,12 +562,18 @@ fn position_window_on_active_monitor(window: &tauri::WebviewWindow, mode: Positi
             let x = cursor_pos.x as i32;
             let y = cursor_pos.y as i32;
 
-            if x >= pos.x && x < pos.x + monitor_size.width as i32 && y >= pos.y && y < pos.y + monitor_size.height as i32 {
+            if x >= pos.x
+                && x < pos.x + monitor_size.width as i32
+                && y >= pos.y
+                && y < pos.y + monitor_size.height as i32
+            {
                 let target_x = pos.x + (monitor_size.width as i32 - size.width as i32) / 2;
                 let target_y = match mode {
                     PositionMode::Collapsed => pos.y + (30.0 * scale_factor) as i32,
                     PositionMode::Expanded => pos.y + (80.0 * scale_factor) as i32,
-                    PositionMode::Center => pos.y + (monitor_size.height as i32 - size.height as i32) / 2,
+                    PositionMode::Center => {
+                        pos.y + (monitor_size.height as i32 - size.height as i32) / 2
+                    }
                 };
                 let _ = window.set_position(tauri::PhysicalPosition::new(target_x, target_y));
                 return;
@@ -590,7 +587,9 @@ fn position_window_on_active_monitor(window: &tauri::WebviewWindow, mode: Positi
         let y = match mode {
             PositionMode::Collapsed => monitor.position().y + (30.0 * scale_factor) as i32,
             PositionMode::Expanded => monitor.position().y + (80.0 * scale_factor) as i32,
-            PositionMode::Center => monitor.position().y + (monitor.size().height as i32 - size.height as i32) / 2,
+            PositionMode::Center => {
+                monitor.position().y + (monitor.size().height as i32 - size.height as i32) / 2
+            }
         };
         let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
     }

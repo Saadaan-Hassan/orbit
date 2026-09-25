@@ -176,6 +176,12 @@ mod ax {
     // Framework bindings
     // ---------------------------------------------------------------------------
 
+    // Two separate frameworks, each requiring its own #[link] attribute —
+    // this is the standard way to link multiple frameworks onto one extern
+    // block, not an actual duplicate. Clippy's duplicated_attributes lint
+    // false-positives on this pattern (it compares the `kind = "framework"`
+    // argument across attributes, not the differing `name`).
+    #[allow(clippy::duplicated_attributes)]
     #[link(name = "ApplicationServices", kind = "framework")]
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
@@ -251,11 +257,7 @@ mod ax {
     fn make_cf_string(s: &str) -> Option<CFOwned> {
         let c_str = CString::new(s).ok()?;
         let raw = unsafe {
-            CFStringCreateWithCString(
-                std::ptr::null_mut(),
-                c_str.as_ptr() as *const i8,
-                CF_ENCODING_UTF8,
-            )
+            CFStringCreateWithCString(std::ptr::null_mut(), c_str.as_ptr(), CF_ENCODING_UTF8)
         };
         unsafe { CFOwned::new(raw) }
     }
@@ -269,7 +271,7 @@ mod ax {
             return Some(String::new());
         }
         // Each UTF-16 code unit can expand to at most 4 bytes in UTF-8.
-        let buf_size = (len * 4 + 1) as i64;
+        let buf_size = len * 4 + 1;
         let mut buf: Vec<i8> = vec![0i8; buf_size as usize];
         let ok = CFStringGetCString(cf_str, buf.as_mut_ptr(), buf_size, CF_ENCODING_UTF8);
         if !ok {

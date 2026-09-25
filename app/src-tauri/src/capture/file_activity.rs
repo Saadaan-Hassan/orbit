@@ -131,18 +131,6 @@ async fn read_file_watch_settings(pool: &SqlitePool) -> FileWatchSettings {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::default_file_watch_settings;
-
-    #[test]
-    fn missing_file_settings_do_not_watch_any_folder() {
-        let settings = default_file_watch_settings();
-        assert!(!settings.enabled);
-        assert!(settings.watched_folders.is_empty());
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Watcher sync — diffs currently-watched paths against desired and adjusts
 // ---------------------------------------------------------------------------
@@ -327,5 +315,17 @@ pub async fn start_file_activity_monitor(
                 active_settings = new_settings;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_file_watch_settings;
+
+    #[test]
+    fn missing_file_settings_do_not_watch_any_folder() {
+        let settings = default_file_watch_settings();
+        assert!(!settings.enabled);
+        assert!(settings.watched_folders.is_empty());
     }
 }

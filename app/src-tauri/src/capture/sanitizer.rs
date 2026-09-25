@@ -445,7 +445,7 @@ mod tests {
         let custom_patterns = vec!["Project Cypress".to_string()];
         assert_eq!(
             sanitize_text_with_patterns(
-                &concat!("Editor — API_KEY=sk", "-windowvalue123456"),
+                concat!("Editor — API_KEY=sk", "-windowvalue123456"),
                 &custom_patterns
             ),
             "Editor — API_KEY=[REDACTED:credential]"
