@@ -1,0 +1,33 @@
+name: Privacy concern
+description: Something about what Orbit captures, stores, redacts, or sends feels wrong.
+labels: ["privacy"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is an exploitable vulnerability (e.g. a way to make Orbit leak secrets or another user's data), use [private reporting](https://github.com/Saadaan-Hassan/orbit/security/advisories/new) instead — see `SECURITY.md`. Use this form for policy/behavior concerns that aren't a security exploit: unclear consent copy, a capture category that feels broader than expected, a redaction pattern that misses something, etc.
+
+        You can also email saadaanedu@gmail.com instead of filing this publicly.
+
+  - type: textarea
+    id: concern
+    attributes:
+      label: What's the concern?
+      description: What did Orbit capture, store, or send that surprised you — and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: where
+    attributes:
+      label: Where in the app or docs did you notice this?
+      placeholder: e.g. Privacy panel copy, the privacy policy page, a specific capture category
+    validations:
+      required: false
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to see it yourself (if applicable)
+    validations:
+      required: false

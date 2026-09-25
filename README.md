@@ -165,8 +165,12 @@ cd app && pnpm build   # TypeScript + production build
 - [Open-source readiness roadmap](OPEN_SOURCE_ROADMAP.md) — the audit trail
   for this project's path to being public; also doubles as a running list of
   what's done and what's left
-- Security contact, formal contribution guidelines, and a code of conduct
-  are not published yet — in progress.
+- [Contributing guide](CONTRIBUTING.md) — setup, task selection, tests,
+  privacy rules, and DCO sign-off
+- [Security policy](SECURITY.md) — supported versions and private
+  vulnerability reporting
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Support](SUPPORT.md) and [Governance](GOVERNANCE.md)
 
 ## License
 

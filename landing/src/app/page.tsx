@@ -101,7 +101,7 @@ export default function Page() {
 
           {/* Privacy trust */}
           <p className="text-[11px] text-zinc-600 font-light tracking-wide">
-            All data stays on your Mac · Never sold · Delete anytime
+            Local by default · Cloud AI only if you add your own key · Never sold · Delete anytime
           </p>
         </div>
       </section>
@@ -155,7 +155,7 @@ export default function Page() {
         <div className="mt-6 flex items-center justify-center gap-3 rounded-xl border border-white/5 bg-white/[0.015] px-6 py-4 text-center">
           <p className="text-xs text-zinc-600 font-light leading-relaxed max-w-xl">
             <span className="text-zinc-400 font-medium">Your privacy is the foundation, not a checkbox.</span>
-            {" "}Everything Orbit captures stays on your Mac in a local database. Cloud AI only ever sees short summaries of your activity, never raw content or passwords. You can pause, exclude apps, or wipe everything at any time.{" "}
+            {" "}Everything Orbit captures stays on your Mac in a local database, with zero cloud AI, unless you add your own Groq or Voyage AI key — there&apos;s no maintainer-funded shared key. Passwords and secrets are redacted before anything touches disk, whether or not cloud AI is on. You can pause, exclude apps, or wipe everything at any time.{" "}
             <a href="/privacy" className="text-zinc-400 underline underline-offset-2 hover:text-white transition-colors">
               Read our privacy policy →
             </a>

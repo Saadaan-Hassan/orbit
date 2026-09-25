@@ -187,7 +187,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | SITE-001 | Agent | DONE | Convert landing site to static, no-waitlist operation | MAN-000 |
 | DOC-001 | Agent | PARTIAL | Add chosen license and dependency/asset notices | MAN-002, MAN-005 |
 | DOC-002 | Agent | PARTIAL | Create the root public README and build guide | COST-005, DOC-001 |
-| DOC-003 | Agent | TODO | Rewrite privacy policy and all product privacy claims | PRIV-006, OBS-001 |
+| DOC-003 | Agent | PARTIAL | Rewrite privacy policy and all product privacy claims | PRIV-006, OBS-001 |
 | DOC-004 | Agent | TODO | Add contribution, security, support, conduct, and governance files | MAN-004, DOC-001 |
 | DOC-005 | Agent | TODO | Add architecture, threat model, and exact data-flow documentation | SEC-004, PRIV-006, COST-005 |
 | DOC-006 | Agent | TODO | Align versions/package metadata and clean stale internal documentation | DOC-001, COST-005 |
@@ -1170,6 +1170,28 @@ Replace empty/default component READMEs or link them clearly to the root guide.
 
 ### DOC-003 — Rewrite privacy policy and claims
 
+**Current status: PARTIAL (2026-09-25).** Rewrote `landing/src/app/privacy/page.tsx`
+entirely from the current code, not the old copy — the previous version had
+two direct internal contradictions (claimed data "never leaves your device"
+one section before describing what gets sent to cloud AI; claimed
+"anonymous usage analytics" are collected in a section right after stating
+"Orbit sends no telemetry of any kind" — the latter was already true, the
+analytics section was just stale from before `OBS-001`) and named Claude and
+Gemini as active processors, both fully removed in `COST-002`. Verified
+Groq's and Voyage AI's actual data-retention terms against their own
+primary docs (not third-party summaries) before writing about them — Groq
+doesn't retain inference data by default; **Voyage AI trains on customer
+data by default unless the user opts out on their own Voyage account**,
+which Orbit cannot control or override. Verified the session-vs-event
+deletion distinction directly against `routes/memory.py`: deleting a
+session removes its summary and embedding but *does not* delete the
+underlying raw events — they're only unlinked, and can be picked up and
+summarized into a new session by the next scheduler cycle. A grep-based
+review across `landing/`, `app/src` UI copy, `README.md`, and `AGENTS.md`
+found (and fixed) three more instances of the same "all data stays on your
+Mac" blanket claim in the main landing page and `/beta`, now unconditionally
+false once a personal AI key is configured.
+
 Implementation requirements:
 
 - Remove claims that all data stays on the Mac, Orbit never reads private data,
@@ -1190,14 +1212,37 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] Automated/static review finds no known contradictory claim across landing,
-      beta, in-app UI, README, `AGENTS.md` and policy.
-- [ ] Policy data flow matches `DOC-005` and tests.
-- [ ] Every named provider/service is currently used, optional, or clearly marked
-      historical/future.
-- [ ] Deletion semantics distinguish a session summary from linked raw events.
+- [x] Automated/static review finds no known contradictory claim across landing,
+      beta, in-app UI, README, `AGENTS.md` and policy. Manual grep-based
+      review (no automated tool exists for this yet — a possible future
+      `CI-002` addition), not a formalized static-analysis pass; three
+      contradictions found and fixed.
+- [ ] Policy data flow matches `DOC-005` and tests. `DOC-005` (architecture/
+      threat-model doc) doesn't exist yet, so nothing to match against
+      directly — the policy was written from the same verified code/test
+      behavior `DOC-005` will need to describe, so they should agree once
+      it's written, but that's unconfirmed until it exists.
+- [x] Every named provider/service is currently used, optional, or clearly marked
+      historical/future. Groq and Voyage AI (both used, both optional,
+      BYOK), Cloudflare (named as the Voyage relay operator). Claude/Gemini
+      are not mentioned anywhere.
+- [x] Deletion semantics distinguish a session summary from linked raw events.
+      Verified directly against `routes/memory.py`, not assumed.
 
 ### DOC-004 — Community and contributor files
+
+**Current status: DONE (2026-09-25).** Added all nine files. Contact email
+(`saadaanedu@gmail.com`) and GitHub Private Vulnerability Reporting reused
+as the two private security-reporting channels — consistent with the
+address already used for privacy questions on the landing site (`DOC-003`).
+`GOVERNANCE.md` and `CODEOWNERS` describe the actual current state (single
+maintainer, no formal review-rights model) rather than an aspirational
+structure that doesn't exist yet. `CHANGELOG.md` documents a
+generated-release-note policy pointing at the two GitHub Releases pages
+(`orbit-releases` for the app, `ext-v*` tags for the extension) rather than
+hand-maintaining a duplicate log — release notes already exist there per
+`.github/workflows/release.yml` / `publish-extension.yml`. README's Links
+section updated to point at these instead of saying "not published yet."
 
 Add:
 
@@ -1215,10 +1260,23 @@ Add:
 
 Acceptance criteria:
 
-- [ ] Security reports are explicitly directed away from public issues.
-- [ ] Contributor process requires tests for capture/provider changes.
-- [ ] DCO is documented; no CLA is implied unless separately chosen.
-- [ ] Support expectations are sustainable for one maintainer.
+- [x] Security reports are explicitly directed away from public issues.
+      `SECURITY.md` states this explicitly; `.github/ISSUE_TEMPLATE/config.yml`
+      disables blank issues and links private reporting as the first option;
+      `bug_report.yml` and `privacy_concern.yml` both repeat the warning
+      inline.
+- [x] Contributor process requires tests for capture/provider changes.
+      `CONTRIBUTING.md`'s Tests section states this explicitly; the PR
+      template's Tests and Data flow/privacy sections require an answer
+      (checkbox or explanation) rather than being skippable.
+- [x] DCO is documented; no CLA is implied unless separately chosen.
+      `CONTRIBUTING.md`'s Commit sign-off section explains `git commit -s`
+      and explicitly states this is not a CLA. No CLA bot or CLA text added
+      anywhere.
+- [x] Support expectations are sustainable for one maintainer.
+      `SUPPORT.md` and `SECURITY.md` both state best-effort, no-SLA
+      response times up front, matching `GOVERNANCE.md`'s single-maintainer
+      description.
 
 ### DOC-005 — Architecture, threat model, and data flow
 
@@ -1557,6 +1615,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-25 | SITE-001 | DONE | `landing/next.config.ts`, `landing/src/app/page.tsx`, `landing/src/app/opengraph-image.tsx`, `landing/src/app/beta/page.tsx`, `landing/src/app/not-found.tsx`, `landing/src/components/{header,footer}.tsx`, `landing/package.json`/`pnpm-lock.yaml`, `landing/.env.example`, `landing/README.md`, `landing/src/lib/waitlist-actions.ts` (deleted), `landing/src/lib/supabase.ts` (deleted), `landing/src/components/waitlist-form.tsx` (deleted), `landing/src/emails/waitlist-confirmation.tsx` (deleted), `landing/supabase-schema.sql` (deleted), `AGENTS.md` | Scope confirmed with the maintainer before implementing (see status note above): direct public download buttons on the main page, not a "watch releases" link. Deleted the waitlist form, its Server Action, the Supabase client, the React Email template, and the Supabase schema file; removed `@supabase/supabase-js`/`resend`/`react-email`/`zod` (all now-unused). Added `output: "export"` to `next.config.ts`. Rewrote `page.tsx`'s hero: same download buttons and unsigned/notarization "what to expect" disclosure `/beta` already has, using the same already-public `orbit-releases` URLs. Fixed two build errors static export surfaced: `opengraph-image.tsx` needed `export const dynamic = "force-static"`, which is incompatible with its existing `runtime = "edge"` (removed); every `next/image` usage (header, footer, beta, not-found) needed the `unoptimized` prop since default Image Optimization requires a server. Updated `package.json` (`start` removed — `next start` doesn't work against an export build; added `preview` via `npx serve out`) and `README.md` accordingly. Fixed copy that referenced "waitlist"/"Join the Waitlist" in `beta/page.tsx` and the OG image text, now stale. Fixed `privacy/page.tsx`'s telemetry claim while already there (see `OBS-001`'s entry — done as part of that task, not this one, but touches this same directory). Verification: `pnpm build` succeeds, every route reports `○` (static); inspected `out/` directly — pure static files, zero API routes, zero server bundle; `pnpm lint` clean. | None — all four acceptance criteria verified directly against the actual build output, no live-app gap this time. Next: `DOC-001`. |
 | 2026-09-25 | DOC-001 | PARTIAL | `LICENSE` (new), `THIRD_PARTY_NOTICES.md` (new), `backend/pyproject.toml`, `app/src-tauri/Cargo.toml`, `app/package.json`, `landing/package.json`, `worker/package.json`, `OPEN_SOURCE_ROADMAP.md` (`MAN-002` decision recorded, row left for maintainer to flip) | `MAN-002` resolved via direct conversation with the maintainer: Apache-2.0, after a background dependency-license scan (582 Rust crates, 40 Python packages, all JS/TS trees) confirmed nothing in the codebase would constrain the choice. Fetched the license text directly from `apache.org/licenses/LICENSE-2.0.txt` via `curl` (not retyped from memory) and diffed the written `LICENSE` file's body against it byte-for-byte before proceeding. Copyright line uses "Saadaan Hassan, 2026" (matches every commit author and the actual project start) — proposed, not separately confirmed; flagged in `MAN-002`'s own entry for the maintainer to correct if wrong. `THIRD_PARTY_NOTICES.md` documents the scan's findings in full, including the non-blocking borderline cases (MPL-2.0, LGPL, GPLv2-with-bootloader-exception, and a `BSL-1.0` naming false-alarm — Boost Software License, not Business Source License). Added `license = "Apache-2.0"` to all five workspace manifests; `worker/package.json` had been left at npm's `"ISC"` init default, never actually chosen — fixed. Verified: all three `package.json` files still valid JSON, `uv run` still resolves `pyproject.toml`, `cargo check --bin app` still compiles. | Two real gaps, both external to this session: asset notices (fonts/icons/images/logo) need `MAN-005`'s redistribution-rights review first, and GitHub's license auto-detection can't be confirmed without a live repo to check it against. Maintainer should also confirm the copyright-holder name in `LICENSE` is correct, then flip `MAN-002` to `DONE` themselves. Next: `DOC-002`. |
 | 2026-09-25 | DOC-002 | PARTIAL | `README.md` (new), `app/README.md`, `backend/README.md`, `worker/README.md`, `landing/README.md` | Wrote the root README from scratch — none existed before. Covers status/maturity (including the two honest caveats: unsigned/unnotarized, no checksum verification yet), what Orbit does, a full capture/never-capture inventory pulled from the codebase (not old marketing copy), first-launch consent behavior, the BYOK cost model, install instructions with the safe per-app Gatekeeper bypass only (explicitly states never to disable Gatekeeper globally), build commands for all four workspaces plus each one's test command, known limitations, and the warranty disclaimer. Replaced `app/README.md` (still the unedited `create-next-app`/Tauri boilerplate) and added a root-guide link to `backend/README.md`, `worker/README.md`, and `landing/README.md` (the last also still had un-customized boilerplate text). Verified the "Privacy tab" UI label referenced actually matches `App.tsx`'s tab button text, and simplified one heading to avoid an em-dash/anchor-link ambiguity. | Screenshots/demo images were not added — this environment can't launch and interact with the GUI app to capture real images of it; a maintainer should add some before public launch. Next: `DOC-003`. |
+| 2026-09-25 | DOC-003 | PARTIAL | `landing/src/app/privacy/page.tsx`, `landing/src/app/page.tsx`, `landing/src/app/beta/page.tsx` | Full rewrite of the privacy policy from current code, replacing the old copy's two internal contradictions (claimed data "never leaves your device" then described cloud AI transmission; claimed "anonymous analytics" are collected right next to a correct "no telemetry" statement) and its now-false Claude/Gemini processor claims (removed in `COST-002`). Researched Groq's and Voyage AI's actual data-retention policies against their own primary docs before writing about them: Groq doesn't retain inference data by default (30-day troubleshooting-only log, ZDR available); Voyage AI trains on customer data by default unless the user opts out on their own account — called out explicitly since Orbit has no control over that setting. Verified the session-vs-event deletion distinction directly against `routes/memory.py`'s actual DELETE logic rather than assuming: deleting a session unlinks but does not delete its underlying raw events, which can be re-summarized into a new session later; only deleting the events themselves, or a full wipe, is permanent. New sections cover encryption/retention (90-day rolling event retention, no app-level encryption, FileVault recommended), redaction limits (best-effort, not a guarantee), and a warning to get permission before capturing employer/client content. Grep-reviewed `landing/`, in-app UI copy, `README.md`, and `AGENTS.md` for contradictions with the new policy; found and fixed three more instances of "all data stays on your Mac" (main landing hero, its privacy callout strip, and `/beta`) now false once a personal key is configured. Verified: `pnpm build` (static export) and `pnpm lint` both clean. | `DOC-005` (architecture/threat-model doc) doesn't exist yet, so the "policy data flow matches DOC-005" criterion can't be directly confirmed — both were/will be derived from the same verified code, so they should agree once `DOC-005` is written, but that's unconfirmed until then. The cross-document contradiction check was a manual grep, not an automated/formalized tool. Next: `DOC-004`. |
 | 2026-09-25 | APPSEC-001 | PARTIAL | `app/src-tauri/Cargo.toml`, `app/src-tauri/tauri.conf.json`, `app/src-tauri/capabilities/default.json`, `docs/adr/ADR-005-tauri-shell-hardening.md` | Removed the unconditional `devtools` Cargo feature (WRY still exposes devtools automatically in debug builds; release builds no longer force it on). Added a restrictive CSP (`default-src 'self'` plus a `connect-src` scoped to the fixed-port local backend, PostHog, and Sentry — the only hosts the webview itself calls; the Cloudflare Worker and AI providers are never in `connect-src` because only the Python backend calls them). Rewrote `capabilities/default.json` to grant exactly what the webview calls: removed `global-shortcut:default` and six unused `core:window:allow-*` permissions (the hotkey and those window transitions are Rust-native and were never gated by this file), and added the previously-missing `updater:allow-check`, `updater:allow-download-and-install`, `process:allow-restart`, and `dialog:allow-open` — without which auto-update and the watched-folder picker were silently non-functional (both call sites swallow errors by design). Existing entitlements were reviewed and left unchanged; each already carries an inline justification comment and is exercised by a real code path. `macOSPrivateApi: true` is required by the main window's `shadow: false` and the overlay window's transparency/click-through. Verification: `cargo check --bin app` (also validates the capabilities file against plugin permission schemas), `cargo test --bin app` 37/37, `pnpm build` (TypeScript + Vite), `git diff --check` all passed. | Required maintainer action: build a real `.dmg`, confirm right-click → Inspect Element is unavailable, and confirm the local API, PostHog/Sentry, the update check, and the folder picker all still work under the new CSP/capability grant. Record the outcome here before marking `APPSEC-001` DONE. Next: `COST-001`. `PRIV-002`/`PRIV-003` remain PARTIAL, independent of this task. |
 
 ---

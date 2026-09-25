@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose something Orbit doesn't do yet.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check `AGENTS.md`'s completed-phases list and Known Limitations in `README.md` first — Windows support, voice, and screenshot capture are already planned future phases, not something a new issue speeds up.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the situation, not just the feature — this shapes whether it fits Orbit's "working memory that works automatically" scope.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: privacy-impact
+    attributes:
+      label: Privacy / architecture impact
+      description: Check any that apply — these need a design discussion before a PR, per CONTRIBUTING.md.
+      options:
+        - label: This would add or change what gets captured
+        - label: This would add a new AI provider or a new outbound network call
+        - label: This would change what's stored locally vs. sent to any external service

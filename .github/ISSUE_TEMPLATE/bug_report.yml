@@ -1,0 +1,65 @@
+name: Bug report
+description: Something in Orbit isn't working the way it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is a security vulnerability (a capture, redaction, or data-exposure bug), **stop** — use [private reporting](https://github.com/Saadaan-Hassan/orbit/security/advisories/new) instead. See `SECURITY.md`.
+
+  - type: input
+    id: version
+    attributes:
+      label: Orbit version
+      description: Shown in the menu bar app, or the filename of the .dmg you installed.
+      placeholder: v0.2.4
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: macOS 14.5 (Sonoma)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: chip
+    attributes:
+      label: Mac chip
+      options:
+        - Apple Silicon (M1/M2/M3/M4)
+        - Intel
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what did you see instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots
+      description: >-
+        Only include what's needed to explain the bug. Do not paste raw
+        captured activity data (window titles, URLs, clipboard content) —
+        describe it instead, or redact it before pasting.
+    validations:
+      required: false

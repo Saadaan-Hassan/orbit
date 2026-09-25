@@ -104,7 +104,7 @@ export default function BetaPage() {
 
           {/* Privacy note */}
           <p className="text-[11px] text-zinc-600 font-light leading-relaxed">
-            All data stays on your Mac.{" "}
+            Everything stays local unless you add your own AI provider key.{" "}
             <Link
               href="/privacy"
               className="text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"

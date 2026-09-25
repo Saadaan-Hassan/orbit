@@ -4,16 +4,15 @@ import Image from "next/image";
 export const metadata = {
   title: "Privacy Policy | Orbit",
   description:
-    "Orbit is designed to help you remember your work, not collect your data.",
+    "Exactly what Orbit captures, where it's stored, what leaves your Mac and when, and the controls you have over all of it.",
   alternates: {
     canonical: "/privacy",
   },
 };
 
-export default function PrivacyPolicy() {
-  const contactEmail =
-    process.env.REPLY_TO_EMAIL ?? "saadaanedu@gmail.com";
+const CONTACT_EMAIL = "saadaanedu@gmail.com";
 
+export default function PrivacyPolicy() {
   return (
     <main className="grow relative z-10 w-full max-w-2xl mx-auto px-6 py-12 flex flex-col gap-10">
       {/* Back navigation */}
@@ -33,17 +32,30 @@ export default function PrivacyPolicy() {
             width={28}
             height={28}
             className="object-contain"
+            unoptimized
           />
           <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">
-            Privacy First
+            Privacy Policy
           </h1>
         </div>
         <div className="flex flex-col gap-1">
-          <p className="text-xs text-zinc-500">Last updated: June 2026</p>
+          <p className="text-xs text-zinc-500">
+            Last updated: September 25, 2026 · Policy owner: Saadaan Hassan
+          </p>
           <p className="text-sm font-light text-zinc-400 mt-2 leading-relaxed">
-            Orbit is designed to help you remember your work, not collect your
-            data. Almost everything stays on your Mac, and you remain in
-            complete control of what Orbit stores, processes, and remembers.
+            Orbit captures activity on your Mac to build a searchable memory
+            of your work. All capture stays local by default. AI features are
+            entirely optional and only reach the cloud if you configure your
+            own API key — this page explains exactly what happens in both
+            cases, with no simplifications that stop being true once you
+            look closely.
+          </p>
+          <p className="text-xs text-zinc-500 mt-2 italic">
+            This page was drafted with AI assistance from Orbit&apos;s own
+            source code, not from marketing copy. It is not legal advice,
+            and has not yet had a professional legal review — treat it as an
+            accurate technical description of current behavior, not a
+            binding legal document.
           </p>
         </div>
       </header>
@@ -58,68 +70,71 @@ export default function PrivacyPolicy() {
           </h2>
           <div className="flex flex-col gap-4 text-sm leading-relaxed font-light">
             <p>
-              Orbit captures the following on your device to build your
-              personal memory:
+              Nothing below is captured until you complete Orbit&apos;s
+              first-launch consent screen, which asks about each category
+              independently — there is no single &ldquo;accept all&rdquo;
+              that turns on more than you chose. Orbit captures, only for
+              categories you&apos;ve enabled:
             </p>
             <ul className="list-disc list-inside flex flex-col gap-3 pl-2">
               <li>
                 <span className="text-zinc-300 font-medium">Active app and window title.</span>{" "}
-                Orbit tracks which application is in focus and what its window is titled, captured whenever the title changes.
+                Which application is in focus and what its window is titled, captured on a short poll interval.
               </li>
               <li>
                 <span className="text-zinc-300 font-medium">On-screen text.</span>{" "}
                 The readable text visible in your active app&apos;s interface, accessed via macOS&apos;s built-in Accessibility API. This requires the Accessibility permission you grant during setup.{" "}
-                <span className="text-zinc-400">Password fields are never read. They are identified and skipped before any text is accessed, at every level of the interface.</span>
+                <span className="text-zinc-400">Password fields are never read. They are identified and skipped before any text is accessed, at every level of the interface — unconditionally, this is not a setting.</span>
               </li>
               <li>
                 <span className="text-zinc-300 font-medium">Browser URL and page title.</span>{" "}
-                The URL and title of your active browser tab. Captured natively from Chrome, Safari, Arc, Brave, and Edge using macOS Automation, and optionally via the Orbit Chrome extension for richer context like article text and search queries.
+                The URL and title of your active browser tab. Captured natively from Chrome, Safari, Arc, Brave, and Edge using macOS Automation, and optionally via the Orbit Chrome extension for richer context like article text, search queries, and link clicks.
               </li>
               <li>
                 <span className="text-zinc-300 font-medium">Clipboard text.</span>{" "}
-                Text you copy. Secrets are detected and replaced with{" "}
+                Text you copy. Recognizable secrets (API key formats, private keys, credit card and SSN patterns, crypto addresses) are detected and replaced with{" "}
                 <code className="px-1 py-0.5 rounded bg-white/5 text-xs text-zinc-400 font-mono">
-                  [REDACTED]
+                  [REDACTED:type]
                 </code>{" "}
-                before any storage. The original value is never written to disk.
+                before anything is written to disk — see{" "}
+                <span className="text-zinc-400">Section 5</span> for the limits of this.
               </li>
               <li>
                 <span className="text-zinc-300 font-medium">File activity.</span>{" "}
-                When you create, modify, or move files in your Documents, Desktop, and Downloads folders. Only the file name and path are recorded.{" "}
-                <span className="text-zinc-400">File contents are never read.</span>
+                When files are created, modified, or removed in folders you choose to watch (Documents, Desktop, and Downloads by default; you can add or remove folders). Only the file <em>path</em> and the action are recorded.{" "}
+                <span className="text-zinc-400">File contents are never read, by this feature or any other part of Orbit.</span>
               </li>
               <li>
                 <span className="text-zinc-300 font-medium">App launches and quits.</span>{" "}
-                Which applications you open and close, to help Orbit understand the flow of your work sessions.
+                Which applications you open and close, to help Orbit understand the shape of your work sessions.
               </li>
               <li>
                 <span className="text-zinc-300 font-medium">System events.</span>{" "}
-                When your screen locks or unlocks, and when your Mac sleeps or wakes. Used to mark session boundaries in your memory timeline.
+                When your screen locks or unlocks, and when your Mac sleeps or wakes. Used to mark session boundaries — Orbit never starts a new &ldquo;session&rdquo; mid-lock.
               </li>
             </ul>
 
             <p className="mt-2">
               Orbit does{" "}
-              <span className="text-white font-medium">NOT</span> capture:
+              <span className="text-white font-medium">NOT</span> capture,
+              under any setting:
             </p>
             <ul className="list-disc list-inside flex flex-col gap-2 pl-2 text-zinc-400">
-              <li>File contents (only file names and paths)</li>
+              <li>File contents (only file paths and the action taken)</li>
               <li>
-                Clipboard content from password managers (1Password, Bitwarden,
-                Keychain, etc. are excluded by default)
+                Anything from apps excluded by default — 1Password, Bitwarden,
+                Keychain Access, LastPass, Dashlane, System Preferences/Settings,
+                and Orbit itself — or any app or website you add to your own
+                exclusion list
               </li>
               <li>
-                Passwords, API keys, credit card numbers, or other secrets
-                (detected and redacted before any storage)
+                Text typed into a password field or secure text input, in any
+                application (skipped unconditionally by the Accessibility
+                reader, before any text is read)
               </li>
-              <li>
-                Password fields or secure text inputs in any application
-                (skipped unconditionally by the Accessibility reader)
-              </li>
-              <li>Screenshots or video of your screen</li>
-              <li>Audio or microphone input</li>
-              <li>Network traffic, DNS queries, or HTTP request contents</li>
-              <li>Email message bodies or end-to-end encrypted messages</li>
+              <li>Keystrokes, key codes, or mouse coordinates — idle detection uses only a timer (seconds since last input), never what was typed or clicked</li>
+              <li>Screenshots or video of your screen, or audio/microphone input (none of this exists in the current app — these would be future, separately-announced features, not silent additions)</li>
+              <li>Network traffic, DNS queries, or HTTP request/response bodies</li>
             </ul>
           </div>
         </section>
@@ -133,16 +148,17 @@ export default function PrivacyPolicy() {
             <p>For absolute clarity, Orbit cannot:</p>
             <ul className="list-disc list-inside flex flex-col gap-2 pl-2 text-zinc-400">
               <li>Read the contents of arbitrary files on your disk</li>
-              <li>Access your email or messaging accounts</li>
+              <li>Access your email or messaging accounts directly</li>
               <li>Access saved passwords in your browser or keychain</li>
               <li>
                 Read messages from end-to-end encrypted services, unless
-                they appear in a window title you have shared
+                their on-screen text happens to be visible in a window you
+                have Orbit watching
               </li>
               <li>Turn on your microphone or camera</li>
               <li>
-                Read text in apps that are not currently the focused foreground
-                application
+                Read text in apps that are not the currently focused,
+                foreground application
               </li>
             </ul>
           </div>
@@ -151,7 +167,7 @@ export default function PrivacyPolicy() {
         {/* Section 3 */}
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-white uppercase tracking-wider">
-            3. Where Your Data Is Stored
+            3. Storage, Retention, and Encryption
           </h2>
           <div className="flex flex-col gap-4 text-sm leading-relaxed font-light">
             <p>
@@ -159,14 +175,26 @@ export default function PrivacyPolicy() {
               <code className="px-1.5 py-0.5 rounded bg-white/5 text-xs text-zinc-300 font-mono">
                 ~/.orbit/
               </code>{" "}
-              in an SQLite database and a local vector index. This data never
-              leaves your device unless you explicitly opt in to cloud sync
-              (not yet available).
+              in a SQLite database, plus a local vector index if you&apos;ve
+              configured semantic search (Section 4). This data never leaves
+              your device unless you configure your own AI provider key —
+              see Section 4 for exactly what that sends and when. There is
+              no cloud sync feature today.
             </p>
             <p className="text-zinc-400">
-              Orbit sends no telemetry of any kind. There is no crash
-              reporting and no usage analytics — nothing about your device
-              or how you use the app is transmitted anywhere.
+              Raw activity events are retained for 90 days on a rolling
+              basis. AI-written session summaries are kept until you delete
+              them or wipe your data — see Section 6 for what deleting a
+              session does and does not remove.
+            </p>
+            <p className="text-zinc-400">
+              Local data is <span className="text-zinc-300">not</span>{" "}
+              encrypted by Orbit itself beyond restrictive file permissions
+              (readable only by your macOS user account). We recommend
+              enabling FileVault, macOS&apos;s built-in full-disk
+              encryption, for protection if your Mac is lost or stolen —
+              Orbit does not do this for you and does not claim
+              application-level encryption of its own.
             </p>
           </div>
         </section>
@@ -174,53 +202,70 @@ export default function PrivacyPolicy() {
         {/* Section 4 */}
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-white uppercase tracking-wider">
-            4. What Gets Sent to the Cloud
+            4. Cloud AI Is Fully Optional
           </h2>
           <div className="flex flex-col gap-4 text-sm leading-relaxed font-light">
             <p>
-              To generate session summaries and answer your recall questions,
-              Orbit sends the following to cloud AI services via an encrypted
-              proxy:
+              Orbit has <span className="text-white font-medium">no AI
+              features funded by the maintainer</span>. There is no shared
+              key, no free tier, and no maintainer-run AI backend of any
+              kind. Without your own key, Orbit is fully usable via local
+              keyword search — no network request happens for AI purposes at
+              all.
             </p>
-            <ul className="list-disc list-inside flex flex-col gap-2 pl-2">
+            <p>
+              If you add your own key (Privacy tab in the app), two
+              independent providers are involved, only for the feature each
+              one powers:
+            </p>
+            <ul className="list-disc list-inside flex flex-col gap-3 pl-2">
               <li>
-                App names, window titles, browser URLs, and file paths from
-                your recent activity. This gives the AI enough context to
-                write a useful summary of what you worked on.
+                <span className="text-zinc-300 font-medium">Groq</span> — chat-style recall, session summaries, and event classification. With your key configured, requests go{" "}
+                <span className="text-zinc-300">directly from your Mac to Groq&apos;s API</span>{" "}
+                — never through any server the maintainer runs. Per Groq&apos;s
+                own published policy, inference requests are not retained by
+                default, and a temporary log kept only for abuse/reliability
+                troubleshooting is deleted within 30 days; Groq offers a
+                Zero Data Retention setting on your own account for an even
+                stricter guarantee. Orbit does not control this — check{" "}
+                <a href="https://console.groq.com/docs/your-data" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white transition-colors">
+                  Groq&apos;s own data policy
+                </a>{" "}
+                directly.
               </li>
               <li>
-                On-screen text snippets, already filtered to remove any
-                detected secrets before they leave the app.
+                <span className="text-zinc-300 font-medium">Voyage AI</span> — semantic (&ldquo;search by meaning&rdquo;) recall only. Requests go through a small relay the maintainer operates (a Cloudflare Worker) that forwards your key and request to Voyage without storing anything itself — it exists only so the request doesn&apos;t need Voyage&apos;s exact API shape hardcoded into the app. Cloudflare, as the relay operator, sees this traffic in transit.{" "}
+                <span className="text-amber-500">
+                  Unlike Groq, Voyage&apos;s default is to store and use your
+                  data for model training unless you opt out on your own
+                  Voyage account
+                </span>{" "}
+                — see{" "}
+                <a href="https://docs.voyageai.com/docs/faq" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white transition-colors">
+                  Voyage&apos;s FAQ
+                </a>{" "}
+                for how to opt out. Orbit cannot change this setting on your
+                behalf; it lives entirely on your Voyage account.
               </li>
-              <li>
-                Short AI-generated session summaries of your activity, for example:{" "}
-                <span className="text-zinc-400 italic">
-                  &ldquo;Worked on a Next.js project in VS Code, reviewed
-                  billing.service.ts, and browsed Stripe documentation.&rdquo;
-                </span>
-              </li>
-              <li>Your recall queries, the questions you ask Orbit.</li>
             </ul>
             <p className="mt-2">
-              Orbit{" "}
-              <span className="text-white font-medium">never</span> sends:
+              What either provider receives, only when its key is active:
+              short AI-written session summaries, on-screen text/clipboard
+              snippets already redacted per Section 1, your recall
+              questions, and up to your last 4 conversation turns for
+              context. Every field passes through the same redaction
+              patterns as local storage a second time, immediately before
+              the request leaves your device — this is defense in depth,
+              not a replacement for capture-time redaction, and neither
+              layer can guarantee no unusual secret format ever slips
+              through.
             </p>
-            <ul className="list-disc list-inside flex flex-col gap-2 pl-2 text-zinc-400">
-              <li>Raw clipboard content</li>
-              <li>File contents</li>
-              <li>
-                Passwords, API keys, or other secrets. These are replaced with{" "}
-                <code className="px-1 py-0.5 rounded bg-white/5 text-xs font-mono">
-                  [REDACTED]
-                </code>{" "}
-                before Orbit ever touches them.
-              </li>
-            </ul>
             <p className="mt-2 text-zinc-400">
-              Orbit currently uses Claude (Anthropic), Gemini Flash (Google),
-              and Voyage AI to power AI features. These providers process only
-              the information needed to fulfil your request and all
-              communication is encrypted in transit.
+              Orbit{" "}
+              <span className="text-white font-medium">never</span> sends
+              raw clipboard content, file contents, or the redacted secret
+              values themselves — those don&apos;t exist past the
+              capture-time redaction step.
             </p>
           </div>
         </section>
@@ -228,73 +273,122 @@ export default function PrivacyPolicy() {
         {/* Section 5 */}
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-white uppercase tracking-wider">
-            5. Analytics
+            5. Limits of Automatic Redaction
           </h2>
-          <div className="flex flex-col gap-4 text-sm leading-relaxed font-light">
-            <p>
-              Orbit collects anonymous, non-personal usage analytics to
-              understand how the app is being used. This includes:
-            </p>
-            <ul className="list-disc list-inside flex flex-col gap-2 pl-2">
-              <li>Whether the app was opened</li>
-              <li>
-                That a recall query occurred (never the contents of the query)
-              </li>
-              <li>Whether a memory session was generated</li>
-            </ul>
-            <p>
-              We never collect query content, clipboard content, or anything
-              you have typed. Analytics can be disabled at any time in the
-              app&apos;s settings.
-            </p>
-          </div>
+          <p className="text-sm leading-relaxed font-light text-zinc-400">
+            Secret detection is pattern-based and best-effort, not a
+            guarantee. It recognizes common formats (API key prefixes,
+            private key blocks, JWTs, card/SSN-shaped numbers, crypto
+            addresses) but cannot catch every secret in every format,
+            especially unusual internal formats. Treat this as a safety net,
+            not a reason to freely copy or expose credentials while Orbit is
+            running. You can exclude any app (password managers already are,
+            by default) or any website from capture entirely.
+          </p>
         </section>
 
         {/* Section 6 */}
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-white uppercase tracking-wider">
-            6. Your Controls
+            6. Your Controls, and What Delete Actually Does
           </h2>
-          <div className="flex flex-col gap-2 text-sm leading-relaxed font-light">
-            <p>You have complete control:</p>
+          <div className="flex flex-col gap-3 text-sm leading-relaxed font-light">
             <ul className="list-disc list-inside flex flex-col gap-2 pl-2">
               <li>Pause all capture at any time from the menu bar</li>
-              <li>Exclude specific apps from being tracked</li>
-              <li>Exclude specific websites from being tracked</li>
-              <li>Turn off on-screen text capture independently</li>
-              <li>Turn off file activity monitoring independently</li>
+              <li>Change or withdraw your consent for any capture category independently, at any time — not just at first launch</li>
+              <li>Exclude specific apps or websites from being tracked</li>
+              <li>Turn off on-screen text capture or file activity monitoring independently</li>
               <li>Choose which folders are watched for file activity</li>
+              <li>Remove your own AI provider key at any time; capture and local search keep working exactly as before</li>
               <li>View everything Orbit has stored in the Memory Viewer</li>
-              <li>Delete individual events, sessions, or everything at once</li>
-              <li>One-click full memory wipe with no recovery</li>
+              <li>Delete individual events or sessions, or wipe everything at once</li>
             </ul>
+            <p className="mt-2 text-zinc-400">
+              <span className="text-zinc-300 font-medium">Deleting a raw
+              event</span> (a single clipboard entry, window title, browser
+              visit, etc.) permanently removes that row — this is
+              irreversible.
+            </p>
+            <p className="text-zinc-400">
+              <span className="text-zinc-300 font-medium">Deleting a
+              session</span> removes its AI-written summary and its
+              semantic-search entry, but the individual raw events that fed
+              into it are <span className="text-zinc-300">not</span> deleted
+              — they&apos;re only unlinked from that summary. Because
+              unprocessed events are exactly what the next automatic
+              summary cycle looks for, those same events may be summarized
+              into a <em>new</em> session again later. If you want an
+              activity permanently gone, delete the underlying events too,
+              or use the full wipe below.
+            </p>
+            <p className="text-zinc-400">
+              <span className="text-zinc-300 font-medium">A full memory
+              wipe</span> (one click in the Privacy tab) deletes all events,
+              sessions, the local search index, the semantic-search index,
+              and paired browser-extension connections, and securely
+              compacts the database file. This cannot be undone.
+            </p>
           </div>
         </section>
 
         {/* Section 7 */}
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-white uppercase tracking-wider">
-            7. Updates to This Policy
+            7. No Telemetry
           </h2>
-          <p className="text-sm leading-relaxed font-light">
-            As Orbit evolves, this policy may be updated. Significant changes
-            will be communicated through the app or website. The date at the
-            top of this page reflects the most recent revision.
+          <p className="text-sm leading-relaxed font-light text-zinc-400">
+            Orbit sends no telemetry, analytics, or crash reports of any
+            kind, to anyone, ever — not even anonymized, not even a count of
+            app launches. No stable device identifier is created. This has
+            been true since the app removed its analytics and crash
+            reporting SDKs entirely, rather than disabling them by default —
+            there is no setting that turns telemetry back on, because there
+            is no code path left that could send it.
           </p>
         </section>
 
         {/* Section 8 */}
-        <section className="flex flex-col gap-3 border-t border-white/5 pt-8 mb-12">
+        <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-white uppercase tracking-wider">
-            8. Contact
+            8. If You Capture Someone Else&apos;s Content
+          </h2>
+          <p className="text-sm leading-relaxed font-light text-zinc-400">
+            Orbit captures whatever is on your own screen — which may
+            include an employer&apos;s, client&apos;s, or colleague&apos;s
+            material if it appears in a window, document, or message you
+            have open. You are responsible for getting any permission your
+            workplace, contracts, or applicable law require before running
+            Orbit in contexts involving other people&apos;s confidential or
+            personal information. When in doubt, exclude the relevant
+            app or pause capture for that work.
+          </p>
+        </section>
+
+        {/* Section 9 */}
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-white uppercase tracking-wider">
+            9. Updates to This Policy
           </h2>
           <p className="text-sm leading-relaxed font-light">
-            Questions about privacy? Email:{" "}
+            As Orbit evolves, this policy will be updated to keep matching
+            actual behavior. Significant changes will be noted in the
+            app&apos;s release notes. The date at the top of this page
+            reflects the most recent revision.
+          </p>
+        </section>
+
+        {/* Section 10 */}
+        <section className="flex flex-col gap-3 border-t border-white/5 pt-8 mb-12">
+          <h2 className="text-sm font-semibold text-white uppercase tracking-wider">
+            10. Contact
+          </h2>
+          <p className="text-sm leading-relaxed font-light">
+            Questions about privacy, or to report a security issue? Email:{" "}
             <a
-              href={`mailto:${contactEmail}`}
+              href={`mailto:${CONTACT_EMAIL}`}
               className="text-white hover:underline transition-all font-medium"
             >
-              {contactEmail}
+              {CONTACT_EMAIL}
             </a>
           </p>
         </section>

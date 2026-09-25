@@ -1,0 +1,5 @@
+# Single maintainer — see GOVERNANCE.md.
+# All paths route through the same review gate today; this file exists so
+# GitHub's review-request automation has something to point at, and so a
+# future second maintainer can be added by editing one line here.
+* @Saadaan-Hassan
