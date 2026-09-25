@@ -5,7 +5,7 @@ tests").
 
 No personal Voyage key is configured in any of these tests (a fresh temp
 database has none) — this exercises the real, unmocked
-VoyageKeyNotConfiguredError path end to end, not a simulated one. Only the
+VoyageUnavailableError path end to end, not a simulated one. Only the
 Groq streaming call is mocked, since it's the one genuine network dependency.
 """
 
@@ -95,7 +95,7 @@ class OfflineRecallTests(unittest.TestCase):
     def test_no_voyage_key_and_no_groq_falls_back_to_plain_fts5_text(self):
         """Full offline/no-key state: neither provider available. Must yield
         the friendly FTS5 fallback, never the generic error message (that
-        was the actual bug — a bare VoyageKeyNotConfiguredError escaping
+        was the actual bug — a bare VoyageUnavailableError escaping
         into the catch-all branch)."""
         async def operation(database, recall):
             import httpx
@@ -116,6 +116,34 @@ class OfflineRecallTests(unittest.TestCase):
         joined = "".join(chunks)
         self.assertNotIn("Sorry, something went wrong", joined)
         self.assertIn("auth.py", joined)
+        # COST-005: the fallback message must reassure the user their data
+        # never left the device, and describe *why* rather than a generic
+        # "you may be offline" guess for every possible cause.
+        self.assertIn("never left your Mac", joined)
+        self.assertIn("couldn't reach the network", joined)
+
+    def test_fallback_message_distinguishes_no_groq_key_from_a_network_problem(self):
+        async def operation(database, recall):
+            import httpx
+
+            await self._insert_event(database, "e1", "Working on the auth.py refactor")
+
+            async def unauthorized_groq(**_kwargs):
+                raise httpx.HTTPStatusError(
+                    "401", request=None, response=httpx.Response(401)
+                )
+                yield  # pragma: no cover — makes this an async generator
+
+            with patch.object(recall, "stream_recall_response_groq", new=unauthorized_groq):
+                chunks = await self._collect_chunks(
+                    recall._stream_sse_recall("auth.py refactor", None)
+                )
+            return chunks
+
+        chunks = self._with_recall(operation)
+        joined = "".join(chunks)
+        self.assertIn("no Groq key is configured, or it was rejected", joined)
+        self.assertNotIn("couldn't reach the network", joined)
 
     def test_time_range_query_uses_db_scan_without_any_voyage_key(self):
         """The per-project time-range DB scan is a plain SQLite read with no

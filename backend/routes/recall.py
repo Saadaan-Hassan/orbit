@@ -24,7 +24,7 @@ from database import fetch_sessions_by_time_range, fetch_system_state_events, se
 from services.analytics_service import capture_analytics_event
 from services.groq_service import stream_recall_response_groq
 from services.qdrant_service import search_sessions_semantic
-from services.voyage_service import VoyageKeyNotConfiguredError
+from services.voyage_service import VoyageUnavailableError
 from services.time_parser import extract_time_range_from_query
 
 router = APIRouter()
@@ -507,21 +507,43 @@ def _build_context_block(
     return "\n".join(context_lines)
 
 
-def _format_fts5_fallback(events: list[dict]) -> str:
+def _describe_groq_unavailable_reason(error: Exception) -> str:
+    """
+    A short, honest clause explaining *why* Groq wasn't reached — COST-005:
+    "user-facing messages explain whether data stayed local." Distinguishes
+    the common BYOK cases (no key / bad key) from a genuine network problem,
+    rather than always guessing "you may be offline."
+    """
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        if status in (401, 403):
+            return "no Groq key is configured, or it was rejected"
+        if status == 429:
+            return "Groq is rate-limiting this key right now"
+        return "Groq is temporarily unavailable"
+    if isinstance(error, (httpx.ConnectError, httpx.TimeoutException)):
+        return "I couldn't reach the network"
+    return "Groq is temporarily unavailable"
+
+
+def _format_fts5_fallback(events: list[dict], reason: str = "Groq is temporarily unavailable") -> str:
     """
     Formats local FTS5 results as a plain readable message for the offline
-    fallback path. Used when the Cloudflare Worker is unreachable so the user
-    always gets something from their local data instead of a blank error.
+    fallback path. Used when Groq is unreachable so the user always gets
+    something from their local data instead of a blank error. Always states
+    plainly that this search itself never left the device — COST-005.
     """
     if not events:
         return (
-            "I can't reach my AI right now — you may be offline. "
-            "I also couldn't find any matching activity in your recent history."
+            f"I can't give you an AI-written answer right now ({reason}), and I "
+            "couldn't find any matching activity in your recent history either — "
+            "this search itself never left your Mac."
         )
 
     lines = [
-        "I can't reach my AI right now (you may be offline), but here's what "
-        "I found in your recent activity:",
+        f"I can't give you an AI-written answer right now ({reason}), but here's "
+        "what I found in your recent activity — this search itself never left "
+        "your Mac:",
     ]
     for event in events:
         readable_timestamp = _format_timestamp_as_human_readable(
@@ -643,7 +665,7 @@ async def _stream_sse_recall(
         httpx.ConnectError,
         httpx.TimeoutException,
         httpx.HTTPStatusError,
-        VoyageKeyNotConfiguredError,
+        VoyageUnavailableError,
     ) as semantic_search_error:
         logger.info(
             "Recall: semantic search unavailable (%s) — continuing with FTS5-only context.",
@@ -769,7 +791,8 @@ async def _stream_sse_recall(
         capture_analytics_event("recall_offline_fallback", {
             "fts5_result_count": len(keyword_matched_events),
         })
-        yield f"data: {json.dumps({'chunk': _format_fts5_fallback(keyword_matched_events)})}\n\n"
+        fallback_reason = _describe_groq_unavailable_reason(offline_error)
+        yield f"data: {json.dumps({'chunk': _format_fts5_fallback(keyword_matched_events, fallback_reason)})}\n\n"
 
     except Exception as unexpected_error:
         logger.error(

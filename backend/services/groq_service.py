@@ -49,12 +49,19 @@ GROQ_DIRECT_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 _http_client: httpx.AsyncClient | None = None
 
-# When Groq returns 429, all batches in the same (and nearby) scheduler run
-# skip Groq without making a network request. Resets once monotonic time
-# passes the value stored here. Module-level so it persists across async calls.
-# Tracked per-model since session-summary and classification models have
-# independent rate-limit budgets on Groq.
+# When Groq returns 429 or 401/403 (COST-005), all batches in the same (and
+# nearby) scheduler run skip Groq without making a network request. Resets
+# once monotonic time passes the value stored here. Module-level so it
+# persists across async calls. Tracked per-model since session-summary and
+# classification models have independent rate-limit budgets on Groq (an
+# auth failure isn't really per-model — the same key is bad everywhere — but
+# reusing the same per-model dict keeps this simple, at the cost of each
+# distinct model independently discovering a bad key once per cooldown
+# window rather than sharing that state).
 _groq_rate_limited_until: dict[str, float] = {}
+# Auth failures get a longer cooldown than rate limits (no Retry-After header
+# applies, and a revoked/invalid key is very unlikely to fix itself quickly).
+_GROQ_AUTH_FAILURE_COOLDOWN_SECONDS = 300.0
 
 
 # Session generation and classification run in the background scheduler, not
@@ -129,16 +136,17 @@ async def _call_groq_chat(
     Otherwise the Worker is used with its own shared GROQ_API_KEY secret.
 
     Returns the raw text content of the model's reply, or None when:
-    - This model is in a rate-limit cooldown (429 received recently).
-    - The request fails for any reason (network error, non-2xx, bad shape),
-      including the admin kill switch returning 503 (GROQ_PROXY_ENABLED=false).
+    - This model is in a cooldown from a recent 429 (rate limit) or 401/403
+      (bad key) response (COST-005).
+    - The request fails for any reason (network error, non-2xx, bad shape).
 
     Never raises — callers treat None as "Groq unavailable for this call".
     """
-    # Skip immediately if this model is inside a rate-limit cooldown window
-    # so subsequent batches in the same scheduler run don't all hit the API.
+    # Skip immediately if this model is inside a cooldown window (a recent
+    # 429 or 401/403) so subsequent batches in the same scheduler run don't
+    # all hit the API re-discovering the same failure.
     if time.monotonic() < _groq_rate_limited_until.get(model, 0.0):
-        logger.debug("Groq rate-limit cooldown active for %s — skipping this call.", model)
+        logger.debug("Groq cooldown active for %s — skipping this call.", model)
         return None
 
     safe_system_prompt, safe_user_prompt, _ = await sanitize_chat_context(
@@ -202,6 +210,21 @@ async def _call_groq_chat(
         # Request too large for this model's per-request token budget. This is
         # a payload-size problem, not a time-based quota — retrying later won't
         # help, only sending less content will. No cooldown is set.
+        log_provider_diagnostic(
+            provider="groq",
+            model=model,
+            operation="chat",
+            started_at=started_at,
+            status=response.status_code,
+        )
+        return None
+
+    if response.status_code in (401, 403):
+        # COST-005: an invalid/revoked key won't become valid on retry, and
+        # (like a 429) won't resolve itself between one classification group
+        # and the next in the same scheduler cycle — cooldown this model so
+        # the rest of the cycle doesn't each independently rediscover it.
+        _groq_rate_limited_until[model] = time.monotonic() + _GROQ_AUTH_FAILURE_COOLDOWN_SECONDS
         log_provider_diagnostic(
             provider="groq",
             model=model,

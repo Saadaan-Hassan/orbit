@@ -16,6 +16,7 @@ request — never instantiate a new client per call.
 import asyncio
 import logging
 import os
+import random
 import time
 
 import httpx
@@ -32,11 +33,13 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-class VoyageKeyNotConfiguredError(RuntimeError):
-    """No personal Voyage key is configured — an expected, common state
-    (COST-002/003), not a transport or provider failure. Callers that want
-    the same graceful "provider unavailable" handling they already give
-    httpx errors should catch this alongside them."""
+class VoyageUnavailableError(RuntimeError):
+    """Embeddings aren't available right now, for a BYOK-shaped reason rather
+    than a transport failure: no personal key is configured (the expected,
+    common state — COST-002/003), or a recent 401/403/429 put Voyage in a
+    cooldown (COST-005). Callers that want the same graceful "provider
+    unavailable" handling they already give httpx errors should catch this
+    alongside them."""
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -49,6 +52,17 @@ VOYAGE_EMBEDDING_DIMENSION = 512
 
 HTTP_REQUEST_TIMEOUT_SECONDS = 30.0
 
+# COST-005: a bad key (401/403) or a rate limit (429) won't resolve itself
+# between one session's embedding and the next in the same batch — this
+# cooldown stops every session in a backlog from independently rediscovering
+# the same failure. Not per-model like Groq's cooldown (only one embedding
+# model exists), so a plain module-level timestamp is enough. Auth failures
+# get a longer cooldown than rate limits since a revoked/invalid key is very
+# unlikely to fix itself quickly, unlike a rate-limit window.
+_voyage_rate_limited_until: float = 0.0
+_VOYAGE_AUTH_FAILURE_COOLDOWN_SECONDS = 300.0
+_VOYAGE_DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 90.0
+
 # ---------------------------------------------------------------------------
 # Singleton HTTP client — points at the Cloudflare Worker, not Voyage directly.
 # ---------------------------------------------------------------------------
@@ -59,6 +73,18 @@ _http_client = httpx.AsyncClient(
     base_url=_worker_url,
     timeout=HTTP_REQUEST_TIMEOUT_SECONDS,
 )
+
+
+def _set_voyage_cooldown(seconds: float) -> None:
+    global _voyage_rate_limited_until
+    _voyage_rate_limited_until = time.monotonic() + seconds
+
+
+def _backoff_delay_seconds(attempt_number: int) -> float:
+    """Bounded exponential backoff with jitter (COST-005) — a small random
+    component avoids every session in a batch retrying in perfect lockstep
+    if several embed calls hit a transient failure at the same moment."""
+    return (2 ** attempt_number) + random.uniform(0, 0.5)
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +139,15 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
             status=None,
             error=RuntimeError("no personal Voyage key configured"),
         )
-        raise VoyageKeyNotConfiguredError("No Voyage API key configured")
+        raise VoyageUnavailableError("No Voyage API key configured")
+
+    if time.monotonic() < _voyage_rate_limited_until:
+        # COST-005: a prior call in this same batch already confirmed the
+        # key is bad or the account is rate-limited — don't spend a request
+        # re-confirming that for every remaining session.
+        logger.debug("Voyage cooldown active — skipping this embedding call.")
+        raise VoyageUnavailableError("Voyage is in a cooldown after a recent auth/rate-limit failure")
+
     request_headers = {"X-Voyage-Api-Key": personal_api_key}
 
     for attempt_number in range(3):
@@ -144,11 +178,22 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
                 started_at=started_at,
                 status=response.status_code,
             )
-            if response.status_code == 401:
-                # An invalid/revoked key won't become valid on retry.
+            if response.status_code in (401, 403):
+                # An invalid/revoked key won't become valid on retry — fail
+                # now, and start a cooldown so the rest of this batch (a
+                # backlog can mean many sessions in one scheduler cycle)
+                # doesn't each independently rediscover the same failure.
+                _set_voyage_cooldown(_VOYAGE_AUTH_FAILURE_COOLDOWN_SECONDS)
+                response.raise_for_status()
+            elif response.status_code == 429:
+                # Same reasoning as Groq's rate-limit cooldown: honour
+                # Retry-After if present, and stop the rest of this batch
+                # from hammering a rate-limited account.
+                retry_after = float(response.headers.get("Retry-After", _VOYAGE_DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS))
+                _set_voyage_cooldown(retry_after)
                 response.raise_for_status()
             elif attempt_number < 2:
-                await asyncio.sleep(2 ** attempt_number)
+                await asyncio.sleep(_backoff_delay_seconds(attempt_number))
             else:
                 response.raise_for_status()
 
@@ -161,7 +206,7 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
                 error=transport_error,
             )
             if attempt_number < 2:
-                await asyncio.sleep(2 ** attempt_number)
+                await asyncio.sleep(_backoff_delay_seconds(attempt_number))
             else:
                 raise
 
