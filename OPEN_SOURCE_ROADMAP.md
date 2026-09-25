@@ -180,7 +180,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | APPSEC-001 | Agent | PARTIAL | Harden Tauri CSP, release devtools, capabilities, and entitlements | SEC-003 |
 | COST-001 | Agent | PARTIAL | Implement Keychain-backed BYOK UI and direct Groq calls | MAN-000, SEC-003 |
 | COST-002 | Agent | DONE | Remove all shared-key Worker behavior and fail closed | COST-001 |
-| COST-003 | Agent | TODO | Make FTS5 the no-embedding default and remove mandatory Voyage usage | COST-002 |
+| COST-003 | Agent | PARTIAL | Make FTS5 the no-embedding default and remove mandatory Voyage usage | COST-002 |
 | COST-004 | Agent | TODO | Replace retired models and centralize provider/model configuration | COST-001 |
 | COST-005 | Agent | TODO | Add predictable offline/rate-limit/provider failure behavior | COST-003, COST-004 |
 | OBS-001 | Agent | TODO | Remove default remote telemetry or make it genuine opt-in | MAN-000, PRIV-001 |
@@ -797,6 +797,20 @@ Acceptance criteria:
 
 ### COST-003 — Make FTS5 the default; remove mandatory Voyage/Qdrant use
 
+**Current status: PARTIAL (2026-09-25).** Most of this task's substance was
+already achieved as a direct consequence of `COST-002`'s BYOK change; the
+remaining structural gaps found while verifying that (Qdrant touched
+unconditionally at startup/every scheduler cycle; a missing Voyage key was
+silently breaking Groq recall synthesis entirely, not just semantic search)
+are now fixed — see [ADR-006](docs/adr/ADR-006-optional-lazy-semantic-search.md)
+for the full decision record. **Decision: Qdrant is retained**, not removed —
+it's local-only, no heavyweight ML dependency, and the actual cost/privacy
+problem was always the automatic *remote* Voyage call, which COST-002/003
+together have now made fully opt-in and lazy. Held at `PARTIAL` solely
+because the "packaging size/startup regression measured and recorded"
+criterion needs an actual built app to measure, which this environment
+cannot produce — everything else is done and test-backed.
+
 Implementation requirements:
 
 - Use SQLite FTS5/BM25 and time/project filtering as the default retrieval path.
@@ -810,12 +824,29 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] Fresh install, session generation, timeline, projects and recall operate
-      without Voyage/Qdrant/network.
-- [ ] Existing local data remains usable after migration.
-- [ ] Offline retrieval quality has deterministic tests.
-- [ ] No silent remote embedding request occurs.
-- [ ] Packaging size/startup regression is measured and recorded.
+- [x] Fresh install, session generation, timeline, projects and recall operate
+      without Voyage/Qdrant/network. Timeline/projects never touched either;
+      session generation and recall verified by `tests/test_offline_recall.py`.
+- [x] Existing local data remains usable after migration. No schema changed —
+      nothing to migrate.
+- [x] Offline retrieval quality has deterministic tests. `tests/test_offline_recall.py`
+      (4 tests): Groq still synthesizes an answer with no Voyage key; full
+      offline (no Groq either) yields the friendly fallback, not the generic
+      error; the time-range DB scan runs independent of Voyage; Qdrant's
+      client is never touched by `add_session_embedding()` without a key.
+- [x] No silent remote embedding request occurs. `generate_text_embedding()`
+      raises before any network call when no personal key exists (COST-002);
+      `scheduler.py` additionally checks this before attempting the call at
+      all, so it isn't even logged as a failure.
+- [ ] Packaging size/startup regression is measured and recorded. Not
+      measured — would require building the actual macOS app bundle,
+      outside what this environment can do. Reasoned qualitatively in
+      ADR-006 instead: no packaging size change (the `qdrant-client`
+      dependency is unchanged, still bundled either way), and startup is
+      lighter for the common no-key case (Qdrant's storage/lock file is no
+      longer created at launch or every 30-minute cycle). A maintainer
+      should do an actual before/after build-size and cold-start comparison
+      before marking this task `DONE`.
 
 ### COST-004 — Replace retired models and centralize provider configuration
 
@@ -1329,6 +1360,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-10 | PRIV-003 | PARTIAL | `ADR-003`; shared Rust sanitizer; all active/retained Rust event writers; local exact-match pattern table/API/UI; migration test | All active and retained Rust event-insert sources now sanitize their captured strings; URLs strip fragments, redact userinfo and sensitive query values; static patterns cover credentials, keys, headers, JWTs, connection strings, payment/identity data, email/phone, and local custom phrases. `cargo test --bin app` passed 30/30, `cargo check --bin app`, focused `rustfmt --check` for changed capture files, backend tests 9/9, `pnpm build`, and both staged/unstaged `git diff --check` passed. | Keep PARTIAL: repository-wide Clippy fails an existing collapsible-if in `src/lib.rs`, and repository-wide formatter reports existing drift in `src/lib.rs` and `src/main.rs`. Fix and rerun those global checks before marking this task DONE. Consent gate remains blocked by PRIV-002. |
 | 2026-09-25 | COST-001 | PARTIAL | `backend/services/groq_service.py`, `backend/routes/settings.py`, `backend/tests/test_groq_byok.py`, `app/src/hooks/useGroqKeySettings.ts`, `app/src/components/PrivacyPanel.tsx`, `AGENTS.md` | Added `GROQ_DIRECT_API_URL` (`https://api.groq.com/openai/v1/chat/completions`) and rewired all three Groq call sites (session summary, classification, recall streaming) plus a new `test_groq_api_key()` to use it with `Authorization: Bearer <key>` whenever `database.get_groq_api_key()` returns a personal key — the Worker is bypassed entirely in that case; with no personal key, behavior is unchanged (Worker, no auth header). Added `POST /settings/groq-key/test` (validates a candidate key with a free Groq `/models` call, never persists it). Built the "Your Own Groq Key" PrivacyPanel section: add/replace/test/remove/temporarily-disable, a persistent explicit disclosure that captured context and queries leave the Mac once a key is active, and a `GET /settings/groq-key` response that only ever returns `{configured, enabled}` — never the key. Rewrote every `AGENTS.md` passage claiming all AI goes through the Worker unconditionally (Critical Architecture Facts, AI Models table, Security & Privacy Rules, Environment Variables, DO NOT section, Key Files entries) to describe the Groq BYOK exception. Verification: `uv run python -m unittest discover -s tests -p 'test_*.py'` 37/37 (8 new: 4 asserting the direct-URL/Bearer-header routing per call site, 1 asserting the no-key path is unchanged, 1 asserting the test endpoint never stores the key, 2 asserting the full add/test/disable/remove route lifecycle and that the raw key never appears in a response); `pnpm build` (TypeScript + Vite) clean. | Required maintainer action: launch a real build, add a personal key, quit and relaunch Orbit, confirm `GET /settings/groq-key` still reports `configured: true` (Keychain + SQLite persistence — no automated test restarts the app). Next: `COST-002`. |
 | 2026-09-25 | COST-002 | DONE | `worker/src/index.ts` (rewrite), `worker/src/index.test.ts`, `worker/README.md`, `worker/package.json`, `backend/services/keychain_service.py`, `backend/services/voyage_service.py`, `backend/database.py`, `backend/routes/settings.py` (rewrite), `backend/tests/test_voyage_byok.py`, `backend/tests/test_provider_context_sanitizer.py`, `backend/scheduler.py` (comment), `app/src/hooks/useApiKeySettings.ts` (replaces `useGroqKeySettings.ts`), `app/src/hooks/useProviderStatus.ts` (deleted), `app/src/components/PrivacyPanel.tsx`, `AGENTS.md` | Scope confirmed with the maintainer via an explicit question before implementing (see status note above): all four providers' maintainer-funded Worker credentials removed; Claude/Gemini removed outright (unused, no BYOK anywhere); Voyage given the same BYOK treatment as Groq; Worker stays a lightweight passthrough, not a hardened self-host template. Rewrote `worker/src/index.ts`: `WorkerEnvironment` is now an empty interface, `/chat` and `/classify` and `/provider-status` deleted, `/chat-groq` and `/embed` each require the caller's own key header with no fallback (401 otherwise). Generalized `keychain_service.py` (`_store_api_key_sync`/`_get_api_key_sync`/etc. parameterized by account) and added Voyage Keychain functions alongside the existing Groq ones. `voyage_service.py`: `generate_text_embedding` now requires `database.get_voyage_api_key()`, raises immediately with zero network calls if absent (no maintainer fallback exists), fast-fails on 401 without retrying; added `test_voyage_api_key()`. Rewrote `routes/settings.py` with shared provider-agnostic CRUD helpers powering both `/settings/groq-key` and the new `/settings/voyage-key` (+ `.../test`, `.../enabled`); removed `/settings/provider-status` (nothing left to proxy). Generalized the frontend BYOK hook/UI (`useApiKeySettings.ts`, one `ApiKeySection` component) and rendered it twice (Groq, Voyage) in PrivacyPanel; deleted `useProviderStatus.ts` and the old admin-status UI it powered. Added a Vitest suite for the Worker (auth/routing/passthrough/no-credential-surface, 12 tests) — this Worker had zero test infrastructure before. Rewrote every stale Worker/kill-switch/BYOK claim in `AGENTS.md` (Critical Architecture Facts, AI Models, data-flow diagrams, Cloudflare Worker section, Environment Variables, DO NOT, Key Files, monorepo tree). Verification: backend `uv run python -m unittest discover -s tests -p 'test_*.py'` 43/43 (6 new Voyage tests, 1 existing Groq/Gemini/Claude/Voyage boundary test updated to mock a personal Voyage key); `cd worker && npm run test` 12/12 (new); `pnpm build` (TypeScript + Vite) clean. | **The live, already-deployed Worker still runs the pre-COST-002 code and remains genuinely exposed (`/embed` has no kill switch, zero auth) until the maintainer runs `npx wrangler deploy` from `worker/` — not done here, deployment requires explicit authorization.** Next: `COST-003` — note its own scope (making Voyage/Qdrant fully optional) now partially overlaps with the BYOK work done here; check current state before assuming the original task text is unchanged. |
+| 2026-09-25 | COST-003 | PARTIAL | `backend/services/qdrant_service.py`, `backend/main.py`, `backend/scheduler.py`, `backend/services/voyage_service.py`, `backend/routes/recall.py`, `backend/tests/test_offline_recall.py`, `docs/adr/ADR-006-optional-lazy-semantic-search.md`, `AGENTS.md` | Decision: Qdrant retained (not removed) but made fully lazy — see ADR-006. `qdrant_service.py`'s `add_session_embedding()`/`search_sessions_semantic()` now call `generate_text_embedding()` *before* touching the Qdrant client; with no personal Voyage key that raises immediately and Qdrant's local storage is never created. Removed the unconditional `initialize_qdrant_collection()` calls from `main.py`'s startup and `scheduler.py`'s every-30-minutes cycle; `scheduler.py` now checks `get_voyage_api_key()` before attempting an embedding at all, logging `debug` (not `warning`) when none is configured — was previously warning on every cycle forever for the now-common no-key case. Found and fixed a real regression while verifying this: `routes/recall.py` ran Qdrant semantic search and Groq synthesis in one `try` block, so `VoyageKeyNotConfiguredError` (a plain `RuntimeError`, not an `httpx.*` exception) escaped the `except` clause into the catch-all handler and replied "Sorry, something went wrong" instead of ever calling Groq — meaning a user with a valid Groq key but no Voyage key got no AI-synthesized recall answer at all, not just no semantic search. Restructured so semantic search soft-fails to an empty list (Groq still runs on FTS5-only/DB-scan context) and only a genuine Groq-side failure triggers the plain-FTS5-text fallback. Verification: `uv run python -m unittest discover -s tests -p 'test_*.py'` 47/47 (4 new in `test_offline_recall.py`, covering the exact regression above, the full-offline path, the time-range DB-scan independence, and that Qdrant's client is never touched without a key). | Packaging size/startup regression was not measured (requires a built macOS app bundle, outside this environment) — reasoned qualitatively in ADR-006 instead; a maintainer should do an actual before/after comparison before marking `DONE`. Next: `COST-004`. |
 | 2026-09-25 | APPSEC-001 | PARTIAL | `app/src-tauri/Cargo.toml`, `app/src-tauri/tauri.conf.json`, `app/src-tauri/capabilities/default.json`, `docs/adr/ADR-005-tauri-shell-hardening.md` | Removed the unconditional `devtools` Cargo feature (WRY still exposes devtools automatically in debug builds; release builds no longer force it on). Added a restrictive CSP (`default-src 'self'` plus a `connect-src` scoped to the fixed-port local backend, PostHog, and Sentry — the only hosts the webview itself calls; the Cloudflare Worker and AI providers are never in `connect-src` because only the Python backend calls them). Rewrote `capabilities/default.json` to grant exactly what the webview calls: removed `global-shortcut:default` and six unused `core:window:allow-*` permissions (the hotkey and those window transitions are Rust-native and were never gated by this file), and added the previously-missing `updater:allow-check`, `updater:allow-download-and-install`, `process:allow-restart`, and `dialog:allow-open` — without which auto-update and the watched-folder picker were silently non-functional (both call sites swallow errors by design). Existing entitlements were reviewed and left unchanged; each already carries an inline justification comment and is exercised by a real code path. `macOSPrivateApi: true` is required by the main window's `shadow: false` and the overlay window's transparency/click-through. Verification: `cargo check --bin app` (also validates the capabilities file against plugin permission schemas), `cargo test --bin app` 37/37, `pnpm build` (TypeScript + Vite), `git diff --check` all passed. | Required maintainer action: build a real `.dmg`, confirm right-click → Inspect Element is unavailable, and confirm the local API, PostHog/Sentry, the update check, and the folder picker all still work under the new CSP/capability grant. Record the outcome here before marking `APPSEC-001` DONE. Next: `COST-001`. `PRIV-002`/`PRIV-003` remain PARTIAL, independent of this task. |
 
 ---

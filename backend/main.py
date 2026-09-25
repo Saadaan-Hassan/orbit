@@ -18,7 +18,6 @@ from routes.projects import router as projects_router
 from routes.settings import router as settings_router
 from routes.timeline import router as timeline_router
 from scheduler import create_session_scheduler
-from services.qdrant_service import initialize_qdrant_collection
 from services.analytics_service import capture_analytics_event
 from services.sentry_service import initialise_sentry_error_reporting
 
@@ -46,7 +45,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "A legacy local provider credential could not be moved to macOS Keychain; "
             "the existing value was left untouched."
         )
-    await initialize_qdrant_collection()
+    # Qdrant is initialised lazily, only on the first successful embedding
+    # (COST-003) — most installs never configure a Voyage key, and should
+    # never touch Qdrant's local storage at all in that case.
     capture_analytics_event("app_started")
 
     session_scheduler = create_session_scheduler()

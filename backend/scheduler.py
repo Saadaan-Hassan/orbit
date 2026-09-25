@@ -16,7 +16,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-from database import _async_engine
+from database import _async_engine, get_voyage_api_key
 from services.analytics_service import capture_analytics_event
 # Claude (services.claude_service) and Gemini (services.gemini_service) are
 # unused here — Groq is the sole provider for session generation and
@@ -27,7 +27,7 @@ from services.analytics_service import capture_analytics_event
 # just re-importing SUMMARY_MODEL / generate_session_summary /
 # classify_events_batch.
 from services.groq_service import classify_events_batch_groq, generate_session_summary_groq
-from services.qdrant_service import add_session_embedding, initialize_qdrant_collection
+from services.qdrant_service import add_session_embedding
 
 load_dotenv()
 
@@ -623,29 +623,39 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
         "category":       dominant_category,
     }
 
-    try:
-        await add_session_embedding(
-            session_id=new_session_id,
-            summary_text=embedding_text,
-            metadata=embedding_metadata,
+    if await get_voyage_api_key() is None:
+        # COST-003: no personal Voyage key configured is the common, expected
+        # state, not a failure — skip quietly rather than attempting (and
+        # logging a warning for) an embedding that can never succeed.
+        logger.debug(
+            "Session generator: no Voyage key configured — skipping embedding "
+            "for session %s; semantic search will not include it.",
+            new_session_id,
         )
-        # add_session_embedding() derives the Qdrant integer point ID as
-        # abs(hash(session_id)) % 10**9. We store that same integer (as a
-        # string) so delete_session_embedding() can convert it back with
-        # int(embedding_id) and address the right Qdrant point.
-        stable_point_id = abs(hash(new_session_id)) % (10**9)
-        async with _async_engine.begin() as connection:
-            await connection.execute(
-                text("UPDATE sessions SET embedding_id = :eid WHERE id = :sid"),
-                {"eid": str(stable_point_id), "sid": new_session_id},
+    else:
+        try:
+            await add_session_embedding(
+                session_id=new_session_id,
+                summary_text=embedding_text,
+                metadata=embedding_metadata,
             )
-    except Exception as embedding_error:
-        logger.warning(
-            "Session generator: Qdrant upsert failed for session %s "
-            "(error_kind=%s). "
-            "Session is saved in SQLite; semantic search will not include it.",
-            new_session_id, type(embedding_error).__name__,
-        )
+            # add_session_embedding() derives the Qdrant integer point ID as
+            # abs(hash(session_id)) % 10**9. We store that same integer (as a
+            # string) so delete_session_embedding() can convert it back with
+            # int(embedding_id) and address the right Qdrant point.
+            stable_point_id = abs(hash(new_session_id)) % (10**9)
+            async with _async_engine.begin() as connection:
+                await connection.execute(
+                    text("UPDATE sessions SET embedding_id = :eid WHERE id = :sid"),
+                    {"eid": str(stable_point_id), "sid": new_session_id},
+                )
+        except Exception as embedding_error:
+            logger.warning(
+                "Session generator: Qdrant upsert failed for session %s "
+                "(error_kind=%s). "
+                "Session is saved in SQLite; semantic search will not include it.",
+                new_session_id, type(embedding_error).__name__,
+            )
 
     # ------------------------------------------------------------------
     # Mark all events in this group as processed
@@ -749,7 +759,9 @@ async def generate_sessions_from_recent_events() -> None:
 
     await _ensure_events_schema_columns_exist()
     await _ensure_sessions_schema_columns_exist()
-    await initialize_qdrant_collection()
+    # Qdrant is no longer unconditionally touched here (COST-003) — it's
+    # initialised lazily inside add_session_embedding(), only after a
+    # successful Voyage embedding, so a no-key install never creates it.
 
     # ------------------------------------------------------------------
     # Step 1 — Fetch unprocessed events: recent + stale force-process

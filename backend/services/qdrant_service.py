@@ -189,9 +189,14 @@ async def add_session_embedding(
         session_id:   UUID string that uniquely identifies the session.
         summary_text: Full text to embed (project + goal + summary + resources).
         metadata:     Key/value pairs stored as the point payload for retrieval.
+
+    COST-003: the embedding is generated before Qdrant is touched at all —
+    with no personal Voyage key configured (the common case), this raises
+    immediately and Qdrant's local storage is never created or opened.
     """
-    client = _get_client()
     embedding_vector = await generate_text_embedding(summary_text)
+    await initialize_qdrant_collection()
+    client = _get_client()
 
     # Qdrant integer point IDs must be non-negative. We derive a stable ID
     # from the session UUID so the same session always maps to the same point.
@@ -229,9 +234,14 @@ async def search_sessions_semantic(
     Returns:
         List of payload dicts for points scoring >= MINIMUM_SIMILARITY_SCORE,
         ordered best-first.
+
+    COST-003: the embedding is generated before Qdrant is touched at all —
+    with no personal Voyage key configured, this raises immediately and
+    Qdrant's local storage is never created or opened.
     """
-    client = _get_client()
     query_embedding_vector = await generate_text_embedding(query_text)
+    await initialize_qdrant_collection()
+    client = _get_client()
 
     query_response = await asyncio.to_thread(
         client.query_points,

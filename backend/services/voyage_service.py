@@ -31,6 +31,13 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+
+class VoyageKeyNotConfiguredError(RuntimeError):
+    """No personal Voyage key is configured — an expected, common state
+    (COST-002/003), not a transport or provider failure. Callers that want
+    the same graceful "provider unavailable" handling they already give
+    httpx errors should catch this alongside them."""
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -106,7 +113,7 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
             status=None,
             error=RuntimeError("no personal Voyage key configured"),
         )
-        raise RuntimeError("No Voyage API key configured")
+        raise VoyageKeyNotConfiguredError("No Voyage API key configured")
     request_headers = {"X-Voyage-Api-Key": personal_api_key}
 
     for attempt_number in range(3):

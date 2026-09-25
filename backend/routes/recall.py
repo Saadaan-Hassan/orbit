@@ -24,6 +24,7 @@ from database import fetch_sessions_by_time_range, fetch_system_state_events, se
 from services.analytics_service import capture_analytics_event
 from services.groq_service import stream_recall_response_groq
 from services.qdrant_service import search_sessions_semantic
+from services.voyage_service import VoyageKeyNotConfiguredError
 from services.time_parser import extract_time_range_from_query
 
 router = APIRouter()
@@ -628,111 +629,131 @@ async def _stream_sse_recall(
                 len(system_state_events),
             )
 
-    # The remaining steps (Qdrant semantic search + Claude synthesis) require
-    # the Cloudflare Worker. If the Worker is unreachable we fall back to the
-    # local FTS5 results so the user always gets something useful.
+    # Semantic search augments FTS5 but must never gate AI synthesis (COST-003
+    # — "recall must not require an embedding request"). Soft-fail to an
+    # empty list on any Voyage/Qdrant problem, including no personal key
+    # configured (the common state since COST-002's BYOK change) — Groq
+    # synthesis below still runs on FTS5 (+ the DB scan for time-range
+    # queries) alone; only a Groq-side failure falls back to plain FTS5 text.
     try:
         semantic_matched_sessions = await search_sessions_semantic(
             query_text=query, result_limit=8
         )
-
-        # Keep only sessions that overlap the detected time range.
-        if time_range:
-            semantic_matched_sessions = [
-                session for session in semantic_matched_sessions
-                if (
-                    session.get("start_time", 0) <= time_range["end_ms"]
-                    and session.get("end_time", 0) >= time_range["start_ms"]
-                )
-            ]
-
-        # Exclude personal sessions from work-intent queries. Semantic
-        # similarity can surface leisure-browsing sessions alongside work
-        # sessions (e.g. a Netflix search embedding near a coding search).
-        # The category stored in the Qdrant payload matches the dominant
-        # Gemini category written by the scheduler at session-generation time.
-        if intent == "work":
-            semantic_matched_sessions = [
-                s for s in semantic_matched_sessions
-                if s.get("category") != "personal"
-            ]
-
-        # Re-rank by combined semantic + recency score.
-        semantic_matched_sessions = _rerank_sessions_by_combined_score(
-            semantic_matched_sessions,
-            now_ms=now_ms,
-            time_range_active=time_range is not None,
-        )
-
-        # For time-range queries ("yesterday", "today", etc.), Qdrant semantic
-        # similarity is the wrong tool — it returns sessions similar to the query
-        # text, not all sessions from the day. A "what did I work on yesterday?"
-        # query will over-represent whichever project matches semantically (e.g.
-        # Orbit for an Orbit developer) and silently omit every other project.
-        #
-        # Fix: use the DB scan as the PRIMARY source for time-range queries —
-        # it returns the best session per distinct project_name within the window,
-        # guaranteeing comprehensive coverage. Qdrant results are merged in
-        # only if their project is not already covered.
-        if time_range:
-            db_sessions = await fetch_sessions_by_time_range(
-                start_ms=time_range["start_ms"],
-                end_ms=time_range["end_ms"],
-            )
-            # Build the final list: one session per project, DB-first so every
-            # project in the window is represented. Qdrant sessions fill any
-            # remaining slots (up to 12) for projects the DB scan missed.
-            seen_projects: set[str] = set()
-            merged: list[dict] = []
-
-            for db_session in db_sessions:
-                if len(merged) >= 12:
-                    break
-                project = (db_session.get("project_name") or "").strip().lower()
-                if project and project in seen_projects:
-                    continue
-                if project:
-                    seen_projects.add(project)
-                merged.append(db_session)
-
-            for session in semantic_matched_sessions:
-                if len(merged) >= 12:
-                    break
-                project = (session.get("project_name") or "").strip().lower()
-                if project and project in seen_projects:
-                    continue
-                if project:
-                    seen_projects.add(project)
-                merged.append(session)
-
-            semantic_matched_sessions = merged
-
+    except (
+        httpx.ConnectError,
+        httpx.TimeoutException,
+        httpx.HTTPStatusError,
+        VoyageKeyNotConfiguredError,
+    ) as semantic_search_error:
         logger.info(
-            "Recall: Qdrant returned %d session(s) after filtering and re-ranking.",
-            len(semantic_matched_sessions),
+            "Recall: semantic search unavailable (%s) — continuing with FTS5-only context.",
+            type(semantic_search_error).__name__,
         )
+        semantic_matched_sessions = []
 
-        capture_analytics_event("recall_query_made", {
-            "had_results":  bool(keyword_matched_events or semantic_matched_sessions),
-            "result_count": len(keyword_matched_events) + len(semantic_matched_sessions),
-            "time_filtered": bool(time_range),
-            "intent":        intent,
-        })
+    # Keep only sessions that overlap the detected time range.
+    if time_range:
+        semantic_matched_sessions = [
+            session for session in semantic_matched_sessions
+            if (
+                session.get("start_time", 0) <= time_range["end_ms"]
+                and session.get("end_time", 0) >= time_range["start_ms"]
+            )
+        ]
 
-        context_block = _build_context_block(
-            keyword_matched_events,
-            semantic_matched_sessions,
-            time_range=time_range,
-            intent=intent,
-            show_action_limitation_note=asks_about_untracked_action,
-            system_state_events=system_state_events,
+    # Exclude personal sessions from work-intent queries. Semantic
+    # similarity can surface leisure-browsing sessions alongside work
+    # sessions (e.g. a Netflix search embedding near a coding search).
+    # The category stored in the Qdrant payload matches the dominant
+    # Gemini category written by the scheduler at session-generation time.
+    if intent == "work":
+        semantic_matched_sessions = [
+            s for s in semantic_matched_sessions
+            if s.get("category") != "personal"
+        ]
+
+    # Re-rank by combined semantic + recency score.
+    semantic_matched_sessions = _rerank_sessions_by_combined_score(
+        semantic_matched_sessions,
+        now_ms=now_ms,
+        time_range_active=time_range is not None,
+    )
+
+    # For time-range queries ("yesterday", "today", etc.), Qdrant semantic
+    # similarity is the wrong tool — it returns sessions similar to the query
+    # text, not all sessions from the day. A "what did I work on yesterday?"
+    # query will over-represent whichever project matches semantically (e.g.
+    # Orbit for an Orbit developer) and silently omit every other project.
+    #
+    # Fix: use the DB scan as the PRIMARY source for time-range queries —
+    # it returns the best session per distinct project_name within the window,
+    # guaranteeing comprehensive coverage. Qdrant results are merged in
+    # only if their project is not already covered. This is a plain SQLite
+    # read with no Voyage/Qdrant dependency, so it always runs here even
+    # when semantic search above came back empty.
+    if time_range:
+        db_sessions = await fetch_sessions_by_time_range(
+            start_ms=time_range["start_ms"],
+            end_ms=time_range["end_ms"],
         )
+        # Build the final list: one session per project, DB-first so every
+        # project in the window is represented. Qdrant sessions fill any
+        # remaining slots (up to 12) for projects the DB scan missed.
+        seen_projects: set[str] = set()
+        merged: list[dict] = []
 
-        user_prompt = (
-            f"User question: {query}\n\n"
-            f"Context from their activity:\n{context_block}"
-        )
+        for db_session in db_sessions:
+            if len(merged) >= 12:
+                break
+            project = (db_session.get("project_name") or "").strip().lower()
+            if project and project in seen_projects:
+                continue
+            if project:
+                seen_projects.add(project)
+            merged.append(db_session)
 
+        for session in semantic_matched_sessions:
+            if len(merged) >= 12:
+                break
+            project = (session.get("project_name") or "").strip().lower()
+            if project and project in seen_projects:
+                continue
+            if project:
+                seen_projects.add(project)
+            merged.append(session)
+
+        semantic_matched_sessions = merged
+
+    logger.info(
+        "Recall: %d session(s) after filtering and re-ranking.",
+        len(semantic_matched_sessions),
+    )
+
+    capture_analytics_event("recall_query_made", {
+        "had_results":  bool(keyword_matched_events or semantic_matched_sessions),
+        "result_count": len(keyword_matched_events) + len(semantic_matched_sessions),
+        "time_filtered": bool(time_range),
+        "intent":        intent,
+    })
+
+    context_block = _build_context_block(
+        keyword_matched_events,
+        semantic_matched_sessions,
+        time_range=time_range,
+        intent=intent,
+        show_action_limitation_note=asks_about_untracked_action,
+        system_state_events=system_state_events,
+    )
+
+    user_prompt = (
+        f"User question: {query}\n\n"
+        f"Context from their activity:\n{context_block}"
+    )
+
+    # Only a Groq-side failure (Worker unreachable, no Groq key configured,
+    # rate-limited, etc.) means there is truly nothing AI-generated to offer
+    # — that's when we fall back to plain FTS5 text.
+    try:
         async for text_delta in stream_recall_response_groq(
             system_prompt=RECALL_SYSTEM_PROMPT,
             user_prompt=user_prompt,
@@ -741,12 +762,8 @@ async def _stream_sse_recall(
             yield f"data: {json.dumps({'chunk': text_delta})}\n\n"
 
     except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as offline_error:
-        # Worker unreachable or returned 5xx (deploy, rate-limit, Anthropic outage).
-        # Stream the local FTS5 results as plain text so the user always gets
-        # something useful — a 503 from the Worker is treated the same as no
-        # network connection from the user's perspective.
-        logger.warning(
-            "Recall: Worker unavailable (%s). Falling back to local FTS5 results.",
+        logger.info(
+            "Recall: falling back to local FTS5 results (%s).",
             type(offline_error).__name__,
         )
         capture_analytics_event("recall_offline_fallback", {
