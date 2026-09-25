@@ -35,7 +35,7 @@ same experience, AI adapts to what they actually do.
 | **AI goes through the Cloudflare Worker, unless the user brings their own Groq key** | Claude, Gemini, and Voyage AI always route through the Worker — no direct calls to those. Groq is the one exception (COST-001): if the user has configured a personal key (Settings → Your Own Groq Key), the backend calls `api.groq.com` directly with that key and the Worker is never involved for that request. With no personal key, Groq also goes through the Worker exactly like the others, using the Worker's own shared secret. |
 | **Worker routes (COST-002: BYOK-only, zero Worker secrets)** | `/chat-groq` → Groq (OpenAI-compatible; requires caller's `X-Groq-Api-Key`, 401 without it). `/embed` → Voyage AI (requires caller's `X-Voyage-Api-Key`, 401 without it). `/tts` → stub. `/stt-token` → stub. `/chat` (Claude) and `/classify` (Gemini) and `/provider-status` (admin kill switch) no longer exist — removed, not disabled; see "Cloudflare Worker" below. |
 | **No AI API keys anywhere the app controls** | The Worker holds no provider secret at all (`WorkerEnvironment` is an empty interface). A user's own Groq/Voyage key lives only in their local macOS Keychain (COST-001/002 BYOK) and is attached per-request as a header — never in `backend/.env`, SQLite, or the Worker. |
-| **Groq is Orbit's only chat/session-summary provider — BYOK-only since COST-002** | Session generation, event classification, AND recall (user-facing chat) all run on Groq — `services/groq_service.py` on the backend. There is no maintainer-funded fallback: `database.get_groq_api_key()` reads a user-configured key (Settings → Your Own Groq Key, `POST /settings/groq-key`) from the macOS Keychain (`com.heyorbit.orbit` / `groq-api-key`), not SQLite, immediately before use. With a key, `groq_service.py` sends requests **directly to `https://api.groq.com/openai/v1/chat/completions`** with `Authorization: Bearer <key>` — the Worker is bypassed entirely. With no key, the backend still attempts the Worker's `/chat-groq` route (no auth header) purely as an existing code path — the Worker now always rejects that with 401, since it holds no shared secret either, so the net effect is "no key = no Groq," handled by the same graceful-degrade error handling as any other provider failure. Models: `openai/gpt-oss-120b` (session summaries, `reasoning_effort: "low"` — it's a reasoning model whose chain-of-thought otherwise eats the max_tokens budget before writing the answer), `llama-3.1-8b-instant` (classification — cheap/fast, but has an observed repetition-loop tendency on long single-shot lists; classification groups are capped at 30 events for this reason, a quality ceiling not a rate limit), `llama-3.3-70b-versatile` (recall, OpenAI-compatible streaming — different SSE wire format from Claude's `content_block_delta`, needs its own parser: `stream_recall_response_groq()`). |
+| **Groq is Orbit's only chat/session-summary provider — BYOK-only since COST-002** | Session generation, event classification, AND recall (user-facing chat) all run on Groq — `services/groq_service.py` on the backend. There is no maintainer-funded fallback: `database.get_groq_api_key()` reads a user-configured key (Settings → Your Own Groq Key, `POST /settings/groq-key`) from the macOS Keychain (`com.heyorbit.orbit` / `groq-api-key`), not SQLite, immediately before use. With a key, `groq_service.py` sends requests **directly to `https://api.groq.com/openai/v1/chat/completions`** with `Authorization: Bearer <key>` — the Worker is bypassed entirely. With no key, the backend still attempts the Worker's `/chat-groq` route (no auth header) purely as an existing code path — the Worker now always rejects that with 401, since it holds no shared secret either, so the net effect is "no key = no Groq," handled by the same graceful-degrade error handling as any other provider failure. Models (all three are `openai/gpt-oss-*` reasoning models as of **COST-004**, 2026-09 — Groq retired `llama-3.1-8b-instant`/`llama-3.3-70b-versatile` for free/developer tier on 2026-08-16; see `console.groq.com/docs/deprecations`): `openai/gpt-oss-120b` for both session summaries and recall (`reasoning_effort: "low"` on both — a reasoning model's chain-of-thought otherwise eats the max_tokens budget on classification/summaries, or adds latency on live-streamed recall), `openai/gpt-oss-20b` for classification (same `reasoning_effort: "low"`, plus a `GROQ_CLASSIFY_REASONING_TOKEN_HEADROOM` added to its tight per-event token budget — that budget was originally tuned against a repetition-loop failure mode *observed on the now-retired Llama model*; whether gpt-oss-20b shares it is unverified, no live Groq account was available to test against, so the conservative 30-event group cap was kept as a safe default. Recall's SSE wire format is unchanged — still OpenAI-compatible, different from Claude's `content_block_delta`, parsed by `stream_recall_response_groq()`). |
 | **No more admin kill switch (COST-002)** | The former `CLAUDE_ENABLED`/`GEMINI_ENABLED`/`GROQ_PROXY_ENABLED` Worker secrets and `GET /provider-status`/`/settings/provider-status` route are gone, along with the Claude/Gemini routes they gated. There is nothing left to centrally enable/disable — Groq and Voyage are pure BYOK (a missing key simply means that feature is unavailable, not "disabled by admin"), and Claude/Gemini support was removed outright rather than kept behind a switch. |
 | **google-genai SDK not installed, and Gemini support has been removed** | `gemini_service.py` still exists (calls `httpx` → the Worker's former `/classify` route) but that route no longer exists on the Worker — nothing in the app calls this file. The `google-genai` package was never a dependency. |
 | **APScheduler v3.x (stable)** | Session generation uses `AsyncIOScheduler` from `apscheduler.schedulers.asyncio` — this is v3.x stable. Import path: `from apscheduler.schedulers.asyncio import AsyncIOScheduler`. Never use APScheduler v4 (`from apscheduler import AsyncScheduler`) — that is explicitly pre-release and unstable. |
@@ -134,7 +134,7 @@ _split_events_at_system_boundaries()
     │  (per batch — repeated for each content batch:)
     ▼
 httpx → api.groq.com direct (BYOK) or Worker /chat-groq (no key, always 401)
-    │  → llama-3.1-8b-instant (classify_events_batch_groq)
+    │  → openai/gpt-oss-20b (classify_events_batch_groq, COST-004)
     │  classifies: work / research / personal / system / communication
     │  updates events.category in SQLite
     │  (Gemini classification via gemini_service.py/Worker /classify no longer
@@ -191,7 +191,7 @@ FTS5 keyword search (SQLite, local — always runs, even offline)
     │                   │
     │                   ▼
     │           httpx → api.groq.com direct (BYOK) or Worker /chat-groq (no key, always 401)
-    │                   → llama-3.3-70b-versatile (user-facing)
+    │                   → openai/gpt-oss-120b (user-facing, COST-004)
     │                   stream_recall_response_groq() in groq_service.py — OpenAI-compatible SSE,
     │                   a different wire format from Claude's content_block_delta events.
     │                   Claude Sonnet 4.6 (stream_recall_response, claude_service.py) still exists —
@@ -404,9 +404,9 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 
 | Task | Model | Route |
 |---|---|---|
-| User recall + conversation | `llama-3.3-70b-versatile` (`GROQ_RECALL_MODEL`, `groq_service.py`) | Direct `api.groq.com` if a personal Groq key is configured; otherwise unavailable (falls back to the offline FTS5 message) |
+| User recall + conversation | `openai/gpt-oss-120b` (`GROQ_RECALL_MODEL`, `groq_service.py`), `reasoning_effort: "low"` — **COST-004**, replaces the Llama model Groq retired 2026-08-16 | Direct `api.groq.com` if a personal Groq key is configured; otherwise unavailable (falls back to the offline FTS5 message) |
 | Background session summaries (signal fusion) | `openai/gpt-oss-120b` (`GROQ_SESSION_MODEL`), `reasoning_effort: "low"` | Same rule as above — every 30 min |
-| Event classification | `llama-3.1-8b-instant` (`GROQ_CLASSIFY_MODEL`) | Same rule — groups capped at 30 events (quality ceiling, see Critical Architecture Facts) |
+| Event classification | `openai/gpt-oss-20b` (`GROQ_CLASSIFY_MODEL`), `reasoning_effort: "low"` — **COST-004**, replaces the Llama model Groq retired 2026-08-16 | Same rule — groups capped at 30 events (quality ceiling, see Critical Architecture Facts; whether it still applies to this model is unverified) |
 | Session embeddings | Voyage AI `voyage-3-lite` (512 dims) | Worker `/embed`, requires a personal Voyage key (`X-Voyage-Api-Key`); otherwise skipped — sessions save with `embedding_id=NULL`, semantic search just has nothing to search |
 | Voice STT (Phase 4) | Whisper.cpp → Apple Speech fallback | local only |
 | Voice TTS (Phase 4) | Kokoro TTS → ElevenLabs Pro | local / Worker `/tts` |
@@ -707,7 +707,7 @@ only content that has already passed through redaction. This applies equally
 to whichever provider is being called (Groq — Claude/Gemini no longer exist,
 COST-002).
 
-- **Classification** (`llama-3.1-8b-instant`) receives: `id, type, app_name,
+- **Classification** (`openai/gpt-oss-20b`) receives: `id, type, app_name,
   url, raw_content` (raw_content is already redacted — `[REDACTED:type]` for
   any secret). Needs the content to classify accurately ("is this work or
   personal?").
@@ -715,7 +715,7 @@ COST-002).
   with `app_name`, `url`, `window title`, and `raw_content` — all already
   redacted. Needs this to write a summary that actually describes what the
   user did.
-- **Recall** (`llama-3.3-70b-versatile`) receives: session summaries +
+- **Recall** (`openai/gpt-oss-120b`) receives: session summaries +
   matching events (window titles, URLs, redacted clipboard content).
 
 **What makes this safe:**

@@ -181,7 +181,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | COST-001 | Agent | PARTIAL | Implement Keychain-backed BYOK UI and direct Groq calls | MAN-000, SEC-003 |
 | COST-002 | Agent | DONE | Remove all shared-key Worker behavior and fail closed | COST-001 |
 | COST-003 | Agent | PARTIAL | Make FTS5 the no-embedding default and remove mandatory Voyage usage | COST-002 |
-| COST-004 | Agent | TODO | Replace retired models and centralize provider/model configuration | COST-001 |
+| COST-004 | Agent | PARTIAL | Replace retired models and centralize provider/model configuration | COST-001 |
 | COST-005 | Agent | TODO | Add predictable offline/rate-limit/provider failure behavior | COST-003, COST-004 |
 | OBS-001 | Agent | TODO | Remove default remote telemetry or make it genuine opt-in | MAN-000, PRIV-001 |
 | SITE-001 | Agent | TODO | Convert landing site to static, no-waitlist operation | MAN-000 |
@@ -850,6 +850,30 @@ Acceptance criteria:
 
 ### COST-004 — Replace retired models and centralize provider configuration
 
+**Current status: PARTIAL (2026-09-25). This was found to be a live
+production bug, not just roadmap hygiene — flagging with real urgency.**
+Verified via Groq's own docs (`console.groq.com/docs/deprecations`, checked
+live, not from training data) that `llama-3.1-8b-instant` and
+`llama-3.3-70b-versatile` — the classification and recall models this app
+was still calling — were retired for free/developer tier on **2026-08-16**,
+over a month before this fix. Since `COST-002` made Groq 100% BYOK, every
+real user is on that tier, meaning classification and recall have been
+silently broken (model-not-found) for anyone who configured their own Groq
+key since that date, until this fix. Also confirmed the roadmap's own
+suggested alternative, `qwen/qwen3.6-27b`, was itself deprecated
+2026-09-14 (11 days before this fix) — used `openai/gpt-oss-120b` for
+recall instead, both because it's Groq's other listed replacement and
+because it was already proven working in this codebase for session
+summaries, one fewer unverified integration. Held at `PARTIAL` because none
+of this could be confirmed against a real Groq account — implemented from
+Groq's documentation and this codebase's own established patterns
+(`reasoning_effort` handling already proven for `openai/gpt-oss-120b`), not
+empirical testing. **A maintainer with a real Groq key should run one real
+classification cycle and one real recall query before trusting this is
+fully fixed** — specifically watch for truncated/empty classification
+results (would mean `GROQ_CLASSIFY_REASONING_TOKEN_HEADROOM` needs raising)
+and recall latency approaching the 30s timeout.
+
 Implementation requirements:
 
 - Replace `llama-3.1-8b-instant` with `openai/gpt-oss-20b` for classification unless
@@ -864,10 +888,31 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] No shut-down model ID remains in executable paths or current docs.
-- [ ] Classification and recall tests pass with captured/mock current wire formats.
-- [ ] Model removal produces graceful local fallback.
-- [ ] Token budgets are bounded and documented.
+- [x] No shut-down model ID remains in executable paths or current docs.
+      Verified by grep sweep of `backend/` and `AGENTS.md`, and by
+      `test_retired_model_ids_are_not_referenced_anywhere_in_the_module`.
+- [x] Classification and recall tests pass with captured/mock current wire
+      formats. `tests/test_groq_model_migration.py` (5 tests): new model
+      IDs sent, `reasoning_effort: "low"` sent on classification/recall/
+      session-summary, and the reasoning-token headroom is actually
+      reflected in the outgoing `max_tokens`.
+- [x] Model removal produces graceful local fallback. Unchanged, pre-existing
+      architecture: any non-2xx (including a future 404 for a retired model)
+      is already treated as "provider unavailable" and degrades gracefully
+      (classification defaults to `work`, recall falls back per `ADR-006`).
+- [x] Token budgets are bounded and documented. Added
+      `GROQ_CLASSIFY_REASONING_TOKEN_HEADROOM` with an explicit comment
+      that it's a reasoned estimate pending real-world calibration, not an
+      empirically measured value — see the status note above.
+- Not explicitly tracked as a checkbox, but addressed: "put provider/model
+  capabilities in one configuration module" — not built as a separate
+  module. Post-COST-002, Groq is the only provider with more than one model
+  in play (Voyage has exactly one, hardcoded); its constants are already
+  grouped at the top of `groq_service.py`, which is effectively that one
+  place already. "Validate model IDs at startup" isn't practical under BYOK
+  (no key necessarily exists at startup) — relies instead on the existing
+  `log_provider_diagnostic()` surfacing `status=404` distinctly per model on
+  any real request failure.
 
 ### COST-005 — Predictable failure and offline behavior
 
@@ -1361,6 +1406,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-25 | COST-001 | PARTIAL | `backend/services/groq_service.py`, `backend/routes/settings.py`, `backend/tests/test_groq_byok.py`, `app/src/hooks/useGroqKeySettings.ts`, `app/src/components/PrivacyPanel.tsx`, `AGENTS.md` | Added `GROQ_DIRECT_API_URL` (`https://api.groq.com/openai/v1/chat/completions`) and rewired all three Groq call sites (session summary, classification, recall streaming) plus a new `test_groq_api_key()` to use it with `Authorization: Bearer <key>` whenever `database.get_groq_api_key()` returns a personal key — the Worker is bypassed entirely in that case; with no personal key, behavior is unchanged (Worker, no auth header). Added `POST /settings/groq-key/test` (validates a candidate key with a free Groq `/models` call, never persists it). Built the "Your Own Groq Key" PrivacyPanel section: add/replace/test/remove/temporarily-disable, a persistent explicit disclosure that captured context and queries leave the Mac once a key is active, and a `GET /settings/groq-key` response that only ever returns `{configured, enabled}` — never the key. Rewrote every `AGENTS.md` passage claiming all AI goes through the Worker unconditionally (Critical Architecture Facts, AI Models table, Security & Privacy Rules, Environment Variables, DO NOT section, Key Files entries) to describe the Groq BYOK exception. Verification: `uv run python -m unittest discover -s tests -p 'test_*.py'` 37/37 (8 new: 4 asserting the direct-URL/Bearer-header routing per call site, 1 asserting the no-key path is unchanged, 1 asserting the test endpoint never stores the key, 2 asserting the full add/test/disable/remove route lifecycle and that the raw key never appears in a response); `pnpm build` (TypeScript + Vite) clean. | Required maintainer action: launch a real build, add a personal key, quit and relaunch Orbit, confirm `GET /settings/groq-key` still reports `configured: true` (Keychain + SQLite persistence — no automated test restarts the app). Next: `COST-002`. |
 | 2026-09-25 | COST-002 | DONE | `worker/src/index.ts` (rewrite), `worker/src/index.test.ts`, `worker/README.md`, `worker/package.json`, `backend/services/keychain_service.py`, `backend/services/voyage_service.py`, `backend/database.py`, `backend/routes/settings.py` (rewrite), `backend/tests/test_voyage_byok.py`, `backend/tests/test_provider_context_sanitizer.py`, `backend/scheduler.py` (comment), `app/src/hooks/useApiKeySettings.ts` (replaces `useGroqKeySettings.ts`), `app/src/hooks/useProviderStatus.ts` (deleted), `app/src/components/PrivacyPanel.tsx`, `AGENTS.md` | Scope confirmed with the maintainer via an explicit question before implementing (see status note above): all four providers' maintainer-funded Worker credentials removed; Claude/Gemini removed outright (unused, no BYOK anywhere); Voyage given the same BYOK treatment as Groq; Worker stays a lightweight passthrough, not a hardened self-host template. Rewrote `worker/src/index.ts`: `WorkerEnvironment` is now an empty interface, `/chat` and `/classify` and `/provider-status` deleted, `/chat-groq` and `/embed` each require the caller's own key header with no fallback (401 otherwise). Generalized `keychain_service.py` (`_store_api_key_sync`/`_get_api_key_sync`/etc. parameterized by account) and added Voyage Keychain functions alongside the existing Groq ones. `voyage_service.py`: `generate_text_embedding` now requires `database.get_voyage_api_key()`, raises immediately with zero network calls if absent (no maintainer fallback exists), fast-fails on 401 without retrying; added `test_voyage_api_key()`. Rewrote `routes/settings.py` with shared provider-agnostic CRUD helpers powering both `/settings/groq-key` and the new `/settings/voyage-key` (+ `.../test`, `.../enabled`); removed `/settings/provider-status` (nothing left to proxy). Generalized the frontend BYOK hook/UI (`useApiKeySettings.ts`, one `ApiKeySection` component) and rendered it twice (Groq, Voyage) in PrivacyPanel; deleted `useProviderStatus.ts` and the old admin-status UI it powered. Added a Vitest suite for the Worker (auth/routing/passthrough/no-credential-surface, 12 tests) — this Worker had zero test infrastructure before. Rewrote every stale Worker/kill-switch/BYOK claim in `AGENTS.md` (Critical Architecture Facts, AI Models, data-flow diagrams, Cloudflare Worker section, Environment Variables, DO NOT, Key Files, monorepo tree). Verification: backend `uv run python -m unittest discover -s tests -p 'test_*.py'` 43/43 (6 new Voyage tests, 1 existing Groq/Gemini/Claude/Voyage boundary test updated to mock a personal Voyage key); `cd worker && npm run test` 12/12 (new); `pnpm build` (TypeScript + Vite) clean. | **The live, already-deployed Worker still runs the pre-COST-002 code and remains genuinely exposed (`/embed` has no kill switch, zero auth) until the maintainer runs `npx wrangler deploy` from `worker/` — not done here, deployment requires explicit authorization.** Next: `COST-003` — note its own scope (making Voyage/Qdrant fully optional) now partially overlaps with the BYOK work done here; check current state before assuming the original task text is unchanged. |
 | 2026-09-25 | COST-003 | PARTIAL | `backend/services/qdrant_service.py`, `backend/main.py`, `backend/scheduler.py`, `backend/services/voyage_service.py`, `backend/routes/recall.py`, `backend/tests/test_offline_recall.py`, `docs/adr/ADR-006-optional-lazy-semantic-search.md`, `AGENTS.md` | Decision: Qdrant retained (not removed) but made fully lazy — see ADR-006. `qdrant_service.py`'s `add_session_embedding()`/`search_sessions_semantic()` now call `generate_text_embedding()` *before* touching the Qdrant client; with no personal Voyage key that raises immediately and Qdrant's local storage is never created. Removed the unconditional `initialize_qdrant_collection()` calls from `main.py`'s startup and `scheduler.py`'s every-30-minutes cycle; `scheduler.py` now checks `get_voyage_api_key()` before attempting an embedding at all, logging `debug` (not `warning`) when none is configured — was previously warning on every cycle forever for the now-common no-key case. Found and fixed a real regression while verifying this: `routes/recall.py` ran Qdrant semantic search and Groq synthesis in one `try` block, so `VoyageKeyNotConfiguredError` (a plain `RuntimeError`, not an `httpx.*` exception) escaped the `except` clause into the catch-all handler and replied "Sorry, something went wrong" instead of ever calling Groq — meaning a user with a valid Groq key but no Voyage key got no AI-synthesized recall answer at all, not just no semantic search. Restructured so semantic search soft-fails to an empty list (Groq still runs on FTS5-only/DB-scan context) and only a genuine Groq-side failure triggers the plain-FTS5-text fallback. Verification: `uv run python -m unittest discover -s tests -p 'test_*.py'` 47/47 (4 new in `test_offline_recall.py`, covering the exact regression above, the full-offline path, the time-range DB-scan independence, and that Qdrant's client is never touched without a key). | Packaging size/startup regression was not measured (requires a built macOS app bundle, outside this environment) — reasoned qualitatively in ADR-006 instead; a maintainer should do an actual before/after comparison before marking `DONE`. Next: `COST-004`. |
+| 2026-09-25 | COST-004 | PARTIAL | `backend/services/groq_service.py`, `backend/tests/test_groq_model_migration.py`, `AGENTS.md` | **Live production bug, verified via Groq's own current docs (not training data):** `llama-3.1-8b-instant`/`llama-3.3-70b-versatile` (Orbit's classification/recall models) were retired for free/developer tier on 2026-08-16 — every real BYOK user's classification and recall has been silently failing since then. Also verified the roadmap's suggested `qwen/qwen3.6-27b` alternative was itself deprecated 2026-09-14; used `openai/gpt-oss-120b` for recall instead (Groq's other listed replacement, already proven in this codebase for session summaries). `GROQ_CLASSIFY_MODEL` → `openai/gpt-oss-20b`, `GROQ_RECALL_MODEL` → `openai/gpt-oss-120b`. Both are reasoning models — added `reasoning_effort="low"` to the classification call (previously had none, since the old model didn't support/need it) and to the recall streaming request body. Added `GROQ_CLASSIFY_REASONING_TOKEN_HEADROOM = 500` to classification's `max_tokens` calculation, since its tight per-event budget was sized for a non-reasoning model with zero chain-of-thought overhead — documented explicitly as a reasoned estimate, not empirically calibrated. Kept the existing 30-event group cap and repetition-loop-defense token ceiling as a conservative default, since whether `openai/gpt-oss-20b` shares the old model's specific repetition-loop failure mode is unverified. Updated every stale model-name reference across `AGENTS.md`. Verification: `uv run python -m unittest discover -s tests -p 'test_*.py'` 52/52 (5 new in `test_groq_model_migration.py`: correct model IDs, `reasoning_effort` present on classification/recall/session-summary, reasoning headroom reflected in outgoing `max_tokens`). | **No live Groq account was available to confirm any of this against real API responses** — implemented from Groq's current documentation and this codebase's own established `reasoning_effort` pattern, not empirical testing. A maintainer with a real Groq key should run one real classification cycle and one real recall query and watch specifically for truncated/empty classification results (raise `GROQ_CLASSIFY_REASONING_TOKEN_HEADROOM` if so) and recall latency near the 30s timeout, before marking `DONE`. Next: `COST-005`. |
 | 2026-09-25 | APPSEC-001 | PARTIAL | `app/src-tauri/Cargo.toml`, `app/src-tauri/tauri.conf.json`, `app/src-tauri/capabilities/default.json`, `docs/adr/ADR-005-tauri-shell-hardening.md` | Removed the unconditional `devtools` Cargo feature (WRY still exposes devtools automatically in debug builds; release builds no longer force it on). Added a restrictive CSP (`default-src 'self'` plus a `connect-src` scoped to the fixed-port local backend, PostHog, and Sentry — the only hosts the webview itself calls; the Cloudflare Worker and AI providers are never in `connect-src` because only the Python backend calls them). Rewrote `capabilities/default.json` to grant exactly what the webview calls: removed `global-shortcut:default` and six unused `core:window:allow-*` permissions (the hotkey and those window transitions are Rust-native and were never gated by this file), and added the previously-missing `updater:allow-check`, `updater:allow-download-and-install`, `process:allow-restart`, and `dialog:allow-open` — without which auto-update and the watched-folder picker were silently non-functional (both call sites swallow errors by design). Existing entitlements were reviewed and left unchanged; each already carries an inline justification comment and is exercised by a real code path. `macOSPrivateApi: true` is required by the main window's `shadow: false` and the overlay window's transparency/click-through. Verification: `cargo check --bin app` (also validates the capabilities file against plugin permission schemas), `cargo test --bin app` 37/37, `pnpm build` (TypeScript + Vite), `git diff --check` all passed. | Required maintainer action: build a real `.dmg`, confirm right-click → Inspect Element is unavailable, and confirm the local API, PostHog/Sentry, the update check, and the folder picker all still work under the new CSP/capability grant. Record the outcome here before marking `APPSEC-001` DONE. Next: `COST-001`. `PRIV-002`/`PRIV-003` remain PARTIAL, independent of this task. |
 
 ---

@@ -16,16 +16,28 @@ from services.provider_context_sanitizer import (
 logger = logging.getLogger(__name__)
 
 GROQ_SESSION_MODEL = "openai/gpt-oss-120b"
-GROQ_RECALL_MODEL = "llama-3.3-70b-versatile"
-# Fast, cheap model for high-volume event classification.
-GROQ_CLASSIFY_MODEL = "llama-3.1-8b-instant"
-# llama-3.1-8b-instant's fixed context window (prompt + completion combined).
-# This is a permanent architectural limit of this model — separate from, and
-# unaffected by, account-tier rate limits (RPM/TPM). A large backlog of
-# unclassified events (e.g. after the app was closed for a while) can still
-# exceed this in a single request, so classify_events_batch_groq splits by
-# actual estimated size when needed. No individual event's content is ever
-# truncated — only the number of events per request is adjusted.
+# COST-004: llama-3.3-70b-versatile was retired by Groq for free/developer
+# tier accounts on 2026-08-16 (BYOK — everyone using Orbit's Groq integration
+# is on that tier; see console.groq.com/docs/deprecations). Groq's own
+# migration guidance lists openai/gpt-oss-120b or qwen/qwen3.6-27b as
+# replacements; qwen/qwen3.6-27b was itself deprecated on 2026-09-14 (in
+# favor of qwen/qwen3.8-27b), so gpt-oss-120b — already proven in this
+# codebase for session summaries — is the safer choice: one fewer unproven
+# model integration, not a second one.
+GROQ_RECALL_MODEL = "openai/gpt-oss-120b"
+# COST-004: llama-3.1-8b-instant was retired alongside llama-3.3-70b-versatile
+# (same date, same reason). Groq's migration guidance recommends
+# openai/gpt-oss-20b as the direct replacement.
+GROQ_CLASSIFY_MODEL = "openai/gpt-oss-20b"
+# Fixed context window (prompt + completion combined) shared by both
+# gpt-oss-20b and gpt-oss-120b (confirmed 131,072 via Groq's model docs —
+# unchanged from the retired llama models' context size). This is a
+# permanent architectural limit — separate from, and unaffected by,
+# account-tier rate limits (RPM/TPM). A large backlog of unclassified events
+# (e.g. after the app was closed for a while) can still exceed this in a
+# single request, so classify_events_batch_groq splits by actual estimated
+# size when needed. No individual event's content is ever truncated — only
+# the number of events per request is adjusted.
 GROQ_CLASSIFY_CONTEXT_WINDOW_TOKENS = 131_072
 
 _WORKER_URL = os.getenv("WORKER_URL", "")
@@ -99,13 +111,16 @@ async def _call_groq_chat(
     Shared low-level Groq chat-completions call used by both session summary
     generation and event classification.
 
-    reasoning_effort: only meaningful for reasoning models (openai/gpt-oss-*).
-    Their internal chain-of-thought counts against the same max_tokens budget
-    as the visible answer — at the default "medium" effort, reasoning can
+    reasoning_effort: only meaningful for reasoning models (openai/gpt-oss-*
+    — as of COST-004, that's every model this function is called with:
+    GROQ_SESSION_MODEL and GROQ_CLASSIFY_MODEL both pass "low"). Their
+    internal chain-of-thought counts against the same max_tokens budget as
+    the visible answer — at the default "medium" effort, reasoning can
     consume most of a modest token budget before the model even starts
     writing the JSON response, causing truncation. Pass "low" for structured-
-    extraction tasks that don't need deep reasoning. Omitted for non-reasoning
-    models (e.g. llama-3.1-8b-instant), which don't support this parameter.
+    extraction tasks that don't need deep reasoning. Left as None (omitted
+    from the request) only for a non-reasoning model, none of which this
+    codebase currently calls through this function.
 
     Groq is Orbit's centrally-funded default provider — no personal key is
     required. If the user has configured their own key (Settings → AI
@@ -321,29 +336,44 @@ Each item: {"id": "<event_id>", "category": "<category>", "project": "<project_n
 
 # Headroom per event for the response array entry — deliberately TIGHT, not
 # generous. A real entry ({"id": "<36-char uuid>", "category": "communication",
-# "project": "some_project"}) needs roughly 35-50 tokens. The budget here is
-# a cost-control lever, not just an anti-truncation buffer: this model has an
-# observed tendency to occasionally enter a repetition loop and keep emitting
-# array entries well past the number of events sent (seen producing 20,000-
-# 57,000 output tokens for what should have been a few thousand at most). A
-# generous max_tokens doesn't prevent that loop — it just lets it run longer
-# and cost more before hitting the ceiling. Keeping this tight means a bad
-# roll gets cut off quickly and cheaply; legitimate responses still fit
-# comfortably underneath it.
+# "project": "some_project"}) needs roughly 35-50 tokens. This tight budget
+# was originally a cost-control lever against a repetition-loop failure mode
+# observed on llama-3.1-8b-instant (seen producing 20,000-57,000 output
+# tokens for what should have been a few thousand at most). COST-004 (2026-09)
+# moved classification to openai/gpt-oss-20b after Groq retired the Llama
+# model — whether gpt-oss-20b shares that same repetition-loop tendency is
+# UNVERIFIED (no live Groq account was available to test against). The tight
+# per-event budget is kept as a reasonable default either way — it still caps
+# worst-case cost/latency if the new model has any similar failure mode, and
+# legitimate responses still fit comfortably underneath it.
 GROQ_CLASSIFY_BASE_TOKENS = 50
 GROQ_CLASSIFY_TOKENS_PER_EVENT = 55
 
+# gpt-oss-20b is a reasoning model (see reasoning_effort="low" on its
+# _call_groq_chat call below) — its invisible chain-of-thought draws from the
+# same max_tokens budget as the visible JSON answer, the same failure mode
+# documented for gpt-oss-120b's session summaries. The per-event budget above
+# was tuned for llama-3.1-8b-instant, a non-reasoning model with zero
+# chain-of-thought overhead, so a fixed allowance is added on top of it here.
+# This number is a reasoned estimate, not empirically calibrated (no live
+# Groq account was available to test against) — if classification responses
+# come back truncated/empty in practice, raise this first before touching
+# anything else.
+GROQ_CLASSIFY_REASONING_TOKEN_HEADROOM = 500
+
 # Target at most this fraction of the model's context window for the prompt,
 # leaving the rest for the completion (which also scales with event count).
-# This alone would allow groups of many hundreds of events — but empirically,
-# asking this 8B model for a long list of classifications in one shot can
-# trigger a repetition loop (observed producing 2-3x the expected number of
-# array entries). This has been observed at group sizes from under 20 up to
-# ~680 — it is not a hard size threshold, it's a probabilistic quirk of this
-# model on long structured-output generation. A smaller group size doesn't
-# eliminate the risk, but it shrinks the blast radius: fewer events need to
-# be re-defaulted when a group does fail, and (combined with the tight
-# max_tokens above) any single bad roll is cheap to hit and discard.
+# This alone would allow groups of many hundreds of events — but the former
+# model (llama-3.1-8b-instant) could trigger a repetition loop on long
+# structured-output generation (observed producing 2-3x the expected number
+# of array entries, at group sizes from under 20 up to ~680 — a probabilistic
+# quirk, not a hard size threshold). Whether openai/gpt-oss-20b (COST-004)
+# shares this tendency is unverified; the conservative group-size cap is kept
+# as a safe default until real-world evidence says otherwise. A smaller group
+# size doesn't eliminate the risk if it does apply, but it shrinks the blast
+# radius: fewer events need to be re-defaulted when a group does fail, and
+# (combined with the tight max_tokens above) any single bad roll is cheap to
+# hit and discard.
 GROQ_CLASSIFY_MAX_PROMPT_TOKENS = int(GROQ_CLASSIFY_CONTEXT_WINDOW_TOKENS * 0.5)
 GROQ_CLASSIFY_MAX_EVENTS_PER_GROUP = 30
 
@@ -435,10 +465,14 @@ async def _classify_events_group_groq(events: list[dict]) -> list[dict] | None:
     user_prompt = json.dumps(stripped_events, ensure_ascii=False)
 
     # Never request more completion tokens than fit alongside this prompt in
-    # the model's fixed context window — llama-3.1-8b-instant would reject
-    # (or truncate) an over-budget request either way.
+    # the model's fixed context window — the model would reject (or truncate)
+    # an over-budget request either way.
     estimated_prompt_tokens = _estimate_tokens(user_prompt) + _estimate_tokens(CLASSIFICATION_SYSTEM_PROMPT)
-    desired_max_tokens = GROQ_CLASSIFY_BASE_TOKENS + len(events) * GROQ_CLASSIFY_TOKENS_PER_EVENT
+    desired_max_tokens = (
+        GROQ_CLASSIFY_BASE_TOKENS
+        + len(events) * GROQ_CLASSIFY_TOKENS_PER_EVENT
+        + GROQ_CLASSIFY_REASONING_TOKEN_HEADROOM
+    )
     available_completion_budget = GROQ_CLASSIFY_CONTEXT_WINDOW_TOKENS - estimated_prompt_tokens
     max_tokens = max(1, min(desired_max_tokens, available_completion_budget))
 
@@ -448,6 +482,10 @@ async def _classify_events_group_groq(events: list[dict]) -> list[dict] | None:
         system_prompt=CLASSIFICATION_SYSTEM_PROMPT,
         user_prompt=user_prompt,
         max_tokens=max_tokens,
+        # gpt-oss-20b is a reasoning model (COST-004) — "low" keeps chain-of-
+        # thought overhead small so the tight per-event budget above still
+        # leaves room for the actual JSON answer. See GROQ_CLASSIFY_MODEL.
+        reasoning_effort="low",
     )
     if raw_text is None:
         return None
@@ -551,7 +589,7 @@ async def classify_events_batch_groq(events: list[dict]) -> list[dict] | None:
 
     Typical batches (tens of events) are sent in a single request, identical
     to how Gemini handles them. Only when the estimated prompt size would
-    exceed llama-3.1-8b-instant's fixed context window (e.g. a large backlog
+    exceed GROQ_CLASSIFY_MODEL's fixed context window (e.g. a large backlog
     after the app was closed for a while) is the batch split into multiple
     full-fidelity groups — no event's content is ever shortened, only the
     number of events per request is adjusted to fit the model's hard limit.
@@ -638,6 +676,12 @@ async def stream_recall_response_groq(
         "model": GROQ_RECALL_MODEL,
         "stream": True,
         "temperature": 0.3,
+        # gpt-oss-120b is a reasoning model (COST-004 — see GROQ_RECALL_MODEL).
+        # "low" keeps chain-of-thought overhead small so a live, streaming
+        # answer stays inside _GROQ_RECALL_TIMEOUT_SECONDS; unlike
+        # classification there's no max_tokens cap here for reasoning to
+        # eat into, so the risk this mitigates is latency, not truncation.
+        "reasoning_effort": "low",
         "messages": [
             {"role": "system", "content": safe_system_prompt},
             *prior_messages,
