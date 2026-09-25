@@ -1,5 +1,20 @@
+# Not a real multi-package workspace — this file exists solely because
+# pnpm (as of the version pinned here) moved `overrides` and build-script
+# approval out of package.json's "pnpm" field (deprecated, silently
+# ignored) to this file. See: https://pnpm.io/settings
+
+# Transitive native/build-script packages reviewed and approved to run
+# their postinstall scripts: esbuild and sharp (next's own toolchain/image
+# pipeline), msw (shadcn's mock-service-worker dep), unrs-resolver (native
+# resolver for eslint-import-resolver-typescript, via eslint-config-next).
 allowBuilds:
   esbuild: true
   msw: true
   sharp: true
   unrs-resolver: true
+
+# postcss: shadcn and @tailwindcss/postcss both pull in a vulnerable
+# transitive postcss (GHSA-fxqj-rqcc-2cmp) that neither exposes as a
+# bumpable direct dependency — force the patched version everywhere.
+overrides:
+  postcss: ^8.5.23
