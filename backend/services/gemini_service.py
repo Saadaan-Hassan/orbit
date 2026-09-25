@@ -1,11 +1,12 @@
 """
-Gemini event classification service.
+Gemini event classification service — unreachable, not just unused (COST-002).
 
-Calls the Gemini generateContent API through the Cloudflare Worker proxy
-(/classify route) so the GEMINI_API_KEY never lives on the user's machine.
-
-One httpx.AsyncClient is created at module level and reused for every
-request — never instantiate a new client per call.
+Called the Gemini generateContent API through the Cloudflare Worker's
+`/classify` route. That route was removed entirely in COST-002, not
+disabled — a call from this file now gets a 404 from the Worker.
+`groq_service.py` has handled event classification since before the beta;
+nothing in scheduler.py calls this module. See AGENTS.md's Critical
+Architecture Facts for the current (Groq-only, BYOK) provider setup.
 """
 
 import asyncio
@@ -48,8 +49,9 @@ Return ONLY a JSON array. No explanation. No markdown. No preamble.
 Each item: {"id": "<event_id>", "category": "<category>", "project": "<project_name_or_null>"}"""
 
 # ---------------------------------------------------------------------------
-# Singleton HTTP client — points at the Cloudflare Worker, not Gemini directly.
-# The Worker injects the GEMINI_API_KEY before forwarding to Google.
+# Singleton HTTP client — pointed at the Cloudflare Worker's /classify route,
+# not Gemini directly, back when that route existed. It no longer does
+# (COST-002); see the module docstring above.
 # ---------------------------------------------------------------------------
 
 _worker_url = os.getenv("WORKER_URL", "http://localhost:8787")

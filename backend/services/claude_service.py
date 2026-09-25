@@ -1,9 +1,14 @@
 """
-Claude API service.
+Claude API service — unreachable, not just unused (COST-002).
 
-All calls to Claude go through this module via the Cloudflare Worker proxy.
-One httpx.AsyncClient is created at module level and reused for every
-request — never instantiate a new client per call.
+Calls to Claude went through this module via the Cloudflare Worker's `/chat`
+route. That route was removed entirely in COST-002, not disabled — a call
+from this file now gets a 404 from the Worker. Nothing in scheduler.py or
+recall.py calls this module. Left in place as-is; re-adding Claude support
+means re-adding the Worker route (with its own BYOK/abuse-prevention
+design) first, not just calling back into this file. See AGENTS.md's
+Critical Architecture Facts for the current (Groq-only, BYOK) provider
+setup.
 """
 
 import json

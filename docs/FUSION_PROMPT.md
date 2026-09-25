@@ -1,5 +1,11 @@
 # The Signal Fusion Prompt
 
+> **Historical planning doc — written 2026-09-06, before the open-source
+> hardening pass.** Session summaries now run on Groq, not Claude (COST-002/
+> COST-004) — see `AGENTS.md`'s "Signal fusion session prompt" section and
+> `FUSION_SESSION_SYSTEM_PROMPT` in `backend/scheduler.py` for the current
+> prompt. Kept for design-history context, not as a current reference.
+
 This replaces the current session summary prompt in `scheduler.py`. Its job:
 take many overlapping, imperfect signals from one time window and **reconstruct
 what the user was actually doing** — like a detective assembling clues — then

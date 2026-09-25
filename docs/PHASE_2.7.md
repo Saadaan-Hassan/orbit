@@ -1,4 +1,11 @@
 # Phase 2.7 — Native Browser URL Capture
+
+> **Historical planning doc — written 2026-09-06, before the open-source
+> hardening pass.** This phase is complete — see `AGENTS.md`'s "Completed
+> phases" line and its architecture reference for the current
+> implementation. Kept for design-history context, not as a current
+> reference.
+
 **Goal:** Capture active browser tab URLs natively via AppleScript — no extension
 required, works across Chrome, Safari, Arc, Brave, Edge, and ALL their profiles.
 

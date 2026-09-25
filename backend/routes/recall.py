@@ -4,10 +4,11 @@ POST /recall — the core recall endpoint.
 Runs FTS5 keyword search and Qdrant semantic search in parallel, merges the
 results into a context block, then streams the AI response back as SSE.
 
-Recall runs on Groq (llama-3.3-70b-versatile via the Cloudflare Worker's
-shared key) rather than Claude — during the beta, Claude and Gemini are
-disabled centrally via the Worker's admin kill switch for cost control, so
-Groq is the sole AI provider across the whole app, recall included.
+Recall runs on Groq (openai/gpt-oss-120b, called directly from the backend
+using the user's own BYOK key — see COST-001/COST-002/COST-004) rather than
+Claude. Claude and Gemini support has been removed entirely, not disabled
+behind a switch — there is no maintainer-funded fallback for any provider,
+so Groq is the sole AI provider across the whole app, recall included.
 """
 
 import json

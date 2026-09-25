@@ -2,6 +2,12 @@
 ### "I help you continue." — AI companion for context recovery.
 **Platform:** macOS first → Windows later | **Framework:** Tauri v2 | **Build:** In public
 
+> **Historical planning doc — written 2026-09-06, before the open-source
+> hardening pass.** Provider choices (e.g. Claude via the Worker), telemetry,
+> and the waitlist described below no longer match the current architecture
+> — see root `AGENTS.md` for what's actually built. Kept for design-history
+> context, not as a current reference.
+
 ---
 
 ## 🎯 North Star

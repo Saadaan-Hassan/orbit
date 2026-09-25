@@ -1,5 +1,11 @@
 # Landing Page Audit Prompts
 
+> **Historical planning doc — written 2026-09-06, before the open-source
+> hardening pass.** The waitlist referenced below was removed entirely
+> (`SITE-001`) — the landing site is now fully static with direct downloads,
+> no waitlist or email collection of any kind. Kept for design-history
+> context, not as a current reference.
+
 **Run these before posting the waitlist publicly.**
 **Paste Session Start Prompt first in each Claude Code session.**
 

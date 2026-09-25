@@ -1,5 +1,10 @@
 # Orbit — Product Vision & UX Direction
 
+> **Historical planning doc — written 2026-09-06, before the open-source
+> hardening pass.** The product vision/UX principles below broadly still
+> hold, but specific architecture and provider details may not — see root
+> `AGENTS.md` for the current implementation.
+
 ---
 
 ## The End Goal — One Sentence

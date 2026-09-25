@@ -1,6 +1,14 @@
 # Phase 2 — Waitlist & Beta Readiness
 **Duration:** Week 5–8 | **Prerequisite:** Phase 1 complete and verified
 
+> **Historical planning doc — written 2026-09-06, before the open-source
+> hardening pass.** Phase 2 is complete, but the waitlist/email
+> infrastructure described below was removed entirely (`SITE-001`) — the
+> landing site is now fully static with direct downloads. PostHog/Sentry
+> were also removed entirely (`OBS-001`) if mentioned below. See root
+> `AGENTS.md` for the current architecture. Kept for design-history
+> context, not as a current reference.
+
 ---
 
 ## Goal

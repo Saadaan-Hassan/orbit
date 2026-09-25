@@ -1,5 +1,11 @@
 # Phase 0 — Foundation
-**Duration:** Week 1–2 | **Status:** 🔴 Not started
+**Duration:** Week 1–2 | **Status:** 🔴 Not started *(stale — see disclaimer below)*
+
+> **Historical planning doc — written 2026-09-06, before the open-source
+> hardening pass.** Phase 0 is complete — the "Not started" status above is
+> stale, left as originally written. See `AGENTS.md`'s "Completed phases"
+> line and its architecture reference for the current implementation. Kept
+> for design-history context, not as a current reference.
 
 ---
 

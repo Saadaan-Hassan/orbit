@@ -1,5 +1,10 @@
 # Phase 2.10 — Performance: Consolidate Capture Loops
 
+> **Historical planning doc — written 2026-09-06, before the open-source
+> hardening pass.** This phase is complete and its result is `unified_poller.rs`,
+> documented in `AGENTS.md`. Kept for design-history context, not as a
+> current reference.
+
 **Goal:** Reduce subprocess spawns from ~32/min to ~8/min by merging all
 osascript calls into one consolidated poller, and reading lock state via
 direct API instead of spawning a process.

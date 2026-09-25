@@ -1,4 +1,11 @@
 # Phase 3 Pre-Beta — Timeline, Project Cards & UX Philosophy
+
+> **Historical planning doc — written 2026-09-06, before the open-source
+> hardening pass.** This phase is complete — see `AGENTS.md`'s "Completed
+> phases" line and its architecture reference for the current
+> implementation. Kept for design-history context, not as a current
+> reference.
+
 **Goal:** Give users a reason to open Orbit every day — not just when they forget
 something. Build the visual timeline, project cards dashboard, and fix the core
 UX philosophy before the first beta user installs.

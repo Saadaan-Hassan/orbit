@@ -1,4 +1,11 @@
 # Phase 2.6 — System Signals
+
+> **Historical planning doc — written 2026-09-06, before the open-source
+> hardening pass.** This phase is complete — see `AGENTS.md`'s "Completed
+> phases" line and its architecture reference for the current
+> implementation. Kept for design-history context, not as a current
+> reference.
+
 **Goal:** Capture file activity, system state (lock/sleep), app lifecycle, and
 idle/active level — all via native macOS APIs. These are lightweight,
 privacy-safe, and fix the biggest remaining recall gaps without any

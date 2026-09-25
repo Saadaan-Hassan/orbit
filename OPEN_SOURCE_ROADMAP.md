@@ -190,7 +190,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | DOC-003 | Agent | PARTIAL | Rewrite privacy policy and all product privacy claims | PRIV-006, OBS-001 |
 | DOC-004 | Agent | DONE | Add contribution, security, support, conduct, and governance files | MAN-004, DOC-001 |
 | DOC-005 | Agent | TODO | Add architecture, threat model, and exact data-flow documentation | SEC-004, PRIV-006, COST-005 |
-| DOC-006 | Agent | TODO | Align versions/package metadata and clean stale internal documentation | DOC-001, COST-005 |
+| DOC-006 | Agent | PARTIAL | Align versions/package metadata and clean stale internal documentation | DOC-001, COST-005 |
 | CI-001 | Agent | TODO | Make all workspaces expose real local verification commands | REP-002, PRIV-006 |
 | CI-002 | Agent | TODO | Add pull-request CI, dependency updates, and security scans | CI-001 |
 | REL-001 | Agent | TODO | Harden the release workflow and secret permissions | CI-002, DOC-006 |
@@ -1352,6 +1352,65 @@ Acceptance criteria:
 
 ### DOC-006 — Versions, package metadata, and stale docs
 
+**Current status: PARTIAL (2026-09-25).** Did the stale-claims sweep only
+(last acceptance criterion); the version/package-metadata alignment work
+(first three criteria) is untouched and still needs a dedicated pass —
+this task also formally depends on `DOC-001` and `COST-005`, both still
+`PARTIAL`, which that remaining work should wait on.
+
+Found via `AGENTS.md`'s own Critical Architecture Facts table while
+reviewing `REP-002`: its **first row** — the most-referenced "read this
+first" fact in the file — flatly contradicted the row directly below it and
+the rest of the document, claiming Claude/Gemini/Voyage "always route
+through the Worker" and that a keyless Groq request "goes through the
+Worker... using the Worker's own shared secret." Neither is true post-`COST-002`
+(zero Worker secrets exist; Claude/Gemini were removed entirely, not routed
+anywhere; a keyless Groq request now gets an unconditional 401). Rewrote
+that row to match the (accurate) rows around it.
+
+That prompted a repo-wide grep for the same class of mistake — a claim
+stated as current fact rather than clearly marked historical/removed.
+Found and fixed two more, both in **live, currently-executing code**
+(not just historical planning docs, which is why these mattered more than
+a docs-only pass would suggest):
+- `backend/routes/recall.py`'s module docstring named a retired model
+  (`llama-3.3-70b-versatile`, retired by Groq 2026-08-16) and described
+  Claude/Gemini as merely "disabled centrally via the Worker's admin kill
+  switch for cost control" — both wrong; that switch doesn't exist anymore
+  and Claude/Gemini were removed, not toggled off.
+- `backend/scheduler.py` had a comment literally instructing a future
+  contributor to restore a Claude fallback by "flip[ping] `CLAUDE_ENABLED`
+  back on" — that env var/kill-switch concept doesn't exist anywhere in
+  the current system. Left as-is, this was a standing invitation to
+  reintroduce exactly the centrally-funded-fallback design `COST-002`
+  removed — directly the failure mode this acceptance criterion and the
+  DOC-005 requirement "ensure future agents cannot reintroduce centrally
+  funded fallbacks accidentally" exist to catch.
+
+Also fixed, lower-severity (present-tense descriptions of now-dead code,
+not currently-misleading guidance): stale module docstrings in
+`backend/services/claude_service.py` and `backend/services/gemini_service.py`
+describing themselves as live Worker-proxied integrations rather than
+unreachable dead code (both already correctly called "unreachable, not
+just unused" in `AGENTS.md` — the source files themselves didn't say so).
+
+Added a dated historical disclaimer to all 13 pre-hardening planning docs
+under `docs/` (all written 2026-09-06, before `COST-002`/`OBS-001`/`SITE-001`):
+`Oribit_Complete_Build_Plan.md`, `PROUCT_VISION_AND_UX_DIRECTION.md`,
+`FUSION_PROMPT.md`, `LANDING_PAGE_AUDIT.md`, `PHASE_0.MD` through
+`PHASE_3_PRE_BETA.md` (including the `.5`/`.6`/`.7`/`.9`/`.10` sub-phases).
+Per this task's own instruction to "retain useful design history," none of
+their content was rewritten — each just gained a short banner pointing to
+`AGENTS.md` as the current source of truth, since several (waitlist,
+PostHog/Sentry, Claude-as-recall-provider, `PHASE_0.MD`'s "🔴 Not started"
+status on a phase that's actually done) actively contradict the current,
+hardened architecture if read as current.
+
+Verified no regressions: all 66 backend tests
+(`uv run python -m unittest discover -s tests -p 'test_*.py'`) still pass —
+every change in this pass was a comment/docstring/doc edit, no logic
+touched.
+
 Implementation requirements:
 
 - Establish one release version source or checked synchronization script for
@@ -1371,8 +1430,12 @@ Acceptance criteria:
 - [ ] Version consistency check passes.
 - [ ] No placeholder package metadata remains.
 - [ ] Python build uses one supported version everywhere.
-- [ ] Search for private/shared-funded/outdated-model claims produces only clearly
-      marked historical references.
+- [x] Search for private/shared-funded/outdated-model claims produces only clearly
+      marked historical references. Repo-wide grep across `.md`/`.py`/`.ts`/`.rs`
+      for shared-secret, admin-kill-switch, retired-model-name, and
+      Claude/Gemini-as-active-provider phrasing; every hit outside this
+      task's own fixes was already correctly framed as historical/removed
+      (verified individually, not assumed from the grep alone).
 
 ---
 

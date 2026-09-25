@@ -443,12 +443,14 @@ async def _generate_session_for_events(project_events: list[dict]) -> None:
     # ------------------------------------------------------------------
     # AI provider selection for session generation.
     #
-    # Groq is the sole provider during the beta — Claude is disabled
-    # centrally via the Worker's admin kill switch for cost control, so a
-    # fallback call here would just fail the same way while wasting a
-    # request. To restore Claude as a fallback later, re-add the branch that
-    # used to sit here (git history has it) or flip CLAUDE_ENABLED back on
-    # and reintroduce the `else` path.
+    # Groq is the only provider, full stop (COST-002) — there is no
+    # maintainer-funded fallback of any kind to fail over to. Claude support
+    # was removed entirely, not disabled behind a switch; no CLAUDE_ENABLED
+    # flag or similar exists anywhere in this system to "flip back on".
+    # Restoring a Claude fallback means designing and building a new BYOK
+    # path for it from scratch (git history has the old Worker-proxied
+    # branch for reference, but that design is exactly what COST-002
+    # removed and should not be reintroduced as-is).
     #
     # Groq receives the exact same user_prompt Claude used to — no
     # truncation — so output quality doesn't regress purely from missing

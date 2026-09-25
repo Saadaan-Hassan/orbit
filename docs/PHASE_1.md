@@ -1,6 +1,12 @@
 # Phase 1 — v0.1: The Magic Moment
 **Duration:** Week 3–4 | **Prerequisite:** Phase 0 complete and verified
 
+> **Historical planning doc — written 2026-09-06, before the open-source
+> hardening pass.** Phase 1 is complete (see `AGENTS.md`'s "Completed
+> phases" line), but provider/model details below (e.g. Gemini) are stale
+> — see `AGENTS.md` for the current architecture. Kept for design-history
+> context, not as a current reference.
+
 ---
 
 ## Goal

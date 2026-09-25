@@ -1,4 +1,12 @@
 # Phase 2.9 — Accessibility Content Capture + Signal Fusion
+
+> **Historical planning doc — written 2026-09-06, before the open-source
+> hardening pass.** This phase is complete, but signal fusion now runs on
+> Groq, not Claude (COST-002/COST-004) — see `AGENTS.md`'s "Completed
+> phases" line and "Signal fusion session prompt" section for the current
+> implementation. Kept for design-history context, not as a current
+> reference.
+
 **Goal:** Read the actual on-screen text of the focused app (IDE code, chat
 messages, document text, ticket details) via the Accessibility API, and fuse all
 capture signals so Claude can reconstruct WHAT the user was doing inside an app —

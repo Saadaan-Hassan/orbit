@@ -1,4 +1,11 @@
 # Phase 2.5 — Deep Browser Capture
+
+> **Historical planning doc — written 2026-09-06, before the open-source
+> hardening pass.** This phase is complete — see `AGENTS.md`'s "Completed
+> phases" line and the browser-capture sections of its architecture
+> reference for the current implementation. Kept for design-history
+> context, not as a current reference.
+
 **Goal:** Capture what the user actually DID in the browser, not just which tabs
 were open. This fixes the #1 recall complaint: "it knows the app but not what I
 was doing in it."
