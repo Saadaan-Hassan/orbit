@@ -185,7 +185,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | COST-005 | Agent | PARTIAL | Add predictable offline/rate-limit/provider failure behavior | COST-003, COST-004 |
 | OBS-001 | Agent | DONE | Remove default remote telemetry or make it genuine opt-in | MAN-000, PRIV-001 |
 | SITE-001 | Agent | DONE | Convert landing site to static, no-waitlist operation | MAN-000 |
-| DOC-001 | Agent | TODO | Add chosen license and dependency/asset notices | MAN-002, MAN-005 |
+| DOC-001 | Agent | PARTIAL | Add chosen license and dependency/asset notices | MAN-002, MAN-005 |
 | DOC-002 | Agent | TODO | Create the root public README and build guide | COST-005, DOC-001 |
 | DOC-003 | Agent | TODO | Rewrite privacy policy and all product privacy claims | PRIV-006, OBS-001 |
 | DOC-004 | Agent | TODO | Add contribution, security, support, conduct, and governance files | MAN-004, DOC-001 |
@@ -246,14 +246,29 @@ Maintainer actions:
 **Recommendation:** Apache-2.0 for a permissive license with an express patent
 grant. Choose AGPL-3.0 only if strong network copyleft is intentional.
 
+**Decision recorded (2026-09-25), status left for the maintainer to flip:**
+maintainer chose **Apache-2.0**, confirmed directly in conversation after an
+agent-run dependency-license scan across all five workspaces (582 Rust
+crates, 40 Python packages, all JS/TS trees) found nothing that would
+constrain the choice — see `THIRD_PARTY_NOTICES.md`. Copyright holder was
+not asked as a separate question; the agent proceeded with "Saadaan Hassan,
+2026" (matching every git commit author and the project's actual start
+date) and used it in `LICENSE`/`Cargo.toml`/`package.json` files, flagged
+for correction if wrong. Per this file's own agent rules, only the
+maintainer may flip this row to `DONE` — do so once the copyright holder
+name above is confirmed correct.
+
 Maintainer actions:
 
-- [ ] Confirm the exact SPDX identifier: `Apache-2.0` or another OSI-approved
-      license.
-- [ ] Confirm the copyright holder name and starting year.
+- [x] Confirm the exact SPDX identifier: `Apache-2.0` or another OSI-approved
+      license. → Apache-2.0.
+- [ ] Confirm the copyright holder name and starting year. → Agent used
+      "Saadaan Hassan, 2026" without this being separately confirmed;
+      check `LICENSE` and correct if needed.
 - [ ] Understand that an open-source license does not prevent competitors from
       using the software according to that license.
-- [ ] Record the decision for `DOC-001`.
+- [x] Record the decision for `DOC-001`. → Done, see above; `DOC-001` has
+      already used this decision (see its own entry).
 
 ### MAN-003 — Decide commit-history/email treatment
 
@@ -1067,6 +1082,27 @@ Acceptance criteria:
 
 ### DOC-001 — Add license and notices
 
+**Current status: PARTIAL (2026-09-25).** `MAN-002` was resolved in
+conversation with the maintainer (Apache-2.0; see its own entry — its
+Task Index row is deliberately left `TODO` since only the maintainer may
+flip a `MAN-*` row). Added the exact, byte-verified-against-apache.org
+Apache-2.0 text to root `LICENSE` with a `Copyright 2026 Saadaan Hassan`
+line (unconfirmed — see `MAN-002`). Wrote `THIRD_PARTY_NOTICES.md` from a
+full dependency-license scan of all five workspaces: no copyleft that
+propagates to Orbit's own source, no unknown/missing licenses; a few
+benign transitive items (MPL-2.0 file-level copyleft, LGPL dynamic-link
+only, GPLv2 dev-tooling with a bootloader exception) documented rather
+than silently passed over. Aligned `license = "Apache-2.0"` across all
+five workspace manifests (`backend/pyproject.toml`, `app/src-tauri/Cargo.toml`,
+`app/package.json`, `landing/package.json`, `worker/package.json` — the
+last of which was wrongly `"ISC"`, npm's `init` default, never actually
+chosen). No `NOTICE` file added (no dependency required one) and no
+`TRADEMARKS.md` (conditional on `MAN-005`, which hasn't happened). Held at
+`PARTIAL`: asset attributions (fonts/icons/images) can't be completed until
+`MAN-005`'s redistribution-rights review happens, and GitHub's own
+license-detection can only be confirmed once the repo is actually visible
+there in some form.
+
 Implementation requirements:
 
 - Add the exact unmodified text of the license chosen in `MAN-002` to root
@@ -1080,10 +1116,19 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] GitHub can detect the root license.
-- [ ] All package license fields agree.
-- [ ] Dependency and asset notices are complete.
-- [ ] No dependency with an incompatible/unknown license is silently accepted.
+- [ ] GitHub can detect the root license. Implemented correctly (root
+      `LICENSE`, unmodified standard text, matches GitHub's own detection
+      convention) but unverified — no live GitHub repo to check this
+      against yet.
+- [x] All package license fields agree. All five workspace manifests now
+      say `Apache-2.0`; verified each still parses (`uv run`, `cargo
+      check`, and JSON validation on all three `package.json` files).
+- [ ] Dependency and asset notices are complete. Dependency notices are
+      complete (`THIRD_PARTY_NOTICES.md`). Asset notices (fonts, icons,
+      images, logo) are not — blocked on `MAN-005`.
+- [x] No dependency with an incompatible/unknown license is silently
+      accepted. None found; the borderline ones (MPL/LGPL/GPL-dev-tool)
+      are documented, not ignored.
 
 ### DOC-002 — Root README and build guide
 
@@ -1493,6 +1538,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-25 | COST-005 | PARTIAL | `backend/services/groq_service.py`, `backend/services/voyage_service.py`, `backend/routes/recall.py`, `backend/tests/test_provider_failure_modes.py`, `backend/tests/test_offline_recall.py`, `AGENTS.md` | Audited both providers' error handling against the full named-failure matrix (no key, invalid key, rate limit/quota, outage, timeout, malformed response, offline network) and closed two real gaps found in the process: Groq's `_call_groq_chat` cooled down on 429 but never on 401/403, meaning an invalid key was independently rediscovered by every classification group, session summary, and recall query in a cycle instead of being remembered; Voyage had no cooldown mechanism at all. Added `_GROQ_AUTH_FAILURE_COOLDOWN_SECONDS`/`_VOYAGE_AUTH_FAILURE_COOLDOWN_SECONDS` (300s) for 401/403 and a 429 cooldown for Voyage (honouring `Retry-After`, reusing Groq's existing default of 90s), plus jitter on Voyage's exponential backoff. Rewrote the offline-recall fallback (`_describe_groq_unavailable_reason()` + `_format_fts5_fallback()`) to name the actual cause (no/bad key vs. rate-limited vs. network problem vs. outage) instead of always guessing "you may be offline," and to always state plainly that the search itself never left the device. Verification: `uv run python -m unittest discover -s tests -p 'test_*.py'` 66/66 (13 new in `test_provider_failure_modes.py` covering the full matrix for both providers plus proof that Groq never retries within a call and Voyage is bounded to exactly 3 attempts; 2 new in `test_offline_recall.py` for the reworded fallback message). | Two items reasoned through rather than independently re-verified: "quota exhausted" is treated as the same case as "rate limit" (429) — neither provider documents a separate code for it; "keep events locally pending with non-alarming UI status" is asserted true from existing architecture (events are never deleted, only left with `session_id IS NULL` until reprocessed) without a fresh frontend check. Next: `OBS-001`. |
 | 2026-09-25 | OBS-001 | DONE | `backend/main.py`, `backend/scheduler.py`, `backend/routes/feedback.py`, `backend/routes/recall.py`, `backend/services/analytics_service.py` (deleted), `backend/services/sentry_service.py` (deleted), `backend/pyproject.toml`/`uv.lock`, `app/src/main.tsx`, `app/src/instrument.ts` (deleted), `app/src/hooks/useAnalytics.ts` (deleted), `app/src/hooks/useRecall.ts`, `app/src/components/{ErrorBoundary,MemoryViewer,PrivacyPanel}.tsx`, `app/vite.config.ts`, `app/package.json`/`pnpm-lock.yaml`, `app/src-tauri/src/lib.rs`, `app/src-tauri/tauri.conf.json`, `.github/workflows/release.yml`, `landing/src/app/privacy/page.tsx`, `docs/adr/ADR-005-tauri-shell-hardening.md` (update note), `docs/adr/ADR-007-remove-telemetry.md`, `AGENTS.md` | Maintainer confirmed removal over opt-in (see status note above). Deleted both service files and every `capture_analytics_event`/`useAnalytics`/`Sentry.captureException` call site; `ErrorBoundary` now logs render errors to `console.error` only. Removed `posthog`/`sentry-sdk[fastapi]` (backend, via `uv remove`) and `@posthog/react`/`@sentry/react`/`posthog-js`/`@sentry/vite-plugin` (frontend, via `pnpm remove`), and the `sentryVitePlugin`/hidden-sourcemap step from `vite.config.ts` (sourcemaps now off — nothing consumes them). Removed the `SIDECAR_POSTHOG_API_KEY`/`SIDECAR_SENTRY_DSN` compile-time constants and their `.env()` sidecar-spawn calls from `lib.rs` (`cargo check` confirmed clean). Removed the six telemetry secrets from the release workflow's Tauri build step. Narrowed the CSP's `connect-src` to drop `*.posthog.com`/`*.i.posthog.com`/`*.sentry.io` (nothing calls them anymore). Fixed the landing privacy policy's now-false claim that Orbit sends telemetry. Verification: backend `uv run python -m unittest discover -s tests -p 'test_*.py'` 66/66 unaffected; frontend `pnpm build` clean, bundle dropped 830 KB → 492 KB JS (652 → 313 modules, chunk-size warning gone); `cargo check --bin app` and `cargo test --bin app` 37/37 clean; `git diff --check` clean. | Historical `docs/PHASE_*.md` build logs still describe the old Sentry/PostHog setup as originally built — left alone, in scope for `DOC-006` (stale internal docs), not this task. Next: `SITE-001`. |
 | 2026-09-25 | SITE-001 | DONE | `landing/next.config.ts`, `landing/src/app/page.tsx`, `landing/src/app/opengraph-image.tsx`, `landing/src/app/beta/page.tsx`, `landing/src/app/not-found.tsx`, `landing/src/components/{header,footer}.tsx`, `landing/package.json`/`pnpm-lock.yaml`, `landing/.env.example`, `landing/README.md`, `landing/src/lib/waitlist-actions.ts` (deleted), `landing/src/lib/supabase.ts` (deleted), `landing/src/components/waitlist-form.tsx` (deleted), `landing/src/emails/waitlist-confirmation.tsx` (deleted), `landing/supabase-schema.sql` (deleted), `AGENTS.md` | Scope confirmed with the maintainer before implementing (see status note above): direct public download buttons on the main page, not a "watch releases" link. Deleted the waitlist form, its Server Action, the Supabase client, the React Email template, and the Supabase schema file; removed `@supabase/supabase-js`/`resend`/`react-email`/`zod` (all now-unused). Added `output: "export"` to `next.config.ts`. Rewrote `page.tsx`'s hero: same download buttons and unsigned/notarization "what to expect" disclosure `/beta` already has, using the same already-public `orbit-releases` URLs. Fixed two build errors static export surfaced: `opengraph-image.tsx` needed `export const dynamic = "force-static"`, which is incompatible with its existing `runtime = "edge"` (removed); every `next/image` usage (header, footer, beta, not-found) needed the `unoptimized` prop since default Image Optimization requires a server. Updated `package.json` (`start` removed — `next start` doesn't work against an export build; added `preview` via `npx serve out`) and `README.md` accordingly. Fixed copy that referenced "waitlist"/"Join the Waitlist" in `beta/page.tsx` and the OG image text, now stale. Fixed `privacy/page.tsx`'s telemetry claim while already there (see `OBS-001`'s entry — done as part of that task, not this one, but touches this same directory). Verification: `pnpm build` succeeds, every route reports `○` (static); inspected `out/` directly — pure static files, zero API routes, zero server bundle; `pnpm lint` clean. | None — all four acceptance criteria verified directly against the actual build output, no live-app gap this time. Next: `DOC-001`. |
+| 2026-09-25 | DOC-001 | PARTIAL | `LICENSE` (new), `THIRD_PARTY_NOTICES.md` (new), `backend/pyproject.toml`, `app/src-tauri/Cargo.toml`, `app/package.json`, `landing/package.json`, `worker/package.json`, `OPEN_SOURCE_ROADMAP.md` (`MAN-002` decision recorded, row left for maintainer to flip) | `MAN-002` resolved via direct conversation with the maintainer: Apache-2.0, after a background dependency-license scan (582 Rust crates, 40 Python packages, all JS/TS trees) confirmed nothing in the codebase would constrain the choice. Fetched the license text directly from `apache.org/licenses/LICENSE-2.0.txt` via `curl` (not retyped from memory) and diffed the written `LICENSE` file's body against it byte-for-byte before proceeding. Copyright line uses "Saadaan Hassan, 2026" (matches every commit author and the actual project start) — proposed, not separately confirmed; flagged in `MAN-002`'s own entry for the maintainer to correct if wrong. `THIRD_PARTY_NOTICES.md` documents the scan's findings in full, including the non-blocking borderline cases (MPL-2.0, LGPL, GPLv2-with-bootloader-exception, and a `BSL-1.0` naming false-alarm — Boost Software License, not Business Source License). Added `license = "Apache-2.0"` to all five workspace manifests; `worker/package.json` had been left at npm's `"ISC"` init default, never actually chosen — fixed. Verified: all three `package.json` files still valid JSON, `uv run` still resolves `pyproject.toml`, `cargo check --bin app` still compiles. | Two real gaps, both external to this session: asset notices (fonts/icons/images/logo) need `MAN-005`'s redistribution-rights review first, and GitHub's license auto-detection can't be confirmed without a live repo to check it against. Maintainer should also confirm the copyright-holder name in `LICENSE` is correct, then flip `MAN-002` to `DONE` themselves. Next: `DOC-002`. |
 | 2026-09-25 | APPSEC-001 | PARTIAL | `app/src-tauri/Cargo.toml`, `app/src-tauri/tauri.conf.json`, `app/src-tauri/capabilities/default.json`, `docs/adr/ADR-005-tauri-shell-hardening.md` | Removed the unconditional `devtools` Cargo feature (WRY still exposes devtools automatically in debug builds; release builds no longer force it on). Added a restrictive CSP (`default-src 'self'` plus a `connect-src` scoped to the fixed-port local backend, PostHog, and Sentry — the only hosts the webview itself calls; the Cloudflare Worker and AI providers are never in `connect-src` because only the Python backend calls them). Rewrote `capabilities/default.json` to grant exactly what the webview calls: removed `global-shortcut:default` and six unused `core:window:allow-*` permissions (the hotkey and those window transitions are Rust-native and were never gated by this file), and added the previously-missing `updater:allow-check`, `updater:allow-download-and-install`, `process:allow-restart`, and `dialog:allow-open` — without which auto-update and the watched-folder picker were silently non-functional (both call sites swallow errors by design). Existing entitlements were reviewed and left unchanged; each already carries an inline justification comment and is exercised by a real code path. `macOSPrivateApi: true` is required by the main window's `shadow: false` and the overlay window's transparency/click-through. Verification: `cargo check --bin app` (also validates the capabilities file against plugin permission schemas), `cargo test --bin app` 37/37, `pnpm build` (TypeScript + Vite), `git diff --check` all passed. | Required maintainer action: build a real `.dmg`, confirm right-click → Inspect Element is unavailable, and confirm the local API, PostHog/Sentry, the update check, and the folder picker all still work under the new CSP/capability grant. Record the outcome here before marking `APPSEC-001` DONE. Next: `COST-001`. `PRIV-002`/`PRIV-003` remain PARTIAL, independent of this task. |
 
 ---
