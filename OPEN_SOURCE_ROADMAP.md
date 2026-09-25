@@ -177,7 +177,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | PRIV-004 | Agent | DONE | Sanitize all provider-bound context at the Python boundary | PRIV-003 |
 | PRIV-005 | Agent | DONE | Normalize exclusions and protect local files/credentials | PRIV-004 |
 | PRIV-006 | Agent | DONE | Add privacy, consent, and redaction regression tests | PRIV-005 |
-| APPSEC-001 | Agent | TODO | Harden Tauri CSP, release devtools, capabilities, and entitlements | SEC-003 |
+| APPSEC-001 | Agent | PARTIAL | Harden Tauri CSP, release devtools, capabilities, and entitlements | SEC-003 |
 | COST-001 | Agent | TODO | Implement Keychain-backed BYOK UI and direct Groq calls | MAN-000, SEC-003 |
 | COST-002 | Agent | TODO | Remove all shared-key Worker behavior and fail closed | COST-001 |
 | COST-003 | Agent | TODO | Make FTS5 the no-embedding default and remove mandatory Voyage usage | COST-002 |
@@ -649,6 +649,17 @@ command and is suitable for `CI-002`.
 
 ### APPSEC-001 — Harden the Tauri shell
 
+**Current status: PARTIAL (2026-09-25).** The devtools feature gate, CSP,
+and capability-grant fixes are implemented, documented in
+[ADR-005](docs/adr/ADR-005-tauri-shell-hardening.md), and pass every
+automatable check (`cargo check`/`cargo test --bin app` 37/37/`pnpm build`).
+This task is not complete: CSP correctness and the absence of devtools are
+runtime properties of a real built app that only a maintainer can observe.
+Build a production `.dmg`, confirm right-click → Inspect Element is
+unavailable, and confirm the local API, PostHog/Sentry, the update check, and
+the watched-folder picker all still work under the new CSP and capability
+grant before changing this task to `DONE`.
+
 Implementation requirements:
 
 - Add a restrictive production CSP compatible with the local application.
@@ -664,10 +675,13 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] Production build has no user-accessible devtools.
+- [ ] Production build has no user-accessible devtools. (Implemented — the
+      `devtools` Cargo feature is now debug-only; unverified on a real build.)
 - [ ] CSP blocks unexpected network/script sources without breaking the app.
-- [ ] Capability/entitlement rationale is documented in the threat model.
-- [ ] App build and relevant Tauri security tests pass.
+      (Policy implemented and scoped to exactly the hosts the webview calls;
+      unverified at runtime.)
+- [x] Capability/entitlement rationale is documented in the threat model.
+- [x] App build and relevant Tauri security tests pass.
 
 ---
 
@@ -1253,6 +1267,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-10 | PRIV-005 | DONE | Canonical exclusion policy, FastAPI/Rust capture enforcement, macOS Keychain migration, owner-only local storage repair, ADR-004, and regression tests | `services/exclusion_policy.py` owns defaults and normalization; SQLite distributes canonical values to native and extension capture. Domains include true subdomains but not suffix lookalikes; watched-folder boundaries are enforced before every Python/Rust write. `~/.orbit`, SQLite/WAL/SHM, Qdrant, device ID, and onboarding marker receive owner-only modes without following symlinks. Groq keys use macOS Keychain; a legacy SQLite key is deleted only after a successful Keychain transfer/check, and subprocess output is never logged. `uv run python -m unittest discover -s tests -p 'test_*.py'` passed 24/24; focused suite passed 7/7 with ResourceWarnings treated as errors; `cargo test --bin app` passed 36/36; `python -m compileall -q .` and `git diff --check` passed. | Continue with `PRIV-006`. `PRIV-002` remains PARTIAL pending the maintainer's live UI verification. |
 | 2026-09-10 | PRIV-006 | DONE | Focused privacy regression suite, secure wipe compaction, in-memory history clearing, Rust secure-field test, and backend test command documentation | `test_privacy_regression_suite.py` proves fresh/upgraded pre-consent rejection, every extension capture category's consent/pause/exclusion gate, corrupt/missing settings fail-closed behavior, wipe of SQLite/FTS/sessions/memory/pairings plus Qdrant invocation, and capture-only extension pairing/revocation. Existing Rust sanitizer/provider-boundary tests cover non-secure secret redaction, URL/path/window-title leaks, legacy unsafe rows, and secure-field skipping; the secure-field branch now has a direct Rust unit test. A successful wipe enables SQLite secure-delete, truncates WAL, vacuums freed pages, and clears webview conversation/pending-query state. `backend/README.md` documents `uv run python -m unittest discover -s tests -p 'test_*.py'` for `CI-002`. The full backend suite passed 29/29 with `ResourceWarning` promoted to errors; `gitleaks detect --source tests --no-git --redact --exit-code 1` found no leaks; `cargo test --bin app` passed 37/37; `pnpm build`, backend compilation, and `git diff --check` passed. | Continue with `APPSEC-001`. `PRIV-002` remains PARTIAL pending the maintainer's live UI verification. |
 | 2026-09-10 | PRIV-003 | PARTIAL | `ADR-003`; shared Rust sanitizer; all active/retained Rust event writers; local exact-match pattern table/API/UI; migration test | All active and retained Rust event-insert sources now sanitize their captured strings; URLs strip fragments, redact userinfo and sensitive query values; static patterns cover credentials, keys, headers, JWTs, connection strings, payment/identity data, email/phone, and local custom phrases. `cargo test --bin app` passed 30/30, `cargo check --bin app`, focused `rustfmt --check` for changed capture files, backend tests 9/9, `pnpm build`, and both staged/unstaged `git diff --check` passed. | Keep PARTIAL: repository-wide Clippy fails an existing collapsible-if in `src/lib.rs`, and repository-wide formatter reports existing drift in `src/lib.rs` and `src/main.rs`. Fix and rerun those global checks before marking this task DONE. Consent gate remains blocked by PRIV-002. |
+| 2026-09-25 | APPSEC-001 | PARTIAL | `app/src-tauri/Cargo.toml`, `app/src-tauri/tauri.conf.json`, `app/src-tauri/capabilities/default.json`, `docs/adr/ADR-005-tauri-shell-hardening.md` | Removed the unconditional `devtools` Cargo feature (WRY still exposes devtools automatically in debug builds; release builds no longer force it on). Added a restrictive CSP (`default-src 'self'` plus a `connect-src` scoped to the fixed-port local backend, PostHog, and Sentry — the only hosts the webview itself calls; the Cloudflare Worker and AI providers are never in `connect-src` because only the Python backend calls them). Rewrote `capabilities/default.json` to grant exactly what the webview calls: removed `global-shortcut:default` and six unused `core:window:allow-*` permissions (the hotkey and those window transitions are Rust-native and were never gated by this file), and added the previously-missing `updater:allow-check`, `updater:allow-download-and-install`, `process:allow-restart`, and `dialog:allow-open` — without which auto-update and the watched-folder picker were silently non-functional (both call sites swallow errors by design). Existing entitlements were reviewed and left unchanged; each already carries an inline justification comment and is exercised by a real code path. `macOSPrivateApi: true` is required by the main window's `shadow: false` and the overlay window's transparency/click-through. Verification: `cargo check --bin app` (also validates the capabilities file against plugin permission schemas), `cargo test --bin app` 37/37, `pnpm build` (TypeScript + Vite), `git diff --check` all passed. | Required maintainer action: build a real `.dmg`, confirm right-click → Inspect Element is unavailable, and confirm the local API, PostHog/Sentry, the update check, and the folder picker all still work under the new CSP/capability grant. Record the outcome here before marking `APPSEC-001` DONE. Next: `COST-001`. `PRIV-002`/`PRIV-003` remain PARTIAL, independent of this task. |
 
 ---
 
