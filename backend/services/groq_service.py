@@ -30,6 +30,11 @@ GROQ_CLASSIFY_CONTEXT_WINDOW_TOKENS = 131_072
 
 _WORKER_URL = os.getenv("WORKER_URL", "")
 
+# BYOK target: when a personal key is configured, requests go straight here
+# instead of through the maintainer's Worker (COST-001) — the user's key and
+# the content of the request never reach the Worker at all in that case.
+GROQ_DIRECT_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+
 _http_client: httpx.AsyncClient | None = None
 
 # When Groq returns 429, all batches in the same (and nearby) scheduler run
@@ -55,6 +60,34 @@ def _get_http_client() -> httpx.AsyncClient:
     return _http_client
 
 
+async def test_groq_api_key(api_key: str) -> tuple[bool, str]:
+    """
+    Validates a candidate key directly against api.groq.com — never through
+    the Worker, never persisted. Lists models rather than requesting a
+    completion, so a test costs no tokens. The key is used for exactly this
+    one request and is never logged; only a coarse (valid, reason) pair is
+    returned to the caller.
+    """
+    try:
+        response = await _get_http_client().get(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10.0,
+        )
+    except httpx.TimeoutException:
+        return False, "timeout"
+    except httpx.TransportError:
+        return False, "network_error"
+
+    if response.status_code == 200:
+        return True, "ok"
+    if response.status_code in (401, 403):
+        return False, "invalid_key"
+    if response.status_code == 429:
+        return False, "rate_limited"
+    return False, "provider_error"
+
+
 async def _call_groq_chat(
     model: str,
     system_prompt: str,
@@ -75,10 +108,10 @@ async def _call_groq_chat(
     models (e.g. llama-3.1-8b-instant), which don't support this parameter.
 
     Groq is Orbit's centrally-funded default provider — no personal key is
-    required. If the user has configured their own key (a per-user override,
-    currently not exposed in the app UI), it's sent via X-Groq-Api-Key and
-    takes precedence at the Worker; otherwise the Worker uses its own shared
-    GROQ_API_KEY secret.
+    required. If the user has configured their own key (Settings → AI
+    Provider), requests go straight to api.groq.com with that key as an
+    `Authorization: Bearer` header — never through the maintainer's Worker.
+    Otherwise the Worker is used with its own shared GROQ_API_KEY secret.
 
     Returns the raw text content of the model's reply, or None when:
     - This model is in a rate-limit cooldown (429 received recently).
@@ -110,15 +143,18 @@ async def _call_groq_chat(
     if reasoning_effort is not None:
         request_body["reasoning_effort"] = reasoning_effort
 
-    request_headers = {}
     personal_api_key = await get_groq_api_key()
     if personal_api_key:
-        request_headers["X-Groq-Api-Key"] = personal_api_key
+        target_url = GROQ_DIRECT_API_URL
+        request_headers = {"Authorization": f"Bearer {personal_api_key}"}
+    else:
+        target_url = f"{_WORKER_URL}/chat-groq"
+        request_headers = {}
 
     started_at = time.monotonic()
     try:
         response = await _get_http_client().post(
-            f"{_WORKER_URL}/chat-groq",
+            target_url,
             json=request_body,
             headers=request_headers,
             timeout=_GROQ_REQUEST_TIMEOUT_SECONDS,
@@ -575,8 +611,10 @@ async def stream_recall_response_groq(
     conversation_history: list[dict] | None = None,
 ) -> AsyncGenerator[str, None]:
     """
-    Streams a recall answer from Groq via the Cloudflare Worker and yields
-    raw text delta strings as they arrive.
+    Streams a recall answer from Groq and yields raw text delta strings as
+    they arrive. Goes straight to api.groq.com when a personal key is
+    configured (COST-001); otherwise via the maintainer's Worker with its
+    shared key.
 
     Mirrors claude_service.stream_recall_response's signature and yield
     shape exactly, so recall.py's caller doesn't need to know which provider
@@ -607,16 +645,19 @@ async def stream_recall_response_groq(
         ],
     }
 
-    request_headers = {}
     personal_api_key = await get_groq_api_key()
     if personal_api_key:
-        request_headers["X-Groq-Api-Key"] = personal_api_key
+        target_url = GROQ_DIRECT_API_URL
+        request_headers = {"Authorization": f"Bearer {personal_api_key}"}
+    else:
+        target_url = f"{_WORKER_URL}/chat-groq"
+        request_headers = {}
 
     started_at = time.monotonic()
     try:
         async with _get_http_client().stream(
             "POST",
-            f"{_WORKER_URL}/chat-groq",
+            target_url,
             json=request_body,
             headers=request_headers,
             timeout=_GROQ_RECALL_TIMEOUT_SECONDS,

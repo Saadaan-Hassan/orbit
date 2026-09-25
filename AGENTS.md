@@ -32,10 +32,10 @@ same experience, AI adapts to what they actually do.
 
 | Fact | Detail |
 |---|---|
-| **ALL AI goes through the Cloudflare Worker** | Claude, Gemini, Groq, AND Voyage AI all route through the Worker. No direct AI API calls anywhere except the Worker itself. This keeps all API keys off user machines. |
+| **AI goes through the Cloudflare Worker, unless the user brings their own Groq key** | Claude, Gemini, and Voyage AI always route through the Worker — no direct calls to those. Groq is the one exception (COST-001): if the user has configured a personal key (Settings → Your Own Groq Key), the backend calls `api.groq.com` directly with that key and the Worker is never involved for that request. With no personal key, Groq also goes through the Worker exactly like the others, using the Worker's own shared secret. |
 | **Worker routes** | `/chat` → Claude. `/classify` → Gemini Flash. `/chat-groq` → Groq (OpenAI-compatible). `/embed` → Voyage AI. `/provider-status` → admin kill switch status (GET, no auth). `/tts` → ElevenLabs (stub). `/stt-token` → STT (stub). |
 | **No AI API keys in backend/.env** | `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `VOYAGE_API_KEY`, `GROQ_API_KEY` live in Cloudflare Worker secrets ONLY. `backend/.env` has no AI provider keys. |
-| **Groq is Orbit's default AI provider (beta)** | Session generation, event classification, AND recall (user-facing chat) all run on Groq — `services/groq_service.py` on the backend. Centrally funded via the Worker's own `GROQ_API_KEY` secret, **not BYOK**: the backend never requires a per-user key. The still-functional but UI-less override (`database.get_groq_api_key()` / `POST /settings/groq-key`) is stored in the macOS Keychain (`com.heyorbit.orbit` / `groq-api-key`), not SQLite; it is read only immediately before the backend sends `X-Groq-Api-Key`. Otherwise the Worker falls back to its own shared secret. Models: `openai/gpt-oss-120b` (session summaries, `reasoning_effort: "low"` — it's a reasoning model whose chain-of-thought otherwise eats the max_tokens budget before writing the answer), `llama-3.1-8b-instant` (classification — cheap/fast, but has an observed repetition-loop tendency on long single-shot lists; classification groups are capped at 30 events for this reason, a quality ceiling not a rate limit), `llama-3.3-70b-versatile` (recall, OpenAI-compatible streaming — different SSE wire format from Claude's `content_block_delta`, needs its own parser: `stream_recall_response_groq()`). |
+| **Groq is Orbit's default AI provider (beta) — BYOK-capable since COST-001** | Session generation, event classification, AND recall (user-facing chat) all run on Groq — `services/groq_service.py` on the backend. With no personal key, it's centrally funded via the Worker's own `GROQ_API_KEY` secret — the backend never requires a per-user key for basic use. A user-configured key (Settings → Your Own Groq Key, `database.get_groq_api_key()` / `POST /settings/groq-key`) is stored in the macOS Keychain (`com.heyorbit.orbit` / `groq-api-key`), not SQLite, and is read only immediately before use. When present, `groq_service.py` sends requests **directly to `https://api.groq.com/openai/v1/chat/completions`** with `Authorization: Bearer <key>` — the Worker is bypassed entirely, so the user's key and the request content never reach it. With no personal key, requests still go through the Worker's `/chat-groq` route with no `Authorization`/`X-Groq-Api-Key` header, and the Worker uses its own shared secret. Models: `openai/gpt-oss-120b` (session summaries, `reasoning_effort: "low"` — it's a reasoning model whose chain-of-thought otherwise eats the max_tokens budget before writing the answer), `llama-3.1-8b-instant` (classification — cheap/fast, but has an observed repetition-loop tendency on long single-shot lists; classification groups are capped at 30 events for this reason, a quality ceiling not a rate limit), `llama-3.3-70b-versatile` (recall, OpenAI-compatible streaming — different SSE wire format from Claude's `content_block_delta`, needs its own parser: `stream_recall_response_groq()`). |
 | **Admin kill switch (Claude / Gemini / Groq)** | Three independent Cloudflare Worker secrets — `CLAUDE_ENABLED`, `GEMINI_ENABLED`, `GROQ_PROXY_ENABLED` — each gate their route server-side, returning HTTP 503 when set to the literal string `"false"` (absent/unset = enabled, fail-open). Flip with `npx wrangler secret put CLAUDE_ENABLED` from `worker/` — takes effect on the next request, no redeploy. Every backend AI call already treats a non-2xx response as "provider unavailable" and degrades gracefully (session-gen skips the batch via the `parse_failed` circuit breaker, classification defaults events to `work`, recall falls back to the offline FTS5 message) — **no backend code change is ever needed to use the kill switch**, only the Worker secret. Read-only status is exposed to the app via `GET /settings/provider-status` (backend proxy of the Worker's `/provider-status`) and rendered in PrivacyPanel's "AI Provider" section — 3 status rows, no user controls. Currently live: Claude and Gemini disabled, Groq enabled (beta cost control — Claude/Gemini are Orbit-funded per-token; Groq's shared key is dramatically cheaper, see Tech Stack). |
 | **google-genai SDK not installed** | Gemini is called via `httpx` → Worker `/classify`. The `google-genai` package is not a dependency. |
 | **APScheduler v3.x (stable)** | Session generation uses `AsyncIOScheduler` from `apscheduler.schedulers.asyncio` — this is v3.x stable. Import path: `from apscheduler.schedulers.asyncio import AsyncIOScheduler`. Never use APScheduler v4 (`from apscheduler import AsyncScheduler`) — that is explicitly pre-release and unstable. |
@@ -244,6 +244,7 @@ orbit/
 │   │   │   ├── useOnboarding.ts            ← onboarding state, polls accessibility + browser automation every 3s; requestBrowserAutomation()
 │   │   │   ├── usePrivacySettings.ts       ← privacy API calls; excluded domains + normalizeDomain(); nativeBrowserEnabled + setNativeBrowserEnabled; file watching CRUD; screenContentEnabled + setScreenContentEnabled
 │   │   │   ├── useProviderStatus.ts        ← fetches /settings/provider-status on mount; read-only {claudeEnabled, geminiEnabled, groqEnabled}; fails open (all true) if unreachable — no setters, admin-only control
+│   │   │   ├── useGroqKeySettings.ts       ← BYOK (COST-001): GET/POST/DELETE /settings/groq-key + POST .../test + .../enabled; exposes {configured, enabled}, never the raw key
 │   │   │   └── useMemoryData.ts            ← memory viewer: events, sessions, pagination
 │   │   └── types/                          ← all TypeScript types
 │   └── src-tauri/
@@ -393,13 +394,13 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 
 ### AI Models
 
-**Beta default — Groq, centrally funded (not BYOK), Claude and Gemini disabled via the admin kill switch:**
+**Beta default — Groq, centrally funded unless the user brings their own key (COST-001 BYOK), Claude and Gemini disabled via the admin kill switch:**
 
 | Task | Model | Route |
 |---|---|---|
-| User recall + conversation | `llama-3.3-70b-versatile` (`GROQ_RECALL_MODEL`, `groq_service.py`) | Worker `/chat-groq` |
-| Background session summaries (signal fusion) | `openai/gpt-oss-120b` (`GROQ_SESSION_MODEL`), `reasoning_effort: "low"` | Worker `/chat-groq` — every 30 min |
-| Event classification | `llama-3.1-8b-instant` (`GROQ_CLASSIFY_MODEL`) | Worker `/chat-groq` — groups capped at 30 events (quality ceiling, see Critical Architecture Facts) |
+| User recall + conversation | `llama-3.3-70b-versatile` (`GROQ_RECALL_MODEL`, `groq_service.py`) | Worker `/chat-groq` (no personal key) or direct `api.groq.com` (personal key configured) |
+| Background session summaries (signal fusion) | `openai/gpt-oss-120b` (`GROQ_SESSION_MODEL`), `reasoning_effort: "low"` | Worker `/chat-groq` or direct `api.groq.com`, same rule — every 30 min |
+| Event classification | `llama-3.1-8b-instant` (`GROQ_CLASSIFY_MODEL`) | Worker `/chat-groq` or direct `api.groq.com`, same rule — groups capped at 30 events (quality ceiling, see Critical Architecture Facts) |
 | Session embeddings | Voyage AI `voyage-3-lite` (512 dims) | Worker `/embed` — unaffected by the kill switch |
 | Voice STT (Phase 4) | Whisper.cpp → Apple Speech fallback | local only |
 | Voice TTS (Phase 4) | Kokoro TTS → ElevenLabs Pro | local / Worker `/tts` |
@@ -485,8 +486,8 @@ Import path for v3.x: `from apscheduler.schedulers.asyncio import AsyncIOSchedul
 | `app/src/components/ProjectCards.tsx` | Project cards dashboard. Shown inside `RecallSearch` when `conversationHistory` is empty. Receives `isVisible` prop — when `false`, sets `opacity: 0` and `pointer-events: none` (0.2 s ease-out CSS transition). Card body click calls `onPrefill(query)` (sets input value + focus, does NOT submit). `→` arrow calls `onSubmit(query)` (submits immediately). Shows loading shimmer while `isLoading`. Returns `null` if `projects.length === 0` after load (clean empty state on first install). |
 | `backend/services/claude_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/chat`. Handles SSE streaming. `RECALL_MODEL = "claude-sonnet-4-6"`, `SUMMARY_MODEL = "claude-haiku-4-5-20251001"`. **Currently unused during the beta** — Claude is disabled via the Worker's `CLAUDE_ENABLED` kill switch and Groq (`groq_service.py`) handles both recall and session summaries instead. Code is intact, not deleted — re-wire `scheduler.py`/`recall.py` to call back into this file to restore Claude. |
 | `backend/services/gemini_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/classify`. Builds Gemini REST API body. Extracts text from `candidates[0].content.parts[0].text`. Sends `id, type, app_name, url, raw_content` — raw_content is already redacted at capture, so it's safe and needed for accurate classification. Falls back to `category='work'` if JSON parse fails. **Currently unused during the beta** — Gemini is disabled via `GEMINI_ENABLED`; `groq_service.py` handles classification instead. |
-| `backend/services/groq_service.py` | Singleton `httpx.AsyncClient` (180 s timeout — classification of a large backlog can legitimately need minutes; recall uses a separate 30 s timeout, `_GROQ_RECALL_TIMEOUT_SECONDS`, since it's a live user-facing request). Three provider-facing functions: `generate_session_summary_groq()` (session fusion, `reasoning_effort="low"` — critical, see Critical Architecture Facts), `classify_events_batch_groq()` (event classification, content-aware group splitting via `_split_events_by_estimated_size()`, hard-capped at 30 events/group, sanity-checks response size against a 1.5× threshold to reject repetition-loop garbage), `stream_recall_response_groq()` (user-facing streaming, OpenAI-compatible SSE parser — NOT the same wire format as Claude's). All three send `X-Groq-Api-Key` only if a personal key exists (`database.get_groq_api_key()`); otherwise the header is omitted and the Worker falls back to its own shared `GROQ_API_KEY` secret. `_call_groq_chat()` is the shared low-level POST helper — 429 sets a per-model cooldown (`_groq_rate_limited_until` dict), 413 logs and returns None (payload-size problem, not time-based — no cooldown), empty completions are logged with `finish_reason` for diagnosis. |
-| `backend/routes/settings.py` | `GET/POST/DELETE /settings/groq-key` — per-user Groq key override, functional but **not exposed anywhere in the current app UI**. Its credential is stored only in macOS Keychain; its enabled flag is non-secret SQLite state. `POST /settings/groq-key/enabled` — same status, unused UI-side. `GET /settings/provider-status` — the one still actually wired to the UI: proxies the Worker's `/provider-status`, fails open (`{claude: true, gemini: true, groq: true}`) if the Worker is unreachable. Powers PrivacyPanel's read-only "AI Provider" status rows via `useProviderStatus.ts`. |
+| `backend/services/groq_service.py` | Singleton `httpx.AsyncClient` (180 s timeout — classification of a large backlog can legitimately need minutes; recall uses a separate 30 s timeout, `_GROQ_RECALL_TIMEOUT_SECONDS`, since it's a live user-facing request). Three provider-facing functions: `generate_session_summary_groq()` (session fusion, `reasoning_effort="low"` — critical, see Critical Architecture Facts), `classify_events_batch_groq()` (event classification, content-aware group splitting via `_split_events_by_estimated_size()`, hard-capped at 30 events/group, sanity-checks response size against a 1.5× threshold to reject repetition-loop garbage), `stream_recall_response_groq()` (user-facing streaming, OpenAI-compatible SSE parser — NOT the same wire format as Claude's). All three call `database.get_groq_api_key()`: if a personal key exists, the request goes straight to `GROQ_DIRECT_API_URL` (`https://api.groq.com/openai/v1/chat/completions`) with `Authorization: Bearer <key>` — the Worker is bypassed entirely (COST-001 BYOK); otherwise the request goes to the Worker's `/chat-groq` route with no auth header, and the Worker uses its own shared `GROQ_API_KEY` secret. `test_groq_api_key()` validates a candidate key with a free `GET /models` call directly against `api.groq.com` — never persisted, used for exactly one request. `_call_groq_chat()` is the shared low-level POST helper — 429 sets a per-model cooldown (`_groq_rate_limited_until` dict), 413 logs and returns None (payload-size problem, not time-based — no cooldown), empty completions are logged with `finish_reason` for diagnosis. No branch ever logs headers, request bodies, or response bodies — only `log_provider_diagnostic()`'s coarse provider/model/status/duration/error-kind fields. |
+| `backend/routes/settings.py` | `GET/POST/DELETE /settings/groq-key` + `POST /settings/groq-key/test` — the BYOK settings surface (COST-001), wired to PrivacyPanel's "Your Own Groq Key" section via `useGroqKeySettings.ts`. `GET` returns only `{configured, enabled}` — the raw key is never returned to the webview after saving. `POST` validates the `gsk_`-prefixed shape, stores to Keychain, and force-enables. `POST .../test` validates a candidate key against Groq directly (via `groq_service.test_groq_api_key()`) without ever storing it — used for the UI's "Test" action before committing. `DELETE` removes the Keychain entry. `POST /settings/groq-key/enabled` pauses/resumes use of the stored key without discarding it (falls back to Orbit's shared-key path while disabled). `GET /settings/provider-status` is unrelated — it proxies the Worker's admin kill switch, fails open (`{claude: true, gemini: true, groq: true}`) if the Worker is unreachable, and powers the separate read-only "AI Provider" status rows via `useProviderStatus.ts`. |
 | `backend/services/voyage_service.py` | Singleton `httpx.AsyncClient`. POST to `WORKER_URL/embed`. Body: `{"input": [text], "model": "voyage-3-lite", "input_type": "document"}`. Returns 512-dim float list. |
 | `backend/services/time_parser.py` | Standard-library time reference parser (no third-party deps). `extract_time_range_from_query(query, now_ms)` checks 11 patterns most-specific-first (e.g. "yesterday morning" before "yesterday") and returns `{"start_ms": int, "end_ms": int, "label": str}` or `None`. Used by `recall.py` to filter both FTS5 and Qdrant results to a concrete time window. |
 | `backend/services/redaction_service.py` | Inline sensitive-content redaction for browser-captured text. Ports Rust clipboard patterns as `re.sub()` — replaces only matched substrings (preserves article context). All 7 pattern steps run on every call. JWT uses `eyJ` anchor to avoid false positives in long text. API key pattern uses negative lookbehind + 8-char minimum body. Called by `capture.py` for `page_text` and search `raw_content` before DB write. |
@@ -714,7 +715,9 @@ default) receives exactly the same redacted fields Claude/Gemini would.
   any write. By the time AI sees content, `sk-abc123` is already `[REDACTED:api_key]`.
 - Password manager and banking app events never captured (exclude list).
 - `category = 'personal'` events excluded from work recall context.
-- All AI calls go through the Cloudflare Worker over encrypted HTTPS.
+- All AI calls go over encrypted HTTPS — through the Cloudflare Worker by
+  default, or directly to `api.groq.com` when the user has configured their
+  own Groq key (COST-001 BYOK); either way, the request never leaves HTTPS.
 - Nothing is stored on the AI providers' side (no training, stateless calls).
 
 **What is still never sent:**
@@ -780,7 +783,10 @@ User controls via `PrivacyPanel.tsx → FileActivitySection`:
 
 ### Other Rules
 - All data local by default. Cloud sync opt-in, Phase 5 only.
-- No AI provider keys on user machines — Worker secrets only.
+- No maintainer-owned AI provider keys on user machines — those stay in
+  Worker secrets only. A user's own Groq key (optional, BYOK) lives only in
+  their local macOS Keychain, never in SQLite, the app binary, or Orbit's
+  infrastructure.
 - One-click full memory wipe (PrivacyPanel).
 - User can view/delete any stored item (MemoryViewer).
 
@@ -836,7 +842,9 @@ GROQ_API_KEY=your_key
 
 ## Environment Variables
 
-**Rule:** AI provider keys → Cloudflare Worker secrets only. Backend `.env` has no AI keys.
+**Rule:** Maintainer-owned AI provider keys → Cloudflare Worker secrets only.
+Backend `.env` has no AI keys. A user's own Groq key (BYOK, COST-001) never
+goes in `.env` either — it lives only in the local macOS Keychain.
 
 ### backend/.env (gitignored)
 ```
@@ -1071,7 +1079,10 @@ and auto-advances when granted.
 ## DO NOT
 
 - Add features, refactors, or improvements beyond exact scope.
-- Call Gemini, Voyage AI, Claude, or Groq directly — all go through Cloudflare Worker.
+- Call Gemini, Voyage AI, or Claude directly — those always go through the
+  Cloudflare Worker. Groq is the sole, deliberate exception: call it directly
+  only when a personal key is configured (COST-001 BYOK); with no personal
+  key, Groq also goes through the Worker like the others.
 - Create new `httpx.AsyncClient`, `QdrantClient`, or `reqwest::Client` per request.
 - Put `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `VOYAGE_API_KEY`, or `GROQ_API_KEY` in any `.env` file — Worker secrets only.
 - Give `max_tokens` a generous, "just to be safe" budget on any Groq call. This model family has an observed repetition-loop failure mode on long single-shot outputs — a generous budget doesn't prevent it, it just lets a bad roll burn far more tokens (and cost) before hitting the ceiling. Size `max_tokens` tightly to what a legitimate response needs.

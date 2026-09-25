@@ -8,6 +8,7 @@ from database import (
     get_groq_key_enabled,
     set_groq_key_enabled,
 )
+from services.groq_service import test_groq_api_key
 from services.keychain_service import (
     KeychainUnavailableError,
     delete_groq_api_key,
@@ -19,6 +20,10 @@ router = APIRouter(prefix="/settings")
 
 _WORKER_URL = os.getenv("WORKER_URL", "")
 _provider_status_http_client = httpx.AsyncClient(timeout=10.0)
+
+
+def _is_plausible_groq_key(key: str) -> bool:
+    return key.startswith("gsk_") and len(key) > 20
 
 
 class GroqKeyRequest(BaseModel):
@@ -43,10 +48,24 @@ async def get_groq_key_status() -> dict:
     }
 
 
+@router.post("/groq-key/test")
+async def test_groq_key(body: GroqKeyRequest) -> dict:
+    """
+    Validates a candidate key directly against Groq before the user commits
+    to saving it. The key is used for exactly this one request and is never
+    written to SQLite, Keychain, logs, or any analytics/crash event.
+    """
+    key = body.api_key.strip()
+    if not _is_plausible_groq_key(key):
+        return {"valid": False, "reason": "invalid_format"}
+    valid, reason = await test_groq_api_key(key)
+    return {"valid": valid, "reason": reason}
+
+
 @router.post("/groq-key")
 async def save_groq_key(body: GroqKeyRequest) -> dict:
     key = body.api_key.strip()
-    if not key.startswith("gsk_") or len(key) <= 20:
+    if not _is_plausible_groq_key(key):
         raise HTTPException(
             status_code=422,
             detail="Invalid Groq API key. Must start with 'gsk_' and be longer than 20 characters.",

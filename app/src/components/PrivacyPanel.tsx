@@ -6,6 +6,7 @@ import {
 } from "./CaptureConsentChoices";
 import { usePrivacySettings } from "../hooks/usePrivacySettings";
 import { useProviderStatus } from "../hooks/useProviderStatus";
+import { useGroqKeySettings } from "../hooks/useGroqKeySettings";
 import { useAnalytics } from "../hooks/useAnalytics";
 
 interface PauseDurationOption {
@@ -874,8 +875,12 @@ function AiProviderSection() {
     <div className="flex flex-col gap-2">
       <SectionHeading>AI Provider</SectionHeading>
       <p className="text-xs text-zinc-400 dark:text-zinc-500 font-light leading-relaxed mb-1">
-        Orbit's AI features run through one of the providers below. This is
-        managed centrally — there's nothing for you to configure here.
+        Orbit's built-in AI runs through one of the providers below — this
+        part is managed centrally. To use your own Groq account instead, see{" "}
+        <span className="font-semibold text-zinc-500 dark:text-zinc-400">
+          Your Own Groq Key
+        </span>{" "}
+        below.
       </p>
 
       {isLoading ? (
@@ -890,6 +895,192 @@ function AiProviderSection() {
           <ProviderStatusRow label="Gemini" enabled={geminiEnabled} />
           <ProviderStatusRow label="Groq" enabled={groqEnabled} />
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Section 6.5 — Your Own Groq Key (BYOK) ──────────────────────────────────
+function formatTestReason(reason: string): string {
+  switch (reason) {
+    case "invalid_format":
+      return "That doesn't look like a Groq key — it should start with \"gsk_\".";
+    case "invalid_key":
+      return "Groq rejected this key. Double-check it in your Groq console.";
+    case "rate_limited":
+      return "Groq is rate-limiting this key right now — it may still be valid.";
+    case "timeout":
+    case "network_error":
+      return "Couldn't reach Groq. Check your connection and try again.";
+    default:
+      return "Groq couldn't validate this key right now.";
+  }
+}
+
+function GroqPersonalKeySection() {
+  const { configured, enabled, isLoading, saveKey, removeKey, setEnabled, testKey } =
+    useGroqKeySettings();
+  const [inputValue, setInputValue] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+  const [isRemoving, setIsRemoving] = useState(false);
+  const [testMessage, setTestMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function handleTest(): Promise<void> {
+    const key = inputValue.trim();
+    if (!key) return;
+    setIsTesting(true);
+    setTestMessage(null);
+    setActionError(null);
+    try {
+      const result = await testKey(key);
+      setTestMessage(
+        result.valid
+          ? { ok: true, text: "This key works." }
+          : { ok: false, text: formatTestReason(result.reason) }
+      );
+    } catch {
+      setTestMessage({ ok: false, text: "Groq couldn't validate this key right now." });
+    } finally {
+      setIsTesting(false);
+    }
+  }
+
+  async function handleSave(): Promise<void> {
+    const key = inputValue.trim();
+    if (!key) return;
+    setIsSaving(true);
+    setActionError(null);
+    try {
+      await saveKey(key);
+      setInputValue("");
+      setTestMessage(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not save the key.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleRemove(): Promise<void> {
+    setIsRemoving(true);
+    setActionError(null);
+    try {
+      await removeKey();
+      setTestMessage(null);
+    } catch {
+      setActionError("Could not remove the key.");
+    } finally {
+      setIsRemoving(false);
+    }
+  }
+
+  async function handleToggleEnabled(): Promise<void> {
+    setActionError(null);
+    try {
+      await setEnabled(!enabled);
+    } catch {
+      setActionError("Could not update the key's status.");
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <SectionHeading>Your Own Groq Key</SectionHeading>
+      <p className="text-xs text-zinc-400 dark:text-zinc-500 font-light leading-relaxed mb-1">
+        Add your own Groq API key to use your account instead of Orbit's. Your
+        key is stored only in macOS Keychain — Orbit never writes it to disk
+        elsewhere and never sends it back to this screen after saving.
+      </p>
+      <p className="text-[11px] text-amber-600 dark:text-amber-500 font-medium leading-relaxed bg-amber-500/10 rounded-xl px-3 py-2 mb-1">
+        When a Groq key is active, the activity Orbit selects for your
+        summaries and the questions you ask it leave your Mac and go directly
+        to Groq's servers over HTTPS — not through Orbit's infrastructure.
+        Nothing is sent to Groq unless a key is configured and enabled.
+      </p>
+
+      {isLoading ? (
+        <div className="h-10 bg-zinc-100/50 dark:bg-zinc-900/20 rounded-2xl animate-pulse" />
+      ) : configured ? (
+        <div className="flex items-center justify-between px-3.5 py-2.5 bg-zinc-50/20 dark:bg-zinc-900/10 rounded-2xl">
+          <div className="flex items-center gap-2">
+            <div
+              className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                enabled ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"
+              }`}
+            />
+            <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
+              {enabled ? "Key active" : "Key saved, temporarily disabled"}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleToggleEnabled}
+              aria-pressed={enabled}
+              aria-label={enabled ? "Disable key" : "Enable key"}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-500 ${
+                enabled ? "bg-zinc-900 dark:bg-white" : "bg-zinc-200 dark:bg-zinc-700"
+              }`}
+            >
+              <span
+                className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white dark:bg-zinc-950 shadow transition-transform ${
+                  enabled ? "translate-x-4" : "translate-x-0.5"
+                }`}
+              />
+            </button>
+            <button
+              onClick={handleRemove}
+              disabled={isRemoving}
+              className="text-zinc-400 hover:text-red-500 transition-colors p-1 hover:bg-red-500/10 rounded-lg cursor-pointer disabled:opacity-50"
+              aria-label="Remove key"
+            >
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-zinc-400 dark:text-zinc-500 italic px-1">No key configured — Orbit's built-in AI is used instead.</p>
+      )}
+
+      <div className="flex gap-2 mt-1">
+        <input
+          type="password"
+          autoComplete="off"
+          value={inputValue}
+          onChange={(e) => {
+            setInputValue(e.target.value);
+            setTestMessage(null);
+          }}
+          placeholder={configured ? "Enter a new key to replace it" : "gsk_..."}
+          className="flex-1 text-xs bg-zinc-100 dark:bg-zinc-900 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-zinc-400/20 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 border-0"
+        />
+        <button
+          onClick={handleTest}
+          disabled={!inputValue.trim() || isTesting || isSaving}
+          className="px-3.5 py-2 text-xs font-semibold rounded-xl bg-zinc-100 dark:bg-zinc-900 disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer whitespace-nowrap"
+        >
+          {isTesting ? "Testing…" : "Test"}
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={!inputValue.trim() || isSaving || isTesting}
+          className="px-3.5 py-2 text-xs font-semibold rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer whitespace-nowrap"
+        >
+          {isSaving ? "Saving…" : configured ? "Replace" : "Save"}
+        </button>
+      </div>
+
+      {testMessage && (
+        <p className={`text-xs font-medium px-1 mt-1 ${testMessage.ok ? "text-emerald-500" : "text-red-500"}`}>
+          {testMessage.text}
+        </p>
+      )}
+      {actionError && (
+        <p className="text-xs text-red-500 font-medium px-1 mt-1">{actionError}</p>
       )}
     </div>
   );
@@ -1087,6 +1278,10 @@ export function PrivacyPanel() {
       <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
 
       <AiProviderSection />
+
+      <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
+
+      <GroqPersonalKeySection />
 
       <div className="h-px bg-zinc-100/50 dark:bg-zinc-900/20 my-1" />
 
