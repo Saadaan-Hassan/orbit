@@ -1,7 +1,7 @@
 [project]
 name = "backend"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.4"
+description = "Orbit's local FastAPI backend — capture storage, recall, and session generation. Ships bundled inside the desktop app as a PyInstaller sidecar; not published or run standalone."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.14"
@@ -17,6 +17,10 @@ dependencies = [
     "sqlalchemy>=2.0.50",
     "uvicorn[standard]>=0.49.0",
 ]
+
+[project.urls]
+Homepage = "https://heyorbit.saadaan.dev"
+Repository = "https://github.com/Saadaan-Hassan/orbit"
 
 [dependency-groups]
 dev = [

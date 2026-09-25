@@ -92,10 +92,15 @@ jobs:
       # Build the self-contained orbit-backend binary and rename it to include
       # the target triple so Tauri's externalBin lookup finds it at bundle time.
       # The .spec file lives in backend/ and references run.py as the entry point.
-      - name: Set up Python 3.11
+      # Must match backend/.python-version and backend/pyproject.toml's
+      # requires-python (DOC-006) — this was previously pinned to 3.11 while
+      # both of those required >=3.14, an unnoticed mismatch since uv can
+      # silently download its own matching interpreter regardless of what
+      # this step installs.
+      - name: Set up Python 3.14
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.14"
 
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh

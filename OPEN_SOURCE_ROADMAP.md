@@ -190,7 +190,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | DOC-003 | Agent | PARTIAL | Rewrite privacy policy and all product privacy claims | PRIV-006, OBS-001 |
 | DOC-004 | Agent | DONE | Add contribution, security, support, conduct, and governance files | MAN-004, DOC-001 |
 | DOC-005 | Agent | TODO | Add architecture, threat model, and exact data-flow documentation | SEC-004, PRIV-006, COST-005 |
-| DOC-006 | Agent | PARTIAL | Align versions/package metadata and clean stale internal documentation | DOC-001, COST-005 |
+| DOC-006 | Agent | DONE | Align versions/package metadata and clean stale internal documentation | DOC-001, COST-005 |
 | CI-001 | Agent | TODO | Make all workspaces expose real local verification commands | REP-002, PRIV-006 |
 | CI-002 | Agent | TODO | Add pull-request CI, dependency updates, and security scans | CI-001 |
 | REL-001 | Agent | TODO | Harden the release workflow and secret permissions | CI-002, DOC-006 |
@@ -1352,11 +1352,57 @@ Acceptance criteria:
 
 ### DOC-006 — Versions, package metadata, and stale docs
 
-**Current status: PARTIAL (2026-09-25).** Did the stale-claims sweep only
-(last acceptance criterion); the version/package-metadata alignment work
-(first three criteria) is untouched and still needs a dedicated pass —
-this task also formally depends on `DOC-001` and `COST-005`, both still
-`PARTIAL`, which that remaining work should wait on.
+**Current status: DONE (2026-09-25).** Completed in two passes: the
+stale-claims sweep below, then the version/package-metadata alignment.
+Proceeded despite this task's formal dependency on `DOC-001`/`COST-005`
+(both still `PARTIAL`) since the specific blocker they'd represent —
+license not yet chosen — was already resolved in practice (`Apache-2.0` is
+established repo-wide, `LICENSE` exists, `DOC-001`'s remaining gaps are
+about dependency notices, not the license choice this task needed).
+
+**Version/package-metadata alignment pass:** Wrote `scripts/check-versions.sh`,
+a dependency-free `sh` script establishing `app/src-tauri/tauri.conf.json`
+(`0.2.4`, what actually drives the release tag/`.dmg`/updater) as the app's
+one version source, and `extension/manifest.json` (`0.1.0`) as the
+extension's — the extension has its own independent `ext-v*` release
+lineage (see AGENTS.md's "Chrome extension distribution" section) and was
+never expected to track the app's version. Ran it against the
+as-found repo first to confirm it actually catches real drift before
+fixing anything: it failed on 4 genuine mismatches — `app/package.json` and
+`app/src-tauri/Cargo.toml` were both still `0.1.0` against the app's real
+`0.2.4`; `backend/pyproject.toml` likewise (backend ships bundled inside
+the app release as a PyInstaller sidecar, so it should track the same
+version); `extension/package.json` was `1.0.0` against `manifest.json`'s
+`0.1.0` (the field that actually matters for Web Store versioning).
+Fixed all four; script now passes cleanly. Separately, found and fixed a
+higher-severity, load-bearing version mismatch while checking Python
+alignment: `.github/workflows/release.yml` pinned `actions/setup-python@v5`
+to **3.11** while `backend/.python-version` and `pyproject.toml`'s
+`requires-python` both required **>=3.14** — silently masked in practice
+because `uv sync` can download its own matching interpreter regardless of
+what that step installs, but still a real inconsistency between what CI
+claims to set up and what the backend actually requires; aligned the
+workflow to 3.14. Also replaced the remaining literal placeholder metadata
+found during this pass: `backend/pyproject.toml`'s description was the
+literal `uv init` boilerplate ("Add your description here"),
+`app/src-tauri/Cargo.toml`'s was the literal `cargo tauri init` boilerplate
+("A Tauri App"), and `extension/package.json` had the full default-`npm init`
+set (`"license": "ISC"`, `"author": ""`, `"description": ""`, meaningless
+`"version": "1.0.0"`) despite the rest of the repo being `Apache-2.0`. Fixed
+all of those, added `"private": true` to `extension/package.json` and
+`worker/package.json` (neither is ever published to npm — `app/package.json`
+and `landing/package.json` already had it), and added matching
+`repository`/`homepage` fields across `app`, `extension`, `worker`, and
+`landing` package.json plus `backend/pyproject.toml`'s `[project.urls]`
+(none had them before). Verified no regressions: `uv sync` + all 66 backend
+tests, `npm run test` (worker, 12 tests), `cargo check --bin app`, and JSON
+validity on every touched `package.json`/`tauri.conf.json` — all pass.
+Documented the script in `CONTRIBUTING.md`'s Tests section and `AGENTS.md`'s
+Build & Run section (run after bumping any of these versions), and added it
+to `AGENTS.md`'s monorepo map per this task's own "update root AGENTS.md
+fully" instruction.
+
+**Stale-claims sweep (first pass):**
 
 Found via `AGENTS.md`'s own Critical Architecture Facts table while
 reviewing `REP-002`: its **first row** — the most-referenced "read this
@@ -1427,9 +1473,17 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] Version consistency check passes.
-- [ ] No placeholder package metadata remains.
-- [ ] Python build uses one supported version everywhere.
+- [x] Version consistency check passes. `sh scripts/check-versions.sh` — confirmed
+      it fails on the as-found repo (4 real mismatches) before fixing them,
+      then passes cleanly after.
+- [x] No placeholder package metadata remains. Grepped for `"license": "ISC"`,
+      empty `"author"`/`"description"`, and generic init-tool boilerplate
+      across every `package.json`/`Cargo.toml`/`pyproject.toml`/`tauri.conf.json`
+      — all fixed, none remain.
+- [x] Python build uses one supported version everywhere. `.python-version`,
+      `pyproject.toml`'s `requires-python`, and `release.yml`'s
+      `actions/setup-python` now all say `3.14`; `uv sync` + full backend
+      test suite verified against it.
 - [x] Search for private/shared-funded/outdated-model claims produces only clearly
       marked historical references. Repo-wide grep across `.md`/`.py`/`.ts`/`.rs`
       for shared-secret, admin-kill-switch, retired-model-name, and

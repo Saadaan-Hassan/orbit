@@ -328,6 +328,8 @@ orbit/
 │   └── [config files, package.json, etc.]
 ├── releases/
 │   └── latest.json                         ← committed placeholder only — CI generates the real one at release time; not what the updater actually fetches
+├── scripts/
+│   └── check-versions.sh                   ← DOC-006 version-consistency check; run after bumping app/backend/extension versions, see Build & Run
 └── .github/workflows/
     └── release.yml                         ← builds + signs .dmg on v* tag push; publishes to Saadaan-Hassan/orbit-releases (see Release & Distribution)
 ```
@@ -875,6 +877,15 @@ cd landing && pnpm install && pnpm dev
 
 # Production .dmg
 cd app && pnpm tauri build
+```
+
+**After bumping the app version** (`app/src-tauri/tauri.conf.json`) or the
+extension version (`extension/manifest.json`), run the version-consistency
+check (`DOC-006`) — it fails loudly on any drift instead of letting
+`app/package.json`/`Cargo.toml`/`backend/pyproject.toml`/`extension/package.json`
+silently fall out of sync with their source of truth again:
+```bash
+sh scripts/check-versions.sh
 ```
 
 **Packages:**

@@ -1,15 +1,22 @@
 {
   "name": "extension",
-  "version": "1.0.0",
-  "description": "",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Orbit's Chrome extension — optional richer browser capture (article body, search queries, link clicks) alongside the app's native URL capture.",
   "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Saadaan-Hassan/orbit.git",
+    "directory": "extension"
+  },
+  "homepage": "https://heyorbit.saadaan.dev",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "vite build"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Saadaan Hassan",
+  "license": "Apache-2.0",
   "type": "commonjs",
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.4.0",

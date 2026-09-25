@@ -69,6 +69,12 @@ cd worker && npm run test
 cd app && pnpm build   # TypeScript + production build
 ```
 
+If you bumped the app version (`app/src-tauri/tauri.conf.json`), backend, or
+extension version, also run `sh scripts/check-versions.sh` from the repo
+root — it checks that `app/package.json`, `Cargo.toml`, and
+`backend/pyproject.toml` all agree with `tauri.conf.json`, and that
+`extension/package.json` agrees with `extension/manifest.json`.
+
 Changes to capture, redaction, or AI provider request/response handling
 need test coverage — these paths handle real personal data, and a
 regression here is a privacy incident, not just a bug.

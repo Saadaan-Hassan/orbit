@@ -3,6 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
+  "description": "Orbit's landing site — fully static, no server, no waitlist.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Saadaan-Hassan/orbit.git",
+    "directory": "landing"
+  },
+  "homepage": "https://heyorbit.saadaan.dev",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
