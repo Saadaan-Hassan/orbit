@@ -632,6 +632,7 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
     hasAccessibilityPermission,
     browserAutomationGranted,
     checkAccessibilityPermission,
+    requestAccessibilityPermission,
     openAccessibilitySettings,
     requestBrowserAutomation,
     captureConsent,
@@ -640,6 +641,19 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
     skipCaptureConsent,
     completeOnboarding,
   } = useOnboarding();
+
+  // Registers Orbit with macOS the first time this step is reached, so it
+  // actually appears in System Settings' Accessibility list by the time the
+  // user gets there — without this, the list can be permanently empty (see
+  // trigger_accessibility_permission_prompt's doc comment in lib.rs). Guarded
+  // to fire once per onboarding session, not on every render/poll, since it
+  // can surface a native system dialog.
+  const hasTriggeredAccessibilityPrompt = useRef(false);
+  useEffect(() => {
+    if (currentStep !== STEP_ACCESSIBILITY || hasTriggeredAccessibilityPrompt.current) return;
+    hasTriggeredAccessibilityPrompt.current = true;
+    requestAccessibilityPermission();
+  }, [currentStep, requestAccessibilityPermission]);
 
   // Poll for accessibility permission while on that step — updates the granted
   // state so the step card flips to green without the user clicking "Check again".

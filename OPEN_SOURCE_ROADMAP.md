@@ -202,9 +202,9 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | MAN-000 | Maintainer | DONE | Accept or replace ADR-000 target architecture | — |
 | MAN-001 | Maintainer | TODO | Create private backup and external-service inventory | — |
 | MAN-002 | Maintainer | TODO | Choose the source license | — |
-| MAN-003 | Maintainer | TODO | Decide whether to expose or rewrite commit email/history | MAN-001 |
-| MAN-004 | Maintainer | TODO | Choose public security/privacy contact | — |
-| MAN-005 | Maintainer | TODO | Verify code, asset, name, and trademark ownership | — |
+| MAN-003 | Maintainer | DONE (2026-09-27) | Decide whether to expose or rewrite commit email/history — decided: keep `webmaker9d@gmail.com` as is, no rewrite | — |
+| MAN-004 | Maintainer | DONE (2026-09-27) | Choose public security/privacy contact — `saadaanedu@gmail.com` | — |
+| MAN-005 | Maintainer | DONE (2026-09-27) | Verify code, asset, name, and trademark ownership — everything self-created/AI-generated, no formal trademark search (accepted risk) | — |
 | REP-001 | Agent | DONE | Harden ignores and complete repository secret scan | MAN-001 |
 | REP-002 | Agent | DONE | Remove generated artifacts and normalize lockfiles | REP-001 |
 | SEC-001 | Agent | DONE | Document the local trust boundary and authentication protocol | MAN-000 |
@@ -312,38 +312,77 @@ Maintainer actions:
 
 ### MAN-003 — Decide commit-history/email treatment
 
-Current baseline: 119 commits expose `Saadaan Hassan <webmaker9d@gmail.com>`.
+**DONE (2026-09-27).** Baseline confirmed: all 155 commits across all 3
+branches (`main`, `revamp-for-public`, `alternative-models` — all already
+pushed to `origin`) expose `Saadaan Hassan <webmaker9d@gmail.com>` as both
+author and committer. The agent looked into rewriting this (GitHub numeric
+ID `96711267` was fetched for a possible noreply-email replacement, and
+`git-filter-repo` would have needed installing via `brew`), but once the
+maintainer saw the actual blast radius — every commit hash changes across
+3 already-pushed branches, requiring a force-push to overwrite `origin` —
+the maintainer's explicit decision was: **don't remove it, keep it as is.**
+No history rewrite was performed.
 
 Maintainer actions:
 
-- [ ] Decide whether this address may remain public forever.
-- [ ] If not, explicitly authorize a history rewrite before publication and accept
-      that commit/tag hashes will change.
-- [ ] Configure a GitHub noreply address for future commits if desired.
-- [ ] If history is rewritten, verify every branch/tag and re-run `REP-001`.
+- [x] Decide whether this address may remain public forever. → Yes, keep
+      as is.
+- [x] If not, explicitly authorize a history rewrite before publication and accept
+      that commit/tag hashes will change. → N/A, no rewrite requested.
+- [ ] Configure a GitHub noreply address for future commits if desired. →
+      Not decided; future commits will keep using the current address
+      unless the maintainer sets up `git config user.email` differently.
+- [x] If history is rewritten, verify every branch/tag and re-run `REP-001`.
+      → N/A, no rewrite performed.
 
 ### MAN-004 — Choose public security/privacy contact
 
+**DONE (2026-09-27).** Maintainer chose `saadaanedu@gmail.com` as the
+public security contact. Already in `SECURITY.md` (both as the listed
+email and alongside GitHub Private Vulnerability Reporting as the
+preferred channel), with a best-effort (not SLA) response expectation.
+
 Maintainer actions:
 
-- [ ] Create or select a monitored contact address that can safely be public.
-- [ ] Decide whether GitHub private vulnerability reporting will be the preferred
-      security channel.
-- [ ] Define the response expectation honestly; do not promise an SLA you cannot
+- [x] Create or select a monitored contact address that can safely be public.
+- [x] Decide whether GitHub private vulnerability reporting will be the preferred
+      security channel. → Preferred; email is the fallback.
+- [x] Define the response expectation honestly; do not promise an SLA you cannot
       maintain.
-- [ ] Provide the address/wording to the agent doing `DOC-004`.
+- [x] Provide the address/wording to the agent doing `DOC-004`.
 
 ### MAN-005 — Verify ownership and naming
 
+**DONE (2026-09-27).** Maintainer confirmed, verbatim: nothing related to
+Orbit (the name, the logo) was purchased or licensed from a third party —
+the name was picked without a formal conflict search, and the logo was
+generated with AI, not sourced from a stock/paid asset library. There is
+therefore no third-party redistribution-rights issue to clear: everything
+is either original code, AI-generated, or already covered by
+`THIRD_PARTY_NOTICES.md`'s dependency scan. `Orbit` and its logo are not
+treated as reserved/registered trademarks.
+
+**Accepted, not eliminated, risk:** no formal trademark or "prior art"
+search was run against the name `Orbit` — it's a common English word
+already used by other unrelated software products, so a name conflict is
+possible even though nothing here infringes anything intentionally. The
+maintainer accepted this as-is rather than doing a formal search or
+renaming; revisit only if an actual conflict surfaces.
+
 Maintainer actions:
 
-- [ ] Confirm you have redistribution rights for every source file, generated
+- [x] Confirm you have redistribution rights for every source file, generated
       component, image, icon, font, screenshot, email template and marketing asset.
-- [ ] Review third-party snippets and AI-generated material for licensing issues.
+      → Yes — all self-created or AI-generated, nothing purchased/licensed.
+- [x] Review third-party snippets and AI-generated material for licensing issues.
+      → No third-party snippets found (see `THIRD_PARTY_NOTICES.md`); the
+      AI-generated logo has no known licensing encumbrance.
 - [ ] Search for conflicting software/package names and relevant trademarks.
-- [ ] Decide whether `Orbit` and the logo are reserved trademarks even while code
-      is open source.
-- [ ] Give `DOC-001` a list of required attributions/notices.
+      → Explicitly skipped by the maintainer's choice; accepted risk, see above.
+- [x] Decide whether `Orbit` and the logo are reserved trademarks even while code
+      is open source. → No.
+- [x] Give `DOC-001` a list of required attributions/notices. → None beyond
+      `THIRD_PARTY_NOTICES.md`'s existing dependency scan.
 
 ### REP-001 — Harden ignores and scan all repository history
 
@@ -2059,6 +2098,8 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-25 | APPSEC-001 | PARTIAL | Tauri CSP, `capabilities/default.json` | Restrictive CSP added; capabilities trimmed to exactly what the webview calls; missing updater/dialog/process permissions added. `cargo test` 37/37. | Maintainer should build a real `.dmg` and confirm devtools/local API/folder picker all still work under the new CSP, before `DONE`. |
 | 2026-09-26 | ADR-000 (pivot) | AMENDED | ~38 files across `app/`, `backend/`, `landing/`, docs | Maintainer decision: stop active development for now, drop packaged releases/`orbit-releases`/the Cloudflare Worker/the auto-updater/the Chrome Web Store listing entirely, point the landing page at GitHub. Voyage made BYOK-direct; Claude/Gemini service files deleted; `release.yml`/`publish-extension.yml`/`worker/`/`releases/` deleted; `AGENTS.md`/`README.md`/`CONTRIBUTING.md`/`THIRD_PARTY_NOTICES.md` rewritten. Retires `REL-001`/`REL-002`/`REL-003`, rescopes `MAN-006`/`MAN-009`/`MAN-010`. Full verification clean: backend 66/66, `cargo test` 37/37, `pnpm test` 10/10, landing build/lint clean, actionlint/zizmor clean. | Live teardown performed separately, see `MAN-006`'s entry below. |
 | 2026-09-26 | MAN-006 | PARTIAL | Live Cloudflare Worker (`orbit-api-proxy`), `orbit-releases` | Maintainer explicitly authorized the agent to do this directly, via the `github-personal` (`Saadaan-Hassan`) account. Deleted the deployed Worker (`wrangler delete`, confirmed gone — "This Worker does not exist on your account"). Archived (not deleted) `orbit-releases` (`gh repo archive`, confirmed `isArchived: true`) — chose archive over delete since it's reversible. | Provider-key revocation (Groq/Voyage/Anthropic/Gemini dashboards) still needs the maintainer's own account access. |
+| 2026-09-27 | MAN-004/005/003 | DONE | `SECURITY.md`, `CHANGELOG.md`, `.github/PULL_REQUEST_TEMPLATE.md`, `OPEN_SOURCE_ROADMAP.md` | Recorded three maintainer decisions directly given in conversation: `MAN-004` security contact is `saadaanedu@gmail.com` (already in `SECURITY.md` from earlier work). `MAN-005` — nothing Orbit-related was purchased/licensed (name picked freely, logo AI-generated); no formal trademark search was run, accepted as a known, non-blocking risk rather than pursued. `MAN-003` — maintainer initially asked to scrub `webmaker9d@gmail.com` from commit history, but after being shown the real scope (155 commits across 3 already-pushed branches, requiring a force-push to overwrite `origin`) via `AskUserQuestion`, decided to leave it as is; no rewrite was performed. While updating `SECURITY.md` for the new contact, found and fixed the same missed-in-the-pivot problem as `CONTRIBUTING.md`/`THIRD_PARTY_NOTICES.md` earlier: it and `CHANGELOG.md`/the PR template still described the deleted Worker/`orbit-releases`/auto-updater as if they existed. | None outstanding for these three. |
+| 2026-09-27 | (live testing) | DONE | `app/src-tauri/src/lib.rs`, `app/src-tauri/src/main.rs`, `app/src/App.tsx`, `app/src/hooks/useOnboarding.ts`, `app/src/components/OnboardingFlow.tsx`, `AGENTS.md` | Maintainer ran `pnpm tauri dev` for the first time since the pivot and hit three real, previously-undiscovered bugs — significant since first-launch self-build is now the *only* way anyone ever runs Orbit. **(1)** App stuck permanently on "Orbit couldn't start": the post-startup health check (`lib.rs`) only retried for 10×1s before giving up forever, and separately, `emit("backend-ready")` fired before React had mounted and registered its listener — Tauri doesn't queue events for late listeners, so a fast/warm backend's readiness signal was silently lost. Fixed both: extended the retry budget to 120×1s (generous enough for a first-ever `uv sync` on a cold machine) and added a `get_backend_status` command + managed `BackendReadyState` the frontend polls once its listeners are confirmed registered, closing the race regardless of which side finishes first. **(2)** Accessibility onboarding step opened System Settings but Orbit never appeared in the list at all: `check_accessibility_permission_granted` only called the read-only `AXIsProcessTrusted()`, which never registers the app with macOS's TCC system — nothing in the codebase called the prompting variant, so macOS had nothing to list. Added `trigger_accessibility_permission_prompt` (calls `AXIsProcessTrustedWithOptions` with the prompt option via the `core-foundation` crate, already a dependency), wired to fire once automatically when the onboarding step is first reached — the same pattern Browser Automation's step already used, which Accessibility was missing. **(3)** A follow-up crash (`OSError: address already in use` + repeated `401 Unauthorized` health-check attempts) turned out to be self-inflicted by iterating on the fix: `tauri dev`'s file-watcher restarts the Rust binary externally on every source edit, which never runs the app's own exit-hook cleanup (only wired to in-app quit actions), orphaning the previous run's `uv`/`uvicorn` child still bound to port 47821 — the new backend couldn't bind and crashed, and the health check kept hitting the *old* orphan with a mismatched token. Added `free_stale_dev_backend_port()`, called before every dev-mode backend spawn: kills a stale process on port 47821 only if its command line actually matches Orbit's own `uvicorn ... main:app` invocation, leaving anything unrecognized alone (preserves the original security stance against killing an arbitrary process on the port). Updated `AGENTS.md`'s `main.rs`/`lib.rs` Key Files entries to match. Verification: `cargo fmt --check`/`clippy -- -D warnings`/`cargo test --bin app` (37/37) and `pnpm typecheck`/`pnpm lint` (7 pre-existing warnings, 0 errors)/`pnpm test` (10/10) all clean after each fix; confirmed live by the maintainer — app now reaches onboarding successfully. | This directly demonstrates the real value of `PRIV-002`'s and `APPSEC-001`'s still-open "maintainer must live-test" requirements — neither task is flipped to `DONE` by this alone (onboarding wasn't walked through to completion, and this was a debug build, not a release `.dmg`), but it's concrete evidence that first-launch correctness cannot be assumed from static review alone. Recommend finishing at least one full onboarding walkthrough before treating `PRIV-002` as verified. |
 
 ---
 

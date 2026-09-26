@@ -23,6 +23,21 @@ fn secure_local_path(path: &std::path::Path, mode: u32) {
 /// lifecycle and never written to a file, Vite variable, URL, or analytics.
 struct LocalApiSessionToken(String);
 
+/// Result of the post-startup backend health check, readable via
+/// `get_backend_status`. `None` means the check is still running.
+///
+/// The health check can succeed within milliseconds when the backend was
+/// already warm (e.g. `uv`'s venv/cache already populated from a previous
+/// run) — often faster than the webview can finish loading React and
+/// registering its `backend-ready`/`backend-unavailable` listeners. A
+/// `Tauri emit()` fired before any listener is registered is simply lost,
+/// not queued, so a purely event-based design has a real race: the backend
+/// becomes healthy, the event fires into the void, and the frontend is left
+/// waiting for an event that already happened. Storing the result here lets
+/// the frontend poll for the current state once it mounts, closing that gap
+/// regardless of which happens first.
+struct BackendReadyState(std::sync::Mutex<Option<bool>>);
+
 pub fn generate_local_api_session_token() -> String {
     let mut token_bytes = [0_u8; 32];
     OsRng.fill_bytes(&mut token_bytes);
@@ -36,17 +51,6 @@ pub fn generate_local_api_session_token() -> String {
 // rather than a uv-spawned uvicorn process. The child handle is stored in Tauri
 // app state so the quit handler can cleanly terminate it.
 // ---------------------------------------------------------------------------
-
-/// Compile-time value baked into the sidecar at `pnpm tauri build` time.
-/// Gemini and Voyage keys are NOT here — they live in Cloudflare Worker
-/// secrets and never touch the user's machine. No PostHog/Sentry constant
-/// exists here — neither ships in the app at all (OBS-001).
-/// In dev mode this is an empty string; the uv backend reads it from backend/.env.
-#[cfg(not(debug_assertions))]
-const SIDECAR_WORKER_URL: &str = match option_env!("WORKER_URL") {
-    Some(v) => v,
-    None => "",
-};
 
 /// Wraps the sidecar child handle so it can be stored in Tauri app state and
 /// killed cleanly when the user quits.
@@ -94,6 +98,7 @@ fn kill_backend_process(app_handle: &tauri::AppHandle) {
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrusted() -> u8;
+    fn AXIsProcessTrustedWithOptions(options: core_foundation::dictionary::CFDictionaryRef) -> u8;
 }
 
 /// Returns true if the app has been granted Accessibility permission.
@@ -112,6 +117,39 @@ fn check_accessibility_permission_granted() -> bool {
     #[cfg(not(target_os = "macos"))]
     {
         true
+    }
+}
+
+/// Registers this process with macOS's TCC system and, if not yet decided,
+/// shows the native "Orbit would like to control this computer" dialog.
+///
+/// `AXIsProcessTrusted()` is read-only: it never causes the app to appear in
+/// System Settings > Privacy & Security > Accessibility at all if nothing
+/// has ever registered it. Every capture monitor in this codebase checks
+/// permission before attempting an AX call (to avoid doing anything without
+/// consent), so without this explicit registration step nothing ever
+/// triggers macOS to add Orbit to that list — the user is left staring at
+/// an Accessibility pane with no way to grant a permission that was never
+/// asked for. Call this once when the onboarding step is reached (or its
+/// "Open System Settings" button is clicked), not on every poll — it can
+/// surface a native system dialog, and this should only fire once until
+/// the user has actually decided.
+#[tauri::command]
+fn trigger_accessibility_permission_prompt() {
+    #[cfg(target_os = "macos")]
+    {
+        use core_foundation::base::TCFType;
+        use core_foundation::boolean::CFBoolean;
+        use core_foundation::dictionary::CFDictionary;
+        use core_foundation::string::CFString;
+
+        let prompt_key = CFString::new("AXTrustedCheckOptionPrompt");
+        let prompt_value = CFBoolean::from(true);
+        let options = CFDictionary::from_CFType_pairs(&[(prompt_key, prompt_value)]);
+
+        unsafe {
+            AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef());
+        }
     }
 }
 
@@ -137,6 +175,15 @@ fn get_onboarding_completed() -> bool {
 #[tauri::command]
 fn get_local_api_session_token(token: tauri::State<'_, LocalApiSessionToken>) -> String {
     token.0.clone()
+}
+
+/// Lets the frontend poll the backend health check's result on mount, instead
+/// of relying solely on the `backend-ready`/`backend-unavailable` events —
+/// see `BackendReadyState`'s doc comment for why the event alone can be
+/// missed. Returns `None` while the check is still in progress.
+#[tauri::command]
+fn get_backend_status(state: tauri::State<'_, BackendReadyState>) -> Option<bool> {
+    state.0.lock().ok().and_then(|guard| *guard)
 }
 
 /// Restarts the Tauri application using tauri-plugin-process.
@@ -293,6 +340,7 @@ where
                 Box::new(on_exit_hook) as Box<dyn FnOnce() + Send>,
             ))));
             app.manage(LocalApiSessionToken(local_api_session_token.clone()));
+            app.manage(BackendReadyState(std::sync::Mutex::new(None)));
 
             // Removes dock icon and Cmd+Tab entry on macOS.
             // Info.plist handles bundled builds; this covers dev mode.
@@ -440,7 +488,6 @@ where
                     .expect("orbit-backend sidecar not found in bundle")
                     .env("ORBIT_DB_PATH", &orbit_db_path)
                     .env("QDRANT_STORAGE_PATH", &qdrant_path)
-                    .env("WORKER_URL", SIDECAR_WORKER_URL)
                     .env("APP_ENVIRONMENT", "production")
                     .env("ORBIT_LOCAL_API_SESSION_TOKEN", &local_api_session_token)
                     .spawn()
@@ -449,11 +496,21 @@ where
                 app.manage(SidecarHandle(std::sync::Mutex::new(Some(sidecar_child))));
             }
 
-            // Poll GET /health up to 10 times (1-second intervals) so the
-            // frontend knows when the backend is actually ready. If it never
-            // responds, emit "backend-unavailable" so the UI can show a message.
-            // Once the backend is confirmed up, emit "backend-ready" so the UI
-            // can dismiss any loading overlay.
+            // Poll GET /health (1-second intervals) so the frontend knows when
+            // the backend is actually ready. Budget is generous — a self-build
+            // user's very first launch spawns `uv run uvicorn`, and if that
+            // machine has never run this backend before, `uv` resolves and
+            // installs the entire dependency set from scratch before uvicorn
+            // even starts, which can easily take over a minute on a slow
+            // connection. A short budget here has no way to recover once it
+            // gives up: emitting "backend-unavailable" is a one-shot signal
+            // the frontend cannot un-see, so if the backend comes up moments
+            // after this loop quits, the UI is stuck on an error screen for a
+            // backend that is, by then, perfectly healthy. `App.tsx`'s own
+            // independent startup-error fallback timer must stay >= this
+            // budget so it never fires first and pre-empts a check that's
+            // still running.
+            const HEALTH_CHECK_MAX_ATTEMPTS: u32 = 120;
             let health_check_app_handle = app.handle().clone();
             let health_check_token = local_api_session_token;
             tauri::async_runtime::spawn(async move {
@@ -463,19 +520,35 @@ where
                     .unwrap_or_default();
 
                 let mut backend_is_up = false;
-                for _ in 0..10 {
-                    if http_client
+                for attempt in 0..HEALTH_CHECK_MAX_ATTEMPTS {
+                    match http_client
                         .get("http://localhost:47821/health")
                         .bearer_auth(&health_check_token)
                         .send()
                         .await
-                        .map(|r| r.status().is_success())
-                        .unwrap_or(false)
                     {
-                        backend_is_up = true;
-                        break;
+                        Ok(response) => {
+                            let status = response.status();
+                            eprintln!("[health-check] attempt {attempt}: HTTP {status}");
+                            if status.is_success() {
+                                backend_is_up = true;
+                                break;
+                            }
+                        }
+                        Err(request_error) => {
+                            eprintln!(
+                                "[health-check] attempt {attempt}: request failed: {request_error}"
+                            );
+                        }
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+
+                if let Some(ready_state) = health_check_app_handle.try_state::<BackendReadyState>()
+                {
+                    if let Ok(mut guard) = ready_state.0.lock() {
+                        *guard = Some(backend_is_up);
+                    }
                 }
 
                 if backend_is_up {
@@ -489,9 +562,11 @@ where
         })
         .invoke_handler(tauri::generate_handler![
             check_accessibility_permission_granted,
+            trigger_accessibility_permission_prompt,
             open_accessibility_system_settings,
             get_onboarding_completed,
             get_local_api_session_token,
+            get_backend_status,
             mark_onboarding_completed,
             restart_app,
             quit_app,

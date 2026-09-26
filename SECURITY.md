@@ -2,12 +2,11 @@
 
 ## Supported versions
 
-Orbit is in beta (`v0.2.x`). Only the latest published release is
-supported — there is no parallel maintenance of older versions. Update to
-the latest `.dmg` from
-[orbit-releases](https://github.com/Saadaan-Hassan/orbit-releases/releases/latest)
-(or let the in-app auto-updater do it) before reporting an issue you
-haven't confirmed still reproduces.
+Orbit is source-only and self-build — there are no packaged releases or
+version numbers to track (see `AGENTS.md`'s `Distribution` section). Only
+the latest commit on the default branch is supported. Before reporting an
+issue, pull the latest source, rebuild (`pnpm tauri build`), and confirm it
+still reproduces.
 
 ## Reporting a vulnerability
 
@@ -26,11 +25,11 @@ Report privately using either of these:
 Include what you can:
 
 - The affected component (Rust capture module, FastAPI route, Tauri IPC
-  command, Cloudflare Worker, extension, landing site)
+  command, extension, landing site)
 - Steps to reproduce, or a proof of concept
 - What data or capability is exposed, and to whom (local-only vs.
   network-reachable)
-- Orbit version and macOS version
+- macOS version, and the commit/branch you built from
 
 ## What counts as a security issue here
 
@@ -44,10 +43,10 @@ Given what Orbit does, treat these as security reports, not ordinary bugs:
   fields, or that fires without a configured personal key
 - A way to read, modify, or exfiltrate another user's local `~/.orbit/`
   data
-- Any path that sends captured data to Orbit's Cloudflare Worker or
-  landing infrastructure in a way that isn't a direct BYOK passthrough
-  documented in `AGENTS.md`
-- Auto-updater signature verification bypass
+- Any path that sends captured data anywhere other than directly to the
+  user's own configured AI provider (BYOK) — there is no maintainer-run
+  server of any kind in between, by design (see `AGENTS.md`'s
+  `Distribution` section)
 
 General crashes, UI bugs, and capture accuracy issues are ordinary bugs —
 file those as a normal GitHub issue instead.
@@ -65,5 +64,5 @@ Response times are best-effort, not contractual:
 
 Public disclosure happens after a fix is available, or by mutual agreement
 with the reporter if a fix isn't feasible in a reasonable timeframe. Credit
-is given in the release notes and/or security advisory unless you ask to
+is given in the security advisory and/or commit message unless you ask to
 stay anonymous.

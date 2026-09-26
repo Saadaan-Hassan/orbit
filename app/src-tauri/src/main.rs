@@ -107,6 +107,54 @@ fn spawn_fastapi_backend(
         })
 }
 
+#[cfg(debug_assertions)]
+/// Kills a stale `uv`/`uvicorn` process left bound to port 47821 from a
+/// previous `pnpm tauri dev` session, if one is found.
+///
+/// `tauri dev`'s file-watcher restarts this binary on every source change by
+/// killing the *parent* Rust process externally — that never runs this app's
+/// own exit-hook cleanup (which only fires on an in-app quit action), so the
+/// FastAPI child it spawned is orphaned, still bound to the port, and blocks
+/// every subsequent restart from binding it: the new backend crashes with
+/// "address already in use", and the health check keeps hitting the old
+/// orphan (whose session token doesn't match the new one), failing with 401
+/// forever instead of the real error.
+///
+/// Only kills a process whose command line actually matches this backend's
+/// own known invocation (`uvicorn ... main:app`) — an unrelated process that
+/// happens to occupy the port is left alone, matching the existing
+/// intentional stance that a port collision with something unrecognized is
+/// for the authenticated readiness probe to report, not for this app to
+/// resolve by killing an arbitrary process.
+fn free_stale_dev_backend_port() {
+    let Ok(lsof_output) = Command::new("lsof").args(["-ti", "tcp:47821"]).output() else {
+        return;
+    };
+    if !lsof_output.status.success() {
+        return;
+    }
+
+    for pid in std::str::from_utf8(&lsof_output.stdout)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.is_empty())
+    {
+        let Ok(ps_output) = Command::new("ps")
+            .args(["-p", pid, "-o", "command="])
+            .output()
+        else {
+            continue;
+        };
+        let command_line = String::from_utf8_lossy(&ps_output.stdout);
+        if command_line.contains("uvicorn") && command_line.contains("main:app") {
+            eprintln!(
+                "[dev-backend] killing stale backend process {pid} still bound to port 47821"
+            );
+            let _ = Command::new("kill").args(["-9", pid]).status();
+        }
+    }
+}
+
 fn main() {
     // Build an explicit multi-threaded tokio runtime instead of using
     // #[tokio::main] — Tauri's event loop must block the main thread, and
@@ -213,8 +261,13 @@ fn main() {
             format!("{}/../../backend", src_tauri_directory)
         });
 
-        // A port collision is handled by the authenticated readiness probe; do
-        // not kill or trust an arbitrary process that owns the shared port.
+        // Clear out our own orphaned backend from a previous dev-mode restart
+        // before spawning a fresh one (see free_stale_dev_backend_port's doc
+        // comment) — an unrecognized process on the port is left alone, and
+        // that remaining collision case is handled by the authenticated
+        // readiness probe rather than by killing an arbitrary process.
+        free_stale_dev_backend_port();
+
         let fastapi_child_process = spawn_fastapi_backend(
             &backend_directory_path,
             &local_api_session_token,

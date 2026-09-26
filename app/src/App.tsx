@@ -42,11 +42,18 @@ export default function App() {
     isCollapsedRef.current = isCollapsed;
   }, [isCollapsed]);
 
-  // Transition to a hard error screen if the backend hasn't responded within 15 s.
+  // Transition to a hard error screen if the backend hasn't responded within
+  // 125 s. This must stay >= the Rust health check's own budget
+  // (HEALTH_CHECK_MAX_ATTEMPTS in lib.rs, 120 one-second attempts) so this
+  // frontend-only failsafe never fires first and shows an error for a
+  // backend that's still within its normal startup window — a first launch
+  // on a self-build machine spawns `uv run uvicorn`, which resolves and
+  // installs the entire Python dependency set from scratch before the
+  // backend can even start, and that alone can take over a minute.
   // Cancels immediately if backendStatus reaches "ready" before the timer fires.
   useEffect(() => {
     if (backendStatus === "ready") return;
-    const timeout = setTimeout(() => setStartupErrored(true), 15_000);
+    const timeout = setTimeout(() => setStartupErrored(true), 125_000);
     return () => clearTimeout(timeout);
   }, [backendStatus]);
 
@@ -134,6 +141,25 @@ export default function App() {
     const unlistenReadyPromise = listen("backend-ready", () => {
       setBackendStatus("ready");
     });
+
+    // Tauri events are not queued for late listeners: if the health check
+    // finishes (often within milliseconds on an already-warm backend) before
+    // this effect finishes registering the listeners above, its event fires
+    // into the void and this window is left waiting forever for an event
+    // that already happened. Once both listeners are confirmed active, poll
+    // the current result directly as a fallback for anything already decided
+    // — this closes the race regardless of which side wins it.
+    Promise.all([unlistenUnavailablePromise, unlistenReadyPromise])
+      .then(() => invoke<boolean | null>("get_backend_status"))
+      .then((isReady) => {
+        if (isReady === true) {
+          setBackendStatus("ready");
+        } else if (isReady === false) {
+          setBackendStatus("unavailable");
+          setStartupErrored(true);
+        }
+      })
+      .catch((err) => console.error("Failed to poll backend status:", err));
 
     return () => {
       unlistenNavigatePromise.then((unlisten) => unlisten());
@@ -235,7 +261,8 @@ export default function App() {
                 </h1>
               </div>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed font-light">
-                Setting up your memory assistant. This takes a few seconds on first launch.
+                Setting up your memory assistant. This is usually a few seconds, but can take a
+                minute or two the very first time while dependencies install.
               </p>
             </div>
           </div>

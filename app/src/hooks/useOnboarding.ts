@@ -21,6 +21,7 @@ export interface OnboardingState {
   saveCaptureConsent: (choices: CaptureConsentChoices) => Promise<void>;
   skipCaptureConsent: () => Promise<void>;
   checkAccessibilityPermission: () => Promise<boolean>;
+  requestAccessibilityPermission: () => Promise<void>;
   openAccessibilitySettings: () => Promise<void>;
   checkBrowserAutomation: () => Promise<boolean>;
   requestBrowserAutomation: () => Promise<void>;
@@ -81,6 +82,19 @@ export function useOnboarding(): OnboardingState {
       return granted;
     } catch {
       return false;
+    }
+  }, []);
+
+  // Registers Orbit with macOS's TCC system (and surfaces the native
+  // permission dialog if the user hasn't decided yet). Without this,
+  // Orbit never appears in System Settings' Accessibility list at all —
+  // `AXIsProcessTrusted()` alone only reads status, it never causes macOS
+  // to add an entry for an app that's never asked.
+  const requestAccessibilityPermission = useCallback(async (): Promise<void> => {
+    try {
+      await invoke("trigger_accessibility_permission_prompt");
+    } catch {
+      // Best-effort — the user can still enable it manually if this fails.
     }
   }, []);
 
@@ -200,6 +214,7 @@ export function useOnboarding(): OnboardingState {
     saveCaptureConsent,
     skipCaptureConsent,
     checkAccessibilityPermission,
+    requestAccessibilityPermission,
     openAccessibilitySettings,
     checkBrowserAutomation,
     requestBrowserAutomation,

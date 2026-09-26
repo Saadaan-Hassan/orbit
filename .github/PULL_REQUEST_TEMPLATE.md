@@ -6,8 +6,7 @@
 ## Tests
 
 - [ ] I ran the relevant workspace's test suite (`backend`: `unittest`,
-      `app/src-tauri`: `cargo test`, `worker`: `npm run test`, `app`:
-      `pnpm build`) and it passes.
+      `app/src-tauri`: `cargo test`, `app`: `pnpm build`) and it passes.
 - [ ] I added or updated tests for the behavior this PR changes.
 - [ ] No tests apply (docs-only, config-only, etc.) — explain why:
 
