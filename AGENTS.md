@@ -221,12 +221,7 @@ orbit/
 │   ├── THREAT_MODEL.md                     ← what's defended against, mitigations, explicit non-goals
 │   ├── PRIVACY_DATA_FLOW.md                ← field-by-field: every captured type, sanitization point, what's sent to AI
 │   ├── adr/                                ← one ADR per material architecture decision (local API auth, consent, sanitization, Keychain storage, Tauri hardening, lazy semantic search, telemetry removal)
-│   ├── Orbit_Complete_Build_Plan.md
-│   ├── PHASE_0.md                          ← ✅ complete
-│   ├── PHASE_1.md                          ← ✅ complete
-│   ├── PHASE_2.md                          ← ✅ complete
-│   └── design/
-│       └── orb-reference.png               ← orb animation reference (Phase 4)
+│   └── screenshots/                        ← app screenshots used in root README.md
 ├── app/                                    ← Tauri v2 desktop app
 │   ├── src/
 │   │   ├── main.tsx                        ← app entry point, renders <App /> (no telemetry wrapper — OBS-001)
