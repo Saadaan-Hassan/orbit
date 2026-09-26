@@ -201,7 +201,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 |---|---|---|---|---|
 | MAN-000 | Maintainer | DONE | Accept or replace ADR-000 target architecture | — |
 | MAN-001 | Maintainer | PARTIAL (2026-09-27) | Create private backup and external-service inventory — backup + GitHub-side inventory done (2 real findings for MAN-011, see below); external accounts still need maintainer's dashboard access | — |
-| MAN-002 | Maintainer | TODO | Choose the source license | — |
+| MAN-002 | Maintainer | DONE (2026-09-27) | Choose the source license — Apache-2.0, copyright line confirmed correct | — |
 | MAN-003 | Maintainer | DONE (2026-09-27) | Decide whether to expose or rewrite commit email/history — decided: keep `webmaker9d@gmail.com` as is, no rewrite | — |
 | MAN-004 | Maintainer | DONE (2026-09-27) | Choose public security/privacy contact — `saadaanedu@gmail.com` | — |
 | MAN-005 | Maintainer | DONE (2026-09-27) | Verify code, asset, name, and trademark ownership — everything self-created/AI-generated, no formal trademark search (accepted risk) | — |
@@ -225,7 +225,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | COST-005 | Agent | PARTIAL | Add predictable offline/rate-limit/provider failure behavior | COST-003, COST-004 |
 | OBS-001 | Agent | DONE | Remove default remote telemetry or make it genuine opt-in | MAN-000, PRIV-001 |
 | SITE-001 | Agent | DONE | Convert landing site to static, no-waitlist operation | MAN-000 |
-| DOC-001 | Agent | PARTIAL | Add chosen license and dependency/asset notices | MAN-002, MAN-005 |
+| DOC-001 | Agent | PARTIAL | Add chosen license and dependency/asset notices — only remaining item is verifying GitHub's license auto-detection once public (MAN-012) | MAN-002, MAN-005 |
 | DOC-002 | Agent | PARTIAL | Create the root public README and build guide | COST-005, DOC-001 |
 | DOC-003 | Agent | PARTIAL | Rewrite privacy policy and all product privacy claims | PRIV-006, OBS-001 |
 | DOC-004 | Agent | DONE | Add contribution, security, support, conduct, and governance files | MAN-004, DOC-001 |
@@ -335,26 +335,22 @@ Maintainer actions:
 **Recommendation:** Apache-2.0 for a permissive license with an express patent
 grant. Choose AGPL-3.0 only if strong network copyleft is intentional.
 
-**Decision recorded (2026-09-25), status left for the maintainer to flip:**
-maintainer chose **Apache-2.0**, confirmed directly in conversation after an
-agent-run dependency-license scan across all five workspaces (582 Rust
-crates, 40 Python packages, all JS/TS trees) found nothing that would
-constrain the choice — see `THIRD_PARTY_NOTICES.md`. Copyright holder was
-not asked as a separate question; the agent proceeded with "Saadaan Hassan,
-2026" (matching every git commit author and the project's actual start
-date) and used it in `LICENSE`/`Cargo.toml`/`package.json` files, flagged
-for correction if wrong. Per this file's own agent rules, only the
-maintainer may flip this row to `DONE` — do so once the copyright holder
-name above is confirmed correct.
+**DONE (2026-09-27).** Maintainer chose **Apache-2.0** (2026-09-25), confirmed
+directly in conversation after an agent-run dependency-license scan across
+all workspaces (582 Rust crates, 40 Python packages, all JS/TS trees) found
+nothing that would constrain the choice — see `THIRD_PARTY_NOTICES.md`. The
+copyright holder name the agent proposed, "Saadaan Hassan, 2026" (matching
+every git commit author and the project's actual start date), was
+separately confirmed correct by the maintainer on 2026-09-27 — no
+correction needed.
 
 Maintainer actions:
 
 - [x] Confirm the exact SPDX identifier: `Apache-2.0` or another OSI-approved
       license. → Apache-2.0.
-- [ ] Confirm the copyright holder name and starting year. → Agent used
-      "Saadaan Hassan, 2026" without this being separately confirmed;
-      check `LICENSE` and correct if needed.
-- [ ] Understand that an open-source license does not prevent competitors from
+- [x] Confirm the copyright holder name and starting year. → Confirmed
+      correct: "Saadaan Hassan, 2026" in `LICENSE`.
+- [x] Understand that an open-source license does not prevent competitors from
       using the software according to that license.
 - [x] Record the decision for `DOC-001`. → Done, see above; `DOC-001` has
       already used this decision (see its own entry).
@@ -1224,26 +1220,25 @@ waitlist/Supabase removal itself is unaffected and still accurate.
 
 ### DOC-001 — Add license and notices
 
-**Current status: PARTIAL (2026-09-25).** `MAN-002` was resolved in
-conversation with the maintainer (Apache-2.0; see its own entry — its
-Task Index row is deliberately left `TODO` since only the maintainer may
-flip a `MAN-*` row). Added the exact, byte-verified-against-apache.org
+**PARTIAL, nearly DONE (updated 2026-09-27).** `MAN-002` and `MAN-005` are
+both now `DONE` — Apache-2.0 chosen and the copyright line confirmed
+correct; nothing purchased/licensed from a third party, so no asset
+attributions or `TRADEMARKS.md` are needed beyond what's already in
+`THIRD_PARTY_NOTICES.md`. Added the exact, byte-verified-against-apache.org
 Apache-2.0 text to root `LICENSE` with a `Copyright 2026 Saadaan Hassan`
-line (unconfirmed — see `MAN-002`). Wrote `THIRD_PARTY_NOTICES.md` from a
-full dependency-license scan of all five workspaces: no copyleft that
-propagates to Orbit's own source, no unknown/missing licenses; a few
-benign transitive items (MPL-2.0 file-level copyleft, LGPL dynamic-link
-only, GPLv2 dev-tooling with a bootloader exception) documented rather
-than silently passed over. Aligned `license = "Apache-2.0"` across all
-five workspace manifests (`backend/pyproject.toml`, `app/src-tauri/Cargo.toml`,
-`app/package.json`, `landing/package.json`, `worker/package.json` — the
-last of which was wrongly `"ISC"`, npm's `init` default, never actually
-chosen). No `NOTICE` file added (no dependency required one) and no
-`TRADEMARKS.md` (conditional on `MAN-005`, which hasn't happened). Held at
-`PARTIAL`: asset attributions (fonts/icons/images) can't be completed until
-`MAN-005`'s redistribution-rights review happens, and GitHub's own
-license-detection can only be confirmed once the repo is actually visible
-there in some form.
+line (now confirmed correct). Wrote `THIRD_PARTY_NOTICES.md` from a full
+dependency-license scan of all workspaces: no copyleft that propagates to
+Orbit's own source, no unknown/missing licenses; a few benign transitive
+items (MPL-2.0 file-level copyleft, LGPL dynamic-link only, GPLv2
+dev-tooling with a bootloader exception) documented rather than silently
+passed over. Aligned `license = "Apache-2.0"` across every workspace
+manifest still in the repo (`backend/pyproject.toml`,
+`app/src-tauri/Cargo.toml`, `app/package.json`, `landing/package.json` —
+`worker/package.json` no longer exists, deleted in the 2026-09-26 pivot).
+No `NOTICE` file added (no dependency required one). Only remaining item:
+GitHub's own license auto-detection can't be confirmed until the repo is
+actually public (`MAN-012`) — that's the one thing genuinely gated on a
+step that hasn't happened yet, not an open question.
 
 Implementation requirements:
 
@@ -1260,14 +1255,15 @@ Acceptance criteria:
 
 - [ ] GitHub can detect the root license. Implemented correctly (root
       `LICENSE`, unmodified standard text, matches GitHub's own detection
-      convention) but unverified — no live GitHub repo to check this
-      against yet.
-- [x] All package license fields agree. All five workspace manifests now
-      say `Apache-2.0`; verified each still parses (`uv run`, `cargo
-      check`, and JSON validation on all three `package.json` files).
-- [ ] Dependency and asset notices are complete. Dependency notices are
-      complete (`THIRD_PARTY_NOTICES.md`). Asset notices (fonts, icons,
-      images, logo) are not — blocked on `MAN-005`.
+      convention) but genuinely can't be verified until `MAN-012` makes the
+      repo visible — not an open question, just a check that comes later.
+- [x] All package license fields agree. Every workspace manifest still in
+      the repo says `Apache-2.0`; verified each still parses (`uv run`,
+      `cargo check`, and JSON validation on the `package.json` files).
+- [x] Dependency and asset notices are complete. Dependency notices are
+      complete (`THIRD_PARTY_NOTICES.md`); `MAN-005` confirmed no asset
+      attributions are needed (nothing purchased/licensed from a third
+      party — self-created or AI-generated).
 - [x] No dependency with an incompatible/unknown license is silently
       accepted. None found; the borderline ones (MPL/LGPL/GPL-dev-tool)
       are documented, not ignored.
@@ -2151,6 +2147,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-27 | (live testing) | DONE | `app/src-tauri/src/lib.rs`, `app/src-tauri/src/main.rs`, `app/src/App.tsx`, `app/src/hooks/useOnboarding.ts`, `app/src/components/OnboardingFlow.tsx`, `AGENTS.md` | Maintainer ran `pnpm tauri dev` for the first time since the pivot and hit three real, previously-undiscovered bugs — significant since first-launch self-build is now the *only* way anyone ever runs Orbit. **(1)** App stuck permanently on "Orbit couldn't start": the post-startup health check (`lib.rs`) only retried for 10×1s before giving up forever, and separately, `emit("backend-ready")` fired before React had mounted and registered its listener — Tauri doesn't queue events for late listeners, so a fast/warm backend's readiness signal was silently lost. Fixed both: extended the retry budget to 120×1s (generous enough for a first-ever `uv sync` on a cold machine) and added a `get_backend_status` command + managed `BackendReadyState` the frontend polls once its listeners are confirmed registered, closing the race regardless of which side finishes first. **(2)** Accessibility onboarding step opened System Settings but Orbit never appeared in the list at all: `check_accessibility_permission_granted` only called the read-only `AXIsProcessTrusted()`, which never registers the app with macOS's TCC system — nothing in the codebase called the prompting variant, so macOS had nothing to list. Added `trigger_accessibility_permission_prompt` (calls `AXIsProcessTrustedWithOptions` with the prompt option via the `core-foundation` crate, already a dependency), wired to fire once automatically when the onboarding step is first reached — the same pattern Browser Automation's step already used, which Accessibility was missing. **(3)** A follow-up crash (`OSError: address already in use` + repeated `401 Unauthorized` health-check attempts) turned out to be self-inflicted by iterating on the fix: `tauri dev`'s file-watcher restarts the Rust binary externally on every source edit, which never runs the app's own exit-hook cleanup (only wired to in-app quit actions), orphaning the previous run's `uv`/`uvicorn` child still bound to port 47821 — the new backend couldn't bind and crashed, and the health check kept hitting the *old* orphan with a mismatched token. Added `free_stale_dev_backend_port()`, called before every dev-mode backend spawn: kills a stale process on port 47821 only if its command line actually matches Orbit's own `uvicorn ... main:app` invocation, leaving anything unrecognized alone (preserves the original security stance against killing an arbitrary process on the port). Updated `AGENTS.md`'s `main.rs`/`lib.rs` Key Files entries to match. Verification: `cargo fmt --check`/`clippy -- -D warnings`/`cargo test --bin app` (37/37) and `pnpm typecheck`/`pnpm lint` (7 pre-existing warnings, 0 errors)/`pnpm test` (10/10) all clean after each fix; confirmed live by the maintainer — app now reaches onboarding successfully. | This directly demonstrates the real value of `PRIV-002`'s and `APPSEC-001`'s still-open "maintainer must live-test" requirements — neither task is flipped to `DONE` by this alone (onboarding wasn't walked through to completion, and this was a debug build, not a release `.dmg`), but it's concrete evidence that first-launch correctness cannot be assumed from static review alone. Recommend finishing at least one full onboarding walkthrough before treating `PRIV-002` as verified. |
 | 2026-09-27 | MAN-001 | PARTIAL | `~/Documents/Projects/Personal/orbit-backups/` (outside this repo) | Created a full `git bundle --all` (13 refs: both branches, 3 `origin/*` mirrors, 6 version tags), verified via `git bundle verify` and a real restore into a scratch clone (branches + latest commit confirmed intact, scratch clone deleted after). Inventoried GitHub via `gh api`/`gh run list`/`gh release list`: 1 Actions secret (`RELEASES_REPO_TOKEN`, name only — stale, no consumer left, should be revoked), 3 unused deployment Environments (`dev`/`Preview`/`Production`, no protection rules), no deploy keys/webhooks/Pages/Discussions, wiki flag on but zero pages, no branch protection (expected pre-launch). Found and flagged two real pre-launch risks in the private write-up and in `MAN-001`'s own entry: 3 GitHub Releases still on the *source* repo with real signed `v0.1.0` binaries attached (predates almost all security/privacy hardening in this roadmap — would let anyone bypass the self-build-only model), and 8 historical `Release` workflow runs whose logs leak `TAURI_SIGNING_PRIVATE_KEY`'s exact character count (`REL-001` fixed the workflow file, not these already-recorded logs). Neither was deleted — both are destructive actions on the remote repo needing explicit sign-off first. | External-account inventory (Groq/Voyage/Anthropic/Gemini/Vercel/Supabase/Resend/PostHog/Sentry/registrar/Chrome Web Store) needs the maintainer's own dashboard access — left as a template table in the private file. The two release/workflow-log findings should be resolved before `MAN-012`. |
 | 2026-09-27 | MAN-001 (findings) | DONE | Live GitHub state: `Saadaan-Hassan/orbit` releases, Actions run history | Maintainer gave explicit sign-off to act on both findings above. Agent deleted all 3 stale `v0.1.0` releases (`gh api -X DELETE repos/Saadaan-Hassan/orbit/releases/<id>` for IDs 336371802, 336386513, 339332495) — confirmed via a follow-up listing returning 0 releases. Agent's attempt to delete the 8 historical `Release` workflow runs via a `gh run delete` loop was blocked by its own permission system ("External System Writes" on a batch operation, no smaller-pieces retry allowed); maintainer ran the same 8-ID loop directly instead and confirmed success — `gh run list` now returns zero runs for this repo. | Both pre-launch risks from `MAN-001`'s inventory are now resolved. Remaining `MAN-001` gap is only the external-account inventory table, which still needs the maintainer's own dashboard access. |
+| 2026-09-27 | MAN-002 | DONE | `LICENSE`, `OPEN_SOURCE_ROADMAP.md` | Maintainer confirmed the copyright line the agent proposed on 2026-09-25 ("Saadaan Hassan, 2026") is correct, closing the one open item from `DOC-001`'s original license work. | `DOC-001` updated to reflect both its dependencies (`MAN-002`, `MAN-005`) now being `DONE` — its only remaining gap is verifying GitHub's license auto-detection once the repo is actually public (`MAN-012`), which isn't an open question, just a check that comes later. |
 
 ---
 
