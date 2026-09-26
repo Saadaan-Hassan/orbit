@@ -8,3 +8,16 @@ a00ebb99d2bf04315bfdc09edc36b54ac99f5328:app/src-tauri/src/capture/clipboard.rs:
 a00ebb99d2bf04315bfdc09edc36b54ac99f5328:app/src-tauri/src/capture/clipboard.rs:gcp-api-key:293
 a00ebb99d2bf04315bfdc09edc36b54ac99f5328:app/src-tauri/src/capture/clipboard.rs:generic-api-key:297
 a00ebb99d2bf04315bfdc09edc36b54ac99f5328:app/src-tauri/src/capture/clipboard.rs:stripe-access-token:301
+
+# Synthetic BYOK test fixtures (fake key strings used to test the
+# save/enable/disable/delete flow, never real credentials). Found by
+# CI-002's new gitleaks CI job on its first run against existing history —
+# fixed at HEAD to be constructed at runtime (see the referenced test
+# files), so these fingerprints only cover the already-committed commits
+# where the literal string was still present.
+d58b5573cef488404c5e817759f5aef567b2bfff:backend/tests/test_voyage_byok.py:generic-api-key:194
+d58b5573cef488404c5e817759f5aef567b2bfff:backend/tests/test_voyage_byok.py:generic-api-key:197
+d58b5573cef488404c5e817759f5aef567b2bfff:backend/tests/test_voyage_byok.py:generic-api-key:207
+1a5f6bb78a614e3bfb7d6ae8eaf31afa0f5f1a7c:backend/tests/test_groq_byok.py:generic-api-key:273
+1a5f6bb78a614e3bfb7d6ae8eaf31afa0f5f1a7c:backend/tests/test_groq_byok.py:generic-api-key:276
+1a5f6bb78a614e3bfb7d6ae8eaf31afa0f5f1a7c:backend/tests/test_groq_byok.py:generic-api-key:291
