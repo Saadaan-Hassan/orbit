@@ -14,8 +14,8 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
-    /* Path aliases */
-    "baseUrl": ".",
+    /* Path aliases — no baseUrl (deprecated in TS 6.0); paths alone
+       resolves relative to this file since TS 4.1 */
     "paths": {
       "@/*": ["./src/*"]
     },
