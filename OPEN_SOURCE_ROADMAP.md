@@ -200,7 +200,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | ID | Owner | Status | Task | Depends on |
 |---|---|---|---|---|
 | MAN-000 | Maintainer | DONE | Accept or replace ADR-000 target architecture | — |
-| MAN-001 | Maintainer | TODO | Create private backup and external-service inventory | — |
+| MAN-001 | Maintainer | PARTIAL (2026-09-27) | Create private backup and external-service inventory — backup + GitHub-side inventory done (2 real findings for MAN-011, see below); external accounts still need maintainer's dashboard access | — |
 | MAN-002 | Maintainer | TODO | Choose the source license | — |
 | MAN-003 | Maintainer | DONE (2026-09-27) | Decide whether to expose or rewrite commit email/history — decided: keep `webmaker9d@gmail.com` as is, no rewrite | — |
 | MAN-004 | Maintainer | DONE (2026-09-27) | Choose public security/privacy contact — `saadaanedu@gmail.com` | — |
@@ -264,22 +264,63 @@ Maintainer actions:
 
 ### MAN-001 — Create backup and service inventory
 
-**Why manual:** The backup must live outside the working repository, and account
-configuration is not fully represented in Git.
+**PARTIAL (2026-09-27).** Backup and the GitHub-side inventory are done; the
+external-account inventory table is a template only — it needs the
+maintainer's own dashboard access to fill in, which the agent doesn't have
+beyond Cloudflare (already confirmed empty — the Worker was deleted in an
+earlier session). Full write-up:
+`~/Documents/Projects/Personal/orbit-backups/MAN-001-inventory-2026-09-27.md`
+(private, outside this repo, per this task's own instruction).
+
+**Two real findings surfaced while inventorying GitHub, relevant to
+`MAN-011`/`MAN-012` — not fixed here, both are destructive/remote actions
+needing explicit sign-off first:**
+
+1. **Three GitHub Releases exist directly on the source repo** (not
+   `orbit-releases`), all `v0.1.0`, with real attached binaries (`.dmg`,
+   `.app.tar.gz`, signature, updater manifest). This build predates nearly
+   all of this roadmap's security/privacy hardening (no local API auth, no
+   consent gating, telemetry still present) — going public with these still
+   attached would let anyone download that old, unhardened build directly,
+   defeating the "self-build only" model entirely.
+2. **8 historical `Release` workflow runs leak `TAURI_SIGNING_PRIVATE_KEY`'s
+   exact character count** (`Signing key is present (348 chars)`) in their
+   logs — the metadata leak `REL-001` found and fixed in the *current*
+   workflow file, which does nothing for these already-recorded historical
+   logs. They stay publicly viewable forever once the repo goes public.
+
+Recommend deleting both before `MAN-012`. Also found: a live
+`RELEASES_REPO_TOKEN` Actions secret with no remaining consumer (should be
+revoked+deleted) and 3 GitHub-created deployment Environments (`dev`,
+`Preview`, `Production`, no protection rules — `Preview`/`Production` look
+Vercel-integration-generated, worth confirming still needed).
 
 Maintainer actions:
 
-- [ ] Create an encrypted bare mirror or `git bundle` containing every ref.
-- [ ] Store it outside the public repository and confirm it can be read/verified.
-- [ ] Export a list of GitHub Actions secret/variable **names**, environments,
+- [x] Create an encrypted bare mirror or `git bundle` containing every ref.
+      → Plain (unencrypted) `git bundle --all`, chose this over an encrypted
+      mirror since it already lives outside the repo in a private,
+      user-only-permissioned directory — encrypt it yourself if it'll ever
+      leave that machine.
+- [x] Store it outside the public repository and confirm it can be read/verified.
+      → Stored in a sibling `orbit-backups/` directory; verified via
+      `git bundle verify` AND a real restore into a scratch clone (not just
+      the integrity check) — branches and latest commit confirmed intact.
+- [x] Export a list of GitHub Actions secret/variable **names**, environments,
       deploy keys, webhooks, installed GitHub Apps, Pages settings, branch/tag
       rules, releases, artifacts, caches and LFS objects. Never export secret values
-      into this repository.
+      into this repository. → Done via `gh api`/`gh run list`/`gh release list`;
+      full results in the private inventory file above, only names/metadata,
+      no secret values read or recorded. Surfaced the two findings above.
 - [ ] Inventory Cloudflare, Groq, Voyage, Anthropic, Gemini, Vercel, Supabase,
       Resend, PostHog, Sentry, domain registrar and Chrome Web Store accounts.
+      → Template table left in the inventory file; needs the maintainer's
+      own dashboard access for everything except Cloudflare (confirmed
+      empty — Worker already deleted).
 - [ ] Record which accounts have payment methods, auto-recharge, paid plans,
-      usage caps, stored user data, API keys and active deployments.
-- [ ] Save the inventory privately, not in this repository.
+      usage caps, stored user data, API keys and active deployments. →
+      Same gap as above.
+- [x] Save the inventory privately, not in this repository. → Done, see path above.
 
 ### MAN-002 — Choose the source license
 
@@ -2100,6 +2141,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-26 | MAN-006 | PARTIAL | Live Cloudflare Worker (`orbit-api-proxy`), `orbit-releases` | Maintainer explicitly authorized the agent to do this directly, via the `github-personal` (`Saadaan-Hassan`) account. Deleted the deployed Worker (`wrangler delete`, confirmed gone — "This Worker does not exist on your account"). Archived (not deleted) `orbit-releases` (`gh repo archive`, confirmed `isArchived: true`) — chose archive over delete since it's reversible. | Provider-key revocation (Groq/Voyage/Anthropic/Gemini dashboards) still needs the maintainer's own account access. |
 | 2026-09-27 | MAN-004/005/003 | DONE | `SECURITY.md`, `CHANGELOG.md`, `.github/PULL_REQUEST_TEMPLATE.md`, `OPEN_SOURCE_ROADMAP.md` | Recorded three maintainer decisions directly given in conversation: `MAN-004` security contact is `saadaanedu@gmail.com` (already in `SECURITY.md` from earlier work). `MAN-005` — nothing Orbit-related was purchased/licensed (name picked freely, logo AI-generated); no formal trademark search was run, accepted as a known, non-blocking risk rather than pursued. `MAN-003` — maintainer initially asked to scrub `webmaker9d@gmail.com` from commit history, but after being shown the real scope (155 commits across 3 already-pushed branches, requiring a force-push to overwrite `origin`) via `AskUserQuestion`, decided to leave it as is; no rewrite was performed. While updating `SECURITY.md` for the new contact, found and fixed the same missed-in-the-pivot problem as `CONTRIBUTING.md`/`THIRD_PARTY_NOTICES.md` earlier: it and `CHANGELOG.md`/the PR template still described the deleted Worker/`orbit-releases`/auto-updater as if they existed. | None outstanding for these three. |
 | 2026-09-27 | (live testing) | DONE | `app/src-tauri/src/lib.rs`, `app/src-tauri/src/main.rs`, `app/src/App.tsx`, `app/src/hooks/useOnboarding.ts`, `app/src/components/OnboardingFlow.tsx`, `AGENTS.md` | Maintainer ran `pnpm tauri dev` for the first time since the pivot and hit three real, previously-undiscovered bugs — significant since first-launch self-build is now the *only* way anyone ever runs Orbit. **(1)** App stuck permanently on "Orbit couldn't start": the post-startup health check (`lib.rs`) only retried for 10×1s before giving up forever, and separately, `emit("backend-ready")` fired before React had mounted and registered its listener — Tauri doesn't queue events for late listeners, so a fast/warm backend's readiness signal was silently lost. Fixed both: extended the retry budget to 120×1s (generous enough for a first-ever `uv sync` on a cold machine) and added a `get_backend_status` command + managed `BackendReadyState` the frontend polls once its listeners are confirmed registered, closing the race regardless of which side finishes first. **(2)** Accessibility onboarding step opened System Settings but Orbit never appeared in the list at all: `check_accessibility_permission_granted` only called the read-only `AXIsProcessTrusted()`, which never registers the app with macOS's TCC system — nothing in the codebase called the prompting variant, so macOS had nothing to list. Added `trigger_accessibility_permission_prompt` (calls `AXIsProcessTrustedWithOptions` with the prompt option via the `core-foundation` crate, already a dependency), wired to fire once automatically when the onboarding step is first reached — the same pattern Browser Automation's step already used, which Accessibility was missing. **(3)** A follow-up crash (`OSError: address already in use` + repeated `401 Unauthorized` health-check attempts) turned out to be self-inflicted by iterating on the fix: `tauri dev`'s file-watcher restarts the Rust binary externally on every source edit, which never runs the app's own exit-hook cleanup (only wired to in-app quit actions), orphaning the previous run's `uv`/`uvicorn` child still bound to port 47821 — the new backend couldn't bind and crashed, and the health check kept hitting the *old* orphan with a mismatched token. Added `free_stale_dev_backend_port()`, called before every dev-mode backend spawn: kills a stale process on port 47821 only if its command line actually matches Orbit's own `uvicorn ... main:app` invocation, leaving anything unrecognized alone (preserves the original security stance against killing an arbitrary process on the port). Updated `AGENTS.md`'s `main.rs`/`lib.rs` Key Files entries to match. Verification: `cargo fmt --check`/`clippy -- -D warnings`/`cargo test --bin app` (37/37) and `pnpm typecheck`/`pnpm lint` (7 pre-existing warnings, 0 errors)/`pnpm test` (10/10) all clean after each fix; confirmed live by the maintainer — app now reaches onboarding successfully. | This directly demonstrates the real value of `PRIV-002`'s and `APPSEC-001`'s still-open "maintainer must live-test" requirements — neither task is flipped to `DONE` by this alone (onboarding wasn't walked through to completion, and this was a debug build, not a release `.dmg`), but it's concrete evidence that first-launch correctness cannot be assumed from static review alone. Recommend finishing at least one full onboarding walkthrough before treating `PRIV-002` as verified. |
+| 2026-09-27 | MAN-001 | PARTIAL | `~/Documents/Projects/Personal/orbit-backups/` (outside this repo) | Created a full `git bundle --all` (13 refs: both branches, 3 `origin/*` mirrors, 6 version tags), verified via `git bundle verify` and a real restore into a scratch clone (branches + latest commit confirmed intact, scratch clone deleted after). Inventoried GitHub via `gh api`/`gh run list`/`gh release list`: 1 Actions secret (`RELEASES_REPO_TOKEN`, name only — stale, no consumer left, should be revoked), 3 unused deployment Environments (`dev`/`Preview`/`Production`, no protection rules), no deploy keys/webhooks/Pages/Discussions, wiki flag on but zero pages, no branch protection (expected pre-launch). Found and flagged two real pre-launch risks in the private write-up and in `MAN-001`'s own entry: 3 GitHub Releases still on the *source* repo with real signed `v0.1.0` binaries attached (predates almost all security/privacy hardening in this roadmap — would let anyone bypass the self-build-only model), and 8 historical `Release` workflow runs whose logs leak `TAURI_SIGNING_PRIVATE_KEY`'s exact character count (`REL-001` fixed the workflow file, not these already-recorded logs). Neither was deleted — both are destructive actions on the remote repo needing explicit sign-off first. | External-account inventory (Groq/Voyage/Anthropic/Gemini/Vercel/Supabase/Resend/PostHog/Sentry/registrar/Chrome Web Store) needs the maintainer's own dashboard access — left as a template table in the private file. The two release/workflow-log findings should be resolved before `MAN-012`. |
 
 ---
 
