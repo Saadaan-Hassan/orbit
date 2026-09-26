@@ -153,6 +153,7 @@ class LocalApiSecurityTests(unittest.TestCase):
         for route in app.routes:
             if not isinstance(route, APIRoute):
                 continue
+            assert route.methods is not None
             method = next(method for method in route.methods if method not in {"HEAD", "OPTIONS"})
             with self.subTest(method=method, path=route.path):
                 self.assertEqual(client.request(method, route.path).status_code, 401)
