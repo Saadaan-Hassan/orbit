@@ -237,11 +237,11 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | REL-002 | Agent | N/A (2026-09-26) | ~~Add checksums, SBOM/provenance, smoke tests, and updater validation~~ — retired, nothing is built/shipped | REL-001 |
 | REL-003 | Agent | N/A (2026-09-26) | ~~Document and preserve `orbit-releases` compatibility~~ — retired, `orbit-releases` archived | REL-002 |
 | MAN-006 | Maintainer | DONE (2026-09-27) | Tear down the live Cloudflare Worker and revoke its provider keys — Worker/orbit-releases handled by the agent, Groq/Voyage keys revoked by the maintainer | COST-002 |
-| MAN-007 | Maintainer | PARTIAL (2026-09-27) | Export/delete waitlist data and retire paid/free-tier services — Resend key revoked, Supabase paused, Vercel deliberately kept (landing page already matches "idea + GitHub link only"); only open item is whether any pre-SITE-001 waitlist signups need exporting/deleting from the paused Supabase project | SITE-001 |
+| MAN-007 | Maintainer | DONE (2026-09-27) | Export/delete waitlist data and retire paid/free-tier services — Resend key revoked, Supabase confirmed staying paused (not deleted, final decision), Vercel deliberately kept (landing page already matches "idea + GitHub link only") | SITE-001 |
 | MAN-008 | Maintainer | DONE (2026-09-27) | Configure or remove telemetry accounts and retained data — PostHog and Sentry orgs deleted entirely | OBS-001 |
 | MAN-009 | Maintainer | DONE (2026-09-26) | Choose and verify $0 macOS distribution posture — decided: source-only self-build, no downloads of any kind | — |
 | MAN-010 | Maintainer | DONE (2026-09-26) | Choose and verify $0 extension distribution posture — decided: source-only self-build, no Chrome Web Store listing | — |
-| MAN-011 | Maintainer | PARTIAL (2026-09-27) | Audit GitHub private settings, logs, artifacts, and secrets — found and fixed `main` being 2+ months stale (never had the hardening work merged in); only remaining item is revoking the unused `RELEASES_REPO_TOKEN` | CI-002, REL-003 |
+| MAN-011 | Maintainer | DONE (2026-09-27) | Audit GitHub private settings, logs, artifacts, and secrets — found and fixed `main` being 2+ months stale (never had the hardening work merged in); `RELEASES_REPO_TOKEN` deleted as a repo secret (the underlying PAT still needs the maintainer to revoke it via GitHub's web UI, no API for that) | CI-002, REL-003 |
 | MAN-012 | Maintainer | TODO | Make repository public and immediately apply public settings | All launch gates |
 | MAN-013 | Maintainer | TODO | Publish transparent open-source announcement | MAN-012 |
 
@@ -2088,21 +2088,17 @@ Maintainer actions:
 
 ### MAN-007 — Retire waitlist and unnecessary hosted services
 
-**PARTIAL (2026-09-27).** The waitlist form/Supabase client/Resend
-integration were already deleted from the codebase in `SITE-001` — this
-task is about the maintainer's actual external accounts, not code. Maintainer
-paused the Supabase project (reversible, not deleted outright), and revoked
-the Resend key for this project (2026-09-27).
-
-**Held at `PARTIAL`, not `DONE`, for one honest reason:** the "export the
-waitlist" / "notify or delete entries per the privacy promise" items depend
-on whether anyone actually signed up before `SITE-001` removed the form,
-and that data (if it exists at all) is sitting dormant in the now-paused
-Supabase project, not deleted. This wasn't asked about directly and is a
-soft, conditional requirement in the original text ("only if there is a
-documented lawful need to retain it") rather than a hard blocker — noted
-here rather than silently closed out, so it isn't forgotten if it matters
-later.
+**DONE (2026-09-27).** The waitlist form/Supabase client/Resend integration
+were already deleted from the codebase in `SITE-001` — this task is about
+the maintainer's actual external accounts, not code. Maintainer paused the
+Supabase project (reversible, not deleted outright) and revoked the Resend
+key for this project. Explicitly confirmed (2026-09-27): the Supabase
+project stays paused, not deleted — a deliberate final decision, not a
+placeholder pending further action. That resolves the one item this task
+was otherwise held open for: whatever waitlist signups (if any) exist
+pre-`SITE-001` remain in the paused project rather than being exported or
+deleted, which the maintainer has now explicitly accepted as the end
+state.
 
 **Vercel decision (2026-09-27):** maintainer chose to keep the landing site
 deployed on Vercel rather than moving it to GitHub Pages/Cloudflare Pages —
@@ -2118,12 +2114,16 @@ code change was needed.
 
 Maintainer actions:
 
-- [ ] Export the waitlist only if there is a documented lawful need to retain it.
-- [ ] Notify/delete entries according to the published privacy promise.
-- [~] Delete Supabase service-role keys, table/project when no longer needed.
-      → Paused, not deleted. Fine if that's the intended end state (no
-      billing, no live access, but data retained) — flag if you'd rather
-      delete it outright instead.
+- [x] Export the waitlist only if there is a documented lawful need to retain it.
+      → No lawful-need determination was made; maintainer chose to leave any
+      data in place (paused, not exported/deleted) rather than act on it.
+- [x] Notify/delete entries according to the published privacy promise. →
+      Superseded by the decision below — the project stays paused, not
+      actioned further.
+- [x] Delete Supabase service-role keys, table/project when no longer needed.
+      → **Confirmed final decision (2026-09-27): stays paused, not
+      deleted.** No billing, no live access; any data present remains at
+      rest in the paused project rather than being exported or removed.
 - [x] Revoke Resend keys and remove unused domain/sender configuration. →
       Key revoked (2026-09-27).
 - [x] Remove the Vercel deployment/project if the static site moves elsewhere.
@@ -2132,9 +2132,10 @@ Maintainer actions:
       above — staying on Vercel by choice.
 - [ ] Use a free platform subdomain if literally zero annual cost is required.
       → Only relevant if Vercel's own free tier doesn't already cover this;
-      worth a quick check of the Vercel plan/billing itself.
+      a maintainer-side billing check, not something the agent can verify.
 - [ ] Remove payment methods/paid plans where possible and confirm no background
-      resource remains billable.
+      resource remains billable. → Same as above — maintainer-side billing
+      check on the Vercel/Supabase accounts themselves.
 
 ### MAN-008 — Telemetry accounts and retained data
 
@@ -2194,8 +2195,9 @@ rebuilds from source.
 
 ### MAN-011 — Audit private GitHub state before visibility change
 
-**PARTIAL (2026-09-27).** Full read-only audit performed via `gh api`; one
-critical finding required action and was resolved, everything else is
+**DONE (2026-09-27).** Full read-only audit performed via `gh api`; one
+critical finding required action and was resolved, and the one remaining
+credential item (`RELEASES_REPO_TOKEN`) was closed out. Everything else is
 either already clean or correctly deferred to `MAN-012`'s own checklist.
 
 **🔴 Critical finding, resolved:** `main` (the default branch) was stuck at
@@ -2232,16 +2234,22 @@ Maintainer actions:
       enabled but has zero pages — nothing to review. 0 issues, 0 PRs, so 0
       commit comments to check.
 - [x] Review Actions secrets/variables, environments, deploy keys, webhooks,
-      installed Apps and collaborator access. → 1 secret
-      (`RELEASES_REPO_TOKEN`, stale/unused — flagged in `MAN-001`, still not
-      revoked at time of writing); 3 unused deployment Environments
+      installed Apps and collaborator access. → 1 secret found
+      (`RELEASES_REPO_TOKEN`, stale/unused — flagged in `MAN-001`, deleted
+      2026-09-27 via `gh secret delete`); 3 unused deployment Environments
       (`dev`/`Preview`/`Production`, likely Vercel-integration-generated,
       no protection rules); no deploy keys, webhooks, or installed Apps
       found; collaborators is just the owner, single admin.
-- [ ] Replace broad PATs with least-privileged fine-grained tokens. → The
-      one PAT found (`RELEASES_REPO_TOKEN`) should be revoked outright
-      rather than replaced, since nothing consumes it anymore (see
-      `MAN-001`). Not yet done.
+- [x] Replace broad PATs with least-privileged fine-grained tokens. →
+      Revoked outright instead, since nothing consumes it anymore (see
+      `MAN-001`). **Partial completion, honestly noted:** `gh secret delete`
+      removes it as a usable repo secret (no workflow can reach it), but
+      there is no API for a user to list/revoke their own PAT — GitHub only
+      exposes that via the web UI. The underlying token technically still
+      exists until the maintainer deletes it themselves at
+      github.com/settings/tokens (or the fine-grained equivalent). Flagged
+      to the maintainer directly; not something the agent can verify or
+      complete from here.
 - [x] Ensure default Actions token permissions are read-only. → Already
       `read` (confirmed via `gh api repos/.../actions/permissions/workflow`).
 - [ ] Prepare public issue/discussion settings and private vulnerability
@@ -2372,6 +2380,8 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-27 | DOC-006 (revised) | DONE | `docs/PHASE_0.MD` through `docs/PHASE_3_PRE_BETA.md` (9 files, deleted), `docs/Oribit_Complete_Build_Plan.md` (deleted), `docs/PROUCT_VISION_AND_UX_DIRECTION.md` (deleted), `docs/FUSION_PROMPT.md` (deleted), `docs/LANDING_PAGE_AUDIT.md` (deleted), `AGENTS.md` | Maintainer asked to remove docs that don't need to be public. These 13 files were exactly the "pre-hardening planning docs" `DOC-006` had earlier added historical-disclaimer banners to (2026-09-25) rather than deleting, per that task's own "retain useful design history" instruction — internal build-phase logs, an internal landing-page audit, an internal build plan, and a product-vision doc, all written 2026-09-06 and already known to contain claims that actively contradict the current architecture (waitlist, PostHog/Sentry, Claude-as-provider, a "Phase 0 not started" status on a phase that's done) even with the disclaimer. Deleted all 13 with `git rm`; content remains recoverable from git history if ever needed. Fixed `AGENTS.md`'s monorepo tree, which referenced 4 of them plus a `docs/design/orb-reference.png` that turned out to have never actually existed in this repo (a pre-existing stale reference, not something this deletion broke) — the tree's `docs/` entry now lists only what's actually there: `ARCHITECTURE.md`, `THREAT_MODEL.md`, `PRIVACY_DATA_FLOW.md`, `adr/`, `screenshots/`. Checked for other references first (`grep` across `.md`/`.json`/`.ts`/`.tsx`) — only `AGENTS.md` and this roadmap referenced any of them by name. | None outstanding. |
 | 2026-09-27 | DOC-004 (revised) | DONE | `GOVERNANCE.md`, `SUPPORT.md`, `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `.github/ISSUE_TEMPLATE/bug_report.yml`, `.github/ISSUE_TEMPLATE/question_support.yml` | Full inventory of every doc file in the repo first (`find . -iname '*.md'` plus `.github/`), then rewrote exactly the ones making promises that won't be kept, given the maintainer's confirmation they won't be maintaining this project at all going forward (not "best-effort solo" — genuinely unstaffed) and intend it as a public reference/fork base. `GOVERNANCE.md`: replaced the active decision-making process description with a plain statement that nobody is making decisions, PRs may go unreviewed, and forking is the explicit path if someone wants it governed. `SUPPORT.md`: replaced "best-effort, no SLA" (still implies someone's watching) with "no guarantee of any response at all." `SECURITY.md`: removed the "acknowledgement within a few days" commitment, kept the private-disclosure-over-public-issue guidance since that costs a reporter nothing either way. `CONTRIBUTING.md`: added an upfront disclaimer, reframed from "how to get merged" to "the conventions this codebase was built with," removed "the maintainer decides what merges" framing. `CODE_OF_CONDUCT.md`: kept the standard Contributor Covenant text intact (useful as-is for a maintained fork) but prepended a note that Enforcement isn't currently staffed — a smaller, more honest fix than rewriting a recognized standard template. Also fixed two stale issue-template references found in passing: `bug_report.yml` asked for "the filename of the .dmg you installed" (no `.dmg`s exist post-pivot; now asks for the exact commit built from instead) and tightened `question_support.yml`'s SLA language to match `SUPPORT.md`'s stronger framing. Verified via a repo-wide grep for "best-effort"/"within a few days"/"promptly"/"SLA" that no unintended promise-language survived outside the deliberately-rewritten files. | None outstanding. |
 | 2026-09-27 | MAN-011 | PARTIAL | `main` branch (GitHub), `alternative-models` branch (deleted) | Full read-only audit via `gh api` (Actions runs/artifacts, branches/tags/releases, issues/PRs, secrets/environments/deploy-keys/webhooks/apps, collaborators, default token permissions, rulesets). Found a critical issue: `main` was stuck at a 2026-07-14 commit, over two months before this roadmap started — none of the `SEC-*`/`PRIV-*`/`COST-*`/`DOC-*`/`CI-*` work or the pivot had ever been merged from `revamp-for-public` back to `main`. Going public as `main` stood would have shown visitors the old, unhardened, pre-pivot repo by default. Maintainer said "merge" when asked how to resolve it. First attempt used the stale `origin/revamp-for-public` ref and undershot by 18 commits (that session's own work — the pivot, `MAN-001`, doc rewrites, `DOC-005`, `DOC-002` screenshots — had never been pushed); caught this by checking `GOVERNANCE.md`'s content on the newly-updated `main` and finding the old text still there instead of the rewrite. Corrected by fast-forwarding from the actual local `revamp-for-public` branch instead (still a clean fast-forward, `main` was a strict ancestor throughout) and pushing both branches. Verified via `gh api` that `origin/main`'s HEAD and `CONTRIBUTING.md`'s presence now match. Also deleted the stale `alternative-models` branch (confirmed fully merged into `main` first, nothing lost). | The one remaining item is revoking the unused `RELEASES_REPO_TOKEN` Actions secret (flagged since `MAN-001`, still live). Everything else `MAN-011` asked for is either done or correctly deferred to `MAN-012`'s own checklist (issue/discussion settings, private vulnerability reporting, branch protection — all "enable at publish time" steps). |
+| 2026-09-27 | MAN-011 | DONE | `RELEASES_REPO_TOKEN` (GitHub Actions secret) | Maintainer asked to revoke this, closing `MAN-011`'s last item. Deleted via `gh secret delete RELEASES_REPO_TOKEN --repo Saadaan-Hassan/orbit`; confirmed via `gh secret list` returning empty. Honestly noted the limit of what this accomplishes: it removes the credential as a usable repo secret (no workflow can reach it — moot anyway since its only consumers, `release.yml`/`publish-extension.yml`, are deleted), but there is no GitHub API for a user to list or revoke their own PAT — that requires the web UI. Told the maintainer directly they still need to delete the underlying token at github.com/settings/tokens (or the fine-grained equivalent) for it to be fully revoked, not just unusable from this repo. | The maintainer still needs to manually revoke the underlying PAT via GitHub's web UI — not verifiable or completable from here. |
+| 2026-09-27 | MAN-007 | DONE | (external accounts only, no code) | Maintainer explicitly confirmed the Supabase project stays paused, not deleted — a final decision, not a placeholder. This resolves the one item `MAN-007` was held open for (whatever waitlist signups, if any, exist pre-`SITE-001` remain in the paused project rather than being exported or deleted). Updated the checklist to reflect this as a deliberate, informed choice rather than an unresolved gap. Two minor items remain unchecked by design — checking whether Vercel's free tier already covers hosting, and confirming no stray payment method remains on either account — both are maintainer-side billing checks the agent has no way to verify. | The two unchecked billing-check items are low-stakes maintainer follow-ups, not blockers. |
 
 ---
 
