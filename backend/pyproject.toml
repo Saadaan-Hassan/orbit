@@ -7,7 +7,7 @@ license = "Apache-2.0"
 requires-python = ">=3.14"
 dependencies = [
     "aiosqlite>=0.22.1",
-    "apscheduler>=3.10,<4.0",
+    "apscheduler>=3.11.3,<4.0",
     "fastapi>=0.136.3",
     "greenlet>=3.5.6",
     "httpx>=0.28.1",
