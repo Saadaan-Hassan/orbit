@@ -241,7 +241,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | MAN-008 | Maintainer | DONE (2026-09-27) | Configure or remove telemetry accounts and retained data — PostHog and Sentry orgs deleted entirely | OBS-001 |
 | MAN-009 | Maintainer | DONE (2026-09-26) | Choose and verify $0 macOS distribution posture — decided: source-only self-build, no downloads of any kind | — |
 | MAN-010 | Maintainer | DONE (2026-09-26) | Choose and verify $0 extension distribution posture — decided: source-only self-build, no Chrome Web Store listing | — |
-| MAN-011 | Maintainer | TODO | Audit GitHub private settings, logs, artifacts, and secrets | CI-002, REL-003 |
+| MAN-011 | Maintainer | PARTIAL (2026-09-27) | Audit GitHub private settings, logs, artifacts, and secrets — found and fixed `main` being 2+ months stale (never had the hardening work merged in); only remaining item is revoking the unused `RELEASES_REPO_TOKEN` | CI-002, REL-003 |
 | MAN-012 | Maintainer | TODO | Make repository public and immediately apply public settings | All launch gates |
 | MAN-013 | Maintainer | TODO | Publish transparent open-source announcement | MAN-012 |
 
@@ -2194,20 +2194,64 @@ rebuilds from source.
 
 ### MAN-011 — Audit private GitHub state before visibility change
 
+**PARTIAL (2026-09-27).** Full read-only audit performed via `gh api`; one
+critical finding required action and was resolved, everything else is
+either already clean or correctly deferred to `MAN-012`'s own checklist.
+
+**🔴 Critical finding, resolved:** `main` (the default branch) was stuck at
+commit `7b148c0`, "Bump version to 0.2.4," dated 2026-07-14 — over two
+months before this entire roadmap started. It had no `CONTRIBUTING.md`, no
+`SECURITY.md`, no roadmap, and the pre-pivot Cloudflare Worker/unhardened
+architecture. Every single task in this roadmap happened on
+`revamp-for-public`, which was never merged back. If the repo had gone
+public as `main` stood, visitors would have seen the *old*, unhardened
+state by default. Root cause compounded by a second issue found while
+fixing the first: the initial fast-forward attempt used the stale
+`origin/revamp-for-public` ref, which was itself 18 commits behind the
+local `revamp-for-public` branch — none of that session's work (the pivot,
+`MAN-001`, the doc rewrites, `DOC-005`, `DOC-002` screenshots) had ever been
+pushed. Fixed by fast-forwarding `main` to the actual local
+`revamp-for-public` tip (a clean fast-forward both times — `main` was a
+strict ancestor throughout, no conflicts possible) and pushing both
+branches. Verified via `gh api` that `origin/main`'s HEAD commit and
+`CONTRIBUTING.md`'s presence match the intended state.
+
 Maintainer actions:
 
-- [ ] Review every historical Actions run/log; delete any exposing private paths,
-      emails, repository names, environment data or secret values.
-- [ ] Review/delete Actions artifacts and caches that should not become public.
-- [ ] Review all branches, tags, releases, LFS objects, discussions, issues, PRs,
-      commit comments and wiki content.
-- [ ] Review Actions secrets/variables, environments, deploy keys, webhooks,
-      installed Apps and collaborator access.
-- [ ] Replace broad PATs with least-privileged fine-grained tokens.
-- [ ] Ensure default Actions token permissions are read-only.
-- [ ] Prepare public issue/discussion settings and private vulnerability reporting.
-- [ ] Record existing rulesets because GitHub may disable push rulesets during the
-      private-to-public visibility change.
+- [x] Review every historical Actions run/log; delete any exposing private paths,
+      emails, repository names, environment data or secret values. → 0 runs
+      remain (the 8 leaking the signing-key length were deleted per
+      `MAN-001`'s findings; nothing has run since).
+- [x] Review/delete Actions artifacts and caches that should not become public.
+      → 0 artifacts, 0 caches remain.
+- [x] Review all branches, tags, releases, LFS objects, discussions, issues, PRs,
+      commit comments and wiki content. → `main` fixed (above); deleted the
+      stale `alternative-models` branch (fully merged into `main` already,
+      nothing lost). 6 historical version tags, no action needed. 0
+      releases (deleted per `MAN-001`). No LFS. Discussions disabled. Wiki
+      enabled but has zero pages — nothing to review. 0 issues, 0 PRs, so 0
+      commit comments to check.
+- [x] Review Actions secrets/variables, environments, deploy keys, webhooks,
+      installed Apps and collaborator access. → 1 secret
+      (`RELEASES_REPO_TOKEN`, stale/unused — flagged in `MAN-001`, still not
+      revoked at time of writing); 3 unused deployment Environments
+      (`dev`/`Preview`/`Production`, likely Vercel-integration-generated,
+      no protection rules); no deploy keys, webhooks, or installed Apps
+      found; collaborators is just the owner, single admin.
+- [ ] Replace broad PATs with least-privileged fine-grained tokens. → The
+      one PAT found (`RELEASES_REPO_TOKEN`) should be revoked outright
+      rather than replaced, since nothing consumes it anymore (see
+      `MAN-001`). Not yet done.
+- [x] Ensure default Actions token permissions are read-only. → Already
+      `read` (confirmed via `gh api repos/.../actions/permissions/workflow`).
+- [ ] Prepare public issue/discussion settings and private vulnerability
+      reporting. → Deferred to `MAN-012`'s own checklist, which already
+      covers enabling these at publish time; `has_issues` is already `true`,
+      `has_discussions` is `false` (leave off unless wanted).
+- [x] Record existing rulesets because GitHub may disable push rulesets during the
+      private-to-public visibility change. → None exist currently
+      (`gh api repos/.../rulesets` returns an empty array) — nothing to
+      record, `MAN-012` starts from a clean slate here.
 
 ### MAN-012 — Make repository public and immediately secure it
 
@@ -2327,6 +2371,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-27 | DOC-002 | DONE | `docs/screenshots/*.png` (new), `README.md`, `~/.orbit/orbit.db` (dummy sessions) | Closed the one item `DOC-002` had been missing since 2026-09-25. Screenshots turned out achievable once the maintainer granted Screen Recording permission — the earlier "no way to launch/capture the GUI app" note was an environmental gap, not a fundamental one. The real database had 251 genuine events from development testing (real file paths, real screen text) that would have been inappropriate in a public README; rather than wipe real data, added 11 realistic placeholder sessions across 3 days (mixed work/personal projects, some recurring across days to show continuity) via direct SQLite inserts. Maintainer then captured real screenshots of Recall, Timeline, and two Privacy views, explicitly skipping Memories/Events since real data was still visible there. Verified each of the 4 chosen screenshots actually shows what its filename claims before wiring them in. Placed each screenshot next to the specific claim it supports in `README.md` (Recall+Timeline under "What Orbit does", capture-consent toggles under "What it captures", BYOK fields under "Cloud AI") with an explicit caption noting the session content is placeholder data — not silently passing off fake data as real usage. Also fixed a stale `worker/README.md` reference in `DOC-002`'s own status note (`worker/` was deleted in the pivot). | None outstanding for `DOC-002`. |
 | 2026-09-27 | DOC-006 (revised) | DONE | `docs/PHASE_0.MD` through `docs/PHASE_3_PRE_BETA.md` (9 files, deleted), `docs/Oribit_Complete_Build_Plan.md` (deleted), `docs/PROUCT_VISION_AND_UX_DIRECTION.md` (deleted), `docs/FUSION_PROMPT.md` (deleted), `docs/LANDING_PAGE_AUDIT.md` (deleted), `AGENTS.md` | Maintainer asked to remove docs that don't need to be public. These 13 files were exactly the "pre-hardening planning docs" `DOC-006` had earlier added historical-disclaimer banners to (2026-09-25) rather than deleting, per that task's own "retain useful design history" instruction — internal build-phase logs, an internal landing-page audit, an internal build plan, and a product-vision doc, all written 2026-09-06 and already known to contain claims that actively contradict the current architecture (waitlist, PostHog/Sentry, Claude-as-provider, a "Phase 0 not started" status on a phase that's done) even with the disclaimer. Deleted all 13 with `git rm`; content remains recoverable from git history if ever needed. Fixed `AGENTS.md`'s monorepo tree, which referenced 4 of them plus a `docs/design/orb-reference.png` that turned out to have never actually existed in this repo (a pre-existing stale reference, not something this deletion broke) — the tree's `docs/` entry now lists only what's actually there: `ARCHITECTURE.md`, `THREAT_MODEL.md`, `PRIVACY_DATA_FLOW.md`, `adr/`, `screenshots/`. Checked for other references first (`grep` across `.md`/`.json`/`.ts`/`.tsx`) — only `AGENTS.md` and this roadmap referenced any of them by name. | None outstanding. |
 | 2026-09-27 | DOC-004 (revised) | DONE | `GOVERNANCE.md`, `SUPPORT.md`, `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `.github/ISSUE_TEMPLATE/bug_report.yml`, `.github/ISSUE_TEMPLATE/question_support.yml` | Full inventory of every doc file in the repo first (`find . -iname '*.md'` plus `.github/`), then rewrote exactly the ones making promises that won't be kept, given the maintainer's confirmation they won't be maintaining this project at all going forward (not "best-effort solo" — genuinely unstaffed) and intend it as a public reference/fork base. `GOVERNANCE.md`: replaced the active decision-making process description with a plain statement that nobody is making decisions, PRs may go unreviewed, and forking is the explicit path if someone wants it governed. `SUPPORT.md`: replaced "best-effort, no SLA" (still implies someone's watching) with "no guarantee of any response at all." `SECURITY.md`: removed the "acknowledgement within a few days" commitment, kept the private-disclosure-over-public-issue guidance since that costs a reporter nothing either way. `CONTRIBUTING.md`: added an upfront disclaimer, reframed from "how to get merged" to "the conventions this codebase was built with," removed "the maintainer decides what merges" framing. `CODE_OF_CONDUCT.md`: kept the standard Contributor Covenant text intact (useful as-is for a maintained fork) but prepended a note that Enforcement isn't currently staffed — a smaller, more honest fix than rewriting a recognized standard template. Also fixed two stale issue-template references found in passing: `bug_report.yml` asked for "the filename of the .dmg you installed" (no `.dmg`s exist post-pivot; now asks for the exact commit built from instead) and tightened `question_support.yml`'s SLA language to match `SUPPORT.md`'s stronger framing. Verified via a repo-wide grep for "best-effort"/"within a few days"/"promptly"/"SLA" that no unintended promise-language survived outside the deliberately-rewritten files. | None outstanding. |
+| 2026-09-27 | MAN-011 | PARTIAL | `main` branch (GitHub), `alternative-models` branch (deleted) | Full read-only audit via `gh api` (Actions runs/artifacts, branches/tags/releases, issues/PRs, secrets/environments/deploy-keys/webhooks/apps, collaborators, default token permissions, rulesets). Found a critical issue: `main` was stuck at a 2026-07-14 commit, over two months before this roadmap started — none of the `SEC-*`/`PRIV-*`/`COST-*`/`DOC-*`/`CI-*` work or the pivot had ever been merged from `revamp-for-public` back to `main`. Going public as `main` stood would have shown visitors the old, unhardened, pre-pivot repo by default. Maintainer said "merge" when asked how to resolve it. First attempt used the stale `origin/revamp-for-public` ref and undershot by 18 commits (that session's own work — the pivot, `MAN-001`, doc rewrites, `DOC-005`, `DOC-002` screenshots — had never been pushed); caught this by checking `GOVERNANCE.md`'s content on the newly-updated `main` and finding the old text still there instead of the rewrite. Corrected by fast-forwarding from the actual local `revamp-for-public` branch instead (still a clean fast-forward, `main` was a strict ancestor throughout) and pushing both branches. Verified via `gh api` that `origin/main`'s HEAD and `CONTRIBUTING.md`'s presence now match. Also deleted the stale `alternative-models` branch (confirmed fully merged into `main` first, nothing lost). | The one remaining item is revoking the unused `RELEASES_REPO_TOKEN` Actions secret (flagged since `MAN-001`, still live). Everything else `MAN-011` asked for is either done or correctly deferred to `MAN-012`'s own checklist (issue/discussion settings, private vulnerability reporting, branch protection — all "enable at publish time" steps). |
 
 ---
 
