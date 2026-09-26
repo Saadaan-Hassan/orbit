@@ -9,6 +9,57 @@ const WHAT_YOULL_NEED = [
   "Accessibility permission, granted during first launch (you'll be guided through it)",
 ];
 
+const FAQ_ITEMS = [
+  {
+    question: "Who created Orbit?",
+    answer:
+      "Orbit was created by Saadaan Hassan (saadaan.dev), who publishes it as an open-source reference project rather than a commercially maintained product.",
+  },
+  {
+    question: "Is Orbit free to use?",
+    answer:
+      "Yes. Orbit is fully open source and free — there's no purchase, subscription, or paywalled tier. You build it from source and run it on your own Mac.",
+  },
+  {
+    question: "Does Orbit need an internet connection?",
+    answer:
+      "No. Local keyword search over your captured activity works fully offline. Cloud AI features (natural-language recall, semantic search) are optional and only activate if you add your own Groq or Voyage AI key.",
+  },
+  {
+    question: "What does \"bring your own key\" (BYOK) mean?",
+    answer:
+      "Orbit never holds its own AI provider key, and there's no maintainer-run server in between. You add your own free Groq API key for AI-powered recall and summaries, and optionally your own Voyage AI key for semantic search. Orbit calls those providers directly from your Mac.",
+  },
+  {
+    question: "Where is my data stored?",
+    answer:
+      "Everything Orbit captures stays in a local SQLite database on your own Mac. Nothing is uploaded anywhere unless you configure a cloud AI key yourself — and even then, only already-redacted content is sent, directly to the provider you chose.",
+  },
+  {
+    question: "Is Orbit actively maintained?",
+    answer:
+      "No. Orbit is published as a finished, open-source reference project — issues and pull requests may not get a response. It's meant to be read, forked, and built upon rather than supported.",
+  },
+  {
+    question: "Which platforms does Orbit support?",
+    answer:
+      "macOS 13 (Ventura) or later today. It's built on Tauri, so Windows support is architecturally possible, but it isn't implemented.",
+  },
+];
+
+const FAQ_JSON_LD = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: FAQ_ITEMS.map(({ question, answer }) => ({
+    "@type": "Question",
+    name: question,
+    acceptedAnswer: {
+      "@type": "Answer",
+      text: answer,
+    },
+  })),
+};
+
 const HOW_IT_WORKS = [
   {
     step: "01",
@@ -33,6 +84,11 @@ const HOW_IT_WORKS = [
 export default function Page() {
   return (
     <main className="grow flex flex-col">
+      <script
+        type="application/ld+json"
+        // eslint-disable-next-line react/no-danger
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(FAQ_JSON_LD) }}
+      />
       {/* ── Hero ─────────────────────────────────────────────────────────── */}
       <section className="relative flex flex-col items-center justify-center pt-16 pb-20 px-6 text-center max-w-6xl mx-auto w-full">
         <div className="relative z-10 flex flex-col items-center gap-8 max-w-3xl mx-auto">
@@ -150,6 +206,37 @@ export default function Page() {
               Read our privacy policy →
             </a>
           </p>
+        </div>
+      </section>
+
+      {/* ── FAQ ──────────────────────────────────────────────────────────── */}
+      <section className="w-full max-w-3xl mx-auto px-6 pb-24">
+        <div className="flex flex-col items-center gap-3 mb-12 text-center">
+          <span className="text-[11px] font-semibold text-zinc-500 tracking-widest uppercase">
+            Frequently asked
+          </span>
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
+            Questions, answered.
+          </h2>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          {FAQ_ITEMS.map(({ question, answer }) => (
+            <details
+              key={question}
+              className="group rounded-xl border border-white/5 bg-white/[0.02] px-5 py-4 open:bg-white/[0.03] transition-colors"
+            >
+              <summary className="cursor-pointer list-none flex items-center justify-between gap-4 text-sm font-medium text-white">
+                {question}
+                <span className="shrink-0 text-zinc-500 transition-transform group-open:rotate-45 text-lg leading-none">
+                  +
+                </span>
+              </summary>
+              <p className="mt-3 text-sm text-zinc-500 font-light leading-relaxed">
+                {answer}
+              </p>
+            </details>
+          ))}
         </div>
       </section>
     </main>

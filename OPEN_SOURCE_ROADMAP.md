@@ -225,6 +225,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | COST-005 | Agent | DONE (2026-09-27) | Add predictable offline/rate-limit/provider failure behavior | COST-003, COST-004 |
 | OBS-001 | Agent | DONE | Remove default remote telemetry or make it genuine opt-in | MAN-000, PRIV-001 |
 | SITE-001 | Agent | DONE | Convert landing site to static, no-waitlist operation | MAN-000 |
+| SITE-002 | Agent | DONE (2026-09-27) | SEO/GEO/AEO optimization — sitemap, robots.txt, JSON-LD, FAQ, OG image fix, favicon, creator attribution | SITE-001 |
 | DOC-001 | Agent | PARTIAL | Add chosen license and dependency/asset notices — only remaining item is verifying GitHub's license auto-detection once public (MAN-012) | MAN-002, MAN-005 |
 | DOC-002 | Agent | DONE (2026-09-27) | Create the root public README and build guide | COST-005, DOC-001 |
 | DOC-003 | Agent | DONE (2026-09-27) | Rewrite privacy policy and all product privacy claims | PRIV-006, OBS-001 |
@@ -241,7 +242,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | MAN-008 | Maintainer | DONE (2026-09-27) | Configure or remove telemetry accounts and retained data — PostHog and Sentry orgs deleted entirely | OBS-001 |
 | MAN-009 | Maintainer | DONE (2026-09-26) | Choose and verify $0 macOS distribution posture — decided: source-only self-build, no downloads of any kind | — |
 | MAN-010 | Maintainer | DONE (2026-09-26) | Choose and verify $0 extension distribution posture — decided: source-only self-build, no Chrome Web Store listing | — |
-| MAN-011 | Maintainer | DONE (2026-09-27) | Audit GitHub private settings, logs, artifacts, and secrets — found and fixed `main` being 2+ months stale (never had the hardening work merged in); `RELEASES_REPO_TOKEN` deleted as a repo secret (the underlying PAT still needs the maintainer to revoke it via GitHub's web UI, no API for that) | CI-002, REL-003 |
+| MAN-011 | Maintainer | DONE (2026-09-27) | Audit GitHub private settings, logs, artifacts, and secrets — found and fixed `main` being 2+ months stale (never had the hardening work merged in); `RELEASES_REPO_TOKEN` deleted as a repo secret, and the maintainer confirmed the underlying PAT itself has now been deleted via GitHub's web UI too | CI-002, REL-003 |
 | MAN-012 | Maintainer | TODO | Make repository public and immediately apply public settings | All launch gates |
 | MAN-013 | Maintainer | TODO | Publish transparent open-source announcement | MAN-012 |
 
@@ -1248,6 +1249,57 @@ now has a "View on GitHub" CTA and a `git clone` snippet instead, and
 pivot's Completion Log entry and `AGENTS.md`'s `Distribution` section. The
 waitlist/Supabase removal itself is unaffected and still accurate.
 
+### SITE-002 — SEO/GEO/AEO optimization
+
+**DONE (2026-09-27).** Maintainer requested the landing site be made fully
+friendly for traditional search (SEO), AI-answer-engine citation (GEO/AEO),
+and clear creator attribution — both for search engines and for AI agents
+asked about Orbit. Audit found: no `robots.txt`/`sitemap.xml`, no
+structured data anywhere, a stale OG image badge ("Available now for
+macOS" — contradicted the post-pivot self-build/BYOK positioning), no
+direct-answer content for AI engines to cite, and a 370KB multi-resolution
+`favicon.ico`. Fixed:
+
+- `landing/src/app/opengraph-image.tsx` — badge text corrected to "Open
+  source · macOS · Bring your own key," matching the actual hero copy.
+- `landing/src/app/sitemap.ts` + `robots.ts` — new Next.js file-convention
+  routes (`export const dynamic = "force-static"`, required for
+  `output: "export"` to prerender them). Lists `/` and `/privacy`; robots
+  allows all crawlers and points at the sitemap.
+- `landing/src/app/layout.tsx` — added `authors`/`creator` to the Next.js
+  `Metadata` object, plus a site-wide `SoftwareApplication` JSON-LD block
+  (name, description, category, price/free, GitHub repo/license links,
+  and an `author`/`creator` `Person` object with `sameAs` links to GitHub/
+  X/LinkedIn) so both search engines and AI agents can attribute Orbit to
+  Saadaan Hassan (saadaan.dev) directly from structured data, not just the
+  page's visible footer credit.
+- `landing/src/app/page.tsx` — added a real FAQ section (`<details>`
+  accordion, six questions covering creator attribution, pricing, offline
+  use, BYOK, data storage, maintenance status, and platform support) with
+  a matching `FAQPage` JSON-LD block, giving AI answer engines and Google's
+  featured-snippet extraction concrete, quotable direct answers instead of
+  having to infer them from prose.
+- `landing/src/app/favicon.ico` — regenerated via `sips` (only image tool
+  available on this machine; ImageMagick and Python Pillow are not
+  installed) from `public/logo.png` at 32×32, replacing a 370KB
+  multi-resolution ICO with a 4.3KB single-resolution one. Verified by
+  converting both old and new files back to PNG and visually confirming
+  they show the same mark, just at an appropriately small size.
+
+Verified end to end with a real `pnpm build`: all 6 static routes generate
+correctly (`/`, `/_not-found`, `/opengraph-image`, `/privacy`,
+`/robots.txt`, `/sitemap.xml`), and the built HTML/robots.txt/sitemap.xml
+output was inspected directly to confirm the JSON-LD, meta tags, FAQ
+content, and sitemap URLs are all present and correct.
+
+Also folded in as part of the same request: `landing/src/app/privacy/page.tsx`
+Section 9 ("Updates to This Policy") no longer references "the app's
+release notes" (none exist post-pivot; now points at Git history instead),
+and Section 10 ("Contact") now carries the same "not actively maintained,
+no guaranteed response" disclaimer already applied to `SECURITY.md`/
+`SUPPORT.md`/`GOVERNANCE.md`/`CONTRIBUTING.md` in `DOC-003`/`DOC-004`. Date
+bumped to September 27, 2026 to match.
+
 ---
 
 ## Phase 4 — License, public documentation, and metadata
@@ -2242,14 +2294,12 @@ Maintainer actions:
       found; collaborators is just the owner, single admin.
 - [x] Replace broad PATs with least-privileged fine-grained tokens. →
       Revoked outright instead, since nothing consumes it anymore (see
-      `MAN-001`). **Partial completion, honestly noted:** `gh secret delete`
-      removes it as a usable repo secret (no workflow can reach it), but
-      there is no API for a user to list/revoke their own PAT — GitHub only
-      exposes that via the web UI. The underlying token technically still
-      exists until the maintainer deletes it themselves at
-      github.com/settings/tokens (or the fine-grained equivalent). Flagged
-      to the maintainer directly; not something the agent can verify or
-      complete from here.
+      `MAN-001`). `gh secret delete` removed it as a usable repo secret (no
+      workflow can reach it); the underlying PAT itself had to be deleted by
+      the maintainer directly at github.com/settings/tokens, since no API
+      exists for an agent to list/revoke a user's own PAT. **Maintainer
+      confirmed 2026-09-27 that the underlying `RELEASES_REPO_TOKEN` PAT has
+      been deleted.** Fully resolved — no follow-up remains on this item.
 - [x] Ensure default Actions token permissions are read-only. → Already
       `read` (confirmed via `gh api repos/.../actions/permissions/workflow`).
 - [ ] Prepare public issue/discussion settings and private vulnerability
@@ -2382,6 +2432,8 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-27 | MAN-011 | PARTIAL | `main` branch (GitHub), `alternative-models` branch (deleted) | Full read-only audit via `gh api` (Actions runs/artifacts, branches/tags/releases, issues/PRs, secrets/environments/deploy-keys/webhooks/apps, collaborators, default token permissions, rulesets). Found a critical issue: `main` was stuck at a 2026-07-14 commit, over two months before this roadmap started — none of the `SEC-*`/`PRIV-*`/`COST-*`/`DOC-*`/`CI-*` work or the pivot had ever been merged from `revamp-for-public` back to `main`. Going public as `main` stood would have shown visitors the old, unhardened, pre-pivot repo by default. Maintainer said "merge" when asked how to resolve it. First attempt used the stale `origin/revamp-for-public` ref and undershot by 18 commits (that session's own work — the pivot, `MAN-001`, doc rewrites, `DOC-005`, `DOC-002` screenshots — had never been pushed); caught this by checking `GOVERNANCE.md`'s content on the newly-updated `main` and finding the old text still there instead of the rewrite. Corrected by fast-forwarding from the actual local `revamp-for-public` branch instead (still a clean fast-forward, `main` was a strict ancestor throughout) and pushing both branches. Verified via `gh api` that `origin/main`'s HEAD and `CONTRIBUTING.md`'s presence now match. Also deleted the stale `alternative-models` branch (confirmed fully merged into `main` first, nothing lost). | The one remaining item is revoking the unused `RELEASES_REPO_TOKEN` Actions secret (flagged since `MAN-001`, still live). Everything else `MAN-011` asked for is either done or correctly deferred to `MAN-012`'s own checklist (issue/discussion settings, private vulnerability reporting, branch protection — all "enable at publish time" steps). |
 | 2026-09-27 | MAN-011 | DONE | `RELEASES_REPO_TOKEN` (GitHub Actions secret) | Maintainer asked to revoke this, closing `MAN-011`'s last item. Deleted via `gh secret delete RELEASES_REPO_TOKEN --repo Saadaan-Hassan/orbit`; confirmed via `gh secret list` returning empty. Honestly noted the limit of what this accomplishes: it removes the credential as a usable repo secret (no workflow can reach it — moot anyway since its only consumers, `release.yml`/`publish-extension.yml`, are deleted), but there is no GitHub API for a user to list or revoke their own PAT — that requires the web UI. Told the maintainer directly they still need to delete the underlying token at github.com/settings/tokens (or the fine-grained equivalent) for it to be fully revoked, not just unusable from this repo. | The maintainer still needs to manually revoke the underlying PAT via GitHub's web UI — not verifiable or completable from here. |
 | 2026-09-27 | MAN-007 | DONE | (external accounts only, no code) | Maintainer explicitly confirmed the Supabase project stays paused, not deleted — a final decision, not a placeholder. This resolves the one item `MAN-007` was held open for (whatever waitlist signups, if any, exist pre-`SITE-001` remain in the paused project rather than being exported or deleted). Updated the checklist to reflect this as a deliberate, informed choice rather than an unresolved gap. Two minor items remain unchecked by design — checking whether Vercel's free tier already covers hosting, and confirming no stray payment method remains on either account — both are maintainer-side billing checks the agent has no way to verify. | The two unchecked billing-check items are low-stakes maintainer follow-ups, not blockers. |
+| 2026-09-27 | MAN-011 | DONE | `OPEN_SOURCE_ROADMAP.md` (no other code) | Maintainer confirmed they personally deleted the underlying `RELEASES_REPO_TOKEN` PAT via GitHub's web UI, closing the one item the previous `MAN-011` entry left open (no API exists for an agent to do this on a user's behalf). Updated both the Task Index row and the `MAN-011` section's checklist to reflect full resolution. | None outstanding. |
+| 2026-09-27 | SITE-002 | DONE | `landing/src/app/opengraph-image.tsx`, `sitemap.ts` (new), `robots.ts` (new), `layout.tsx`, `page.tsx`, `favicon.ico`, `privacy/page.tsx`, `AGENTS.md` | Maintainer asked for the landing site to be made fully SEO/GEO/AEO-friendly, with clear creator attribution for both search engines and AI agents. Fixed the stale OG image badge ("Available now for macOS" → "Open source · macOS · Bring your own key"); added file-convention `sitemap.ts`/`robots.ts` (both needed `export const dynamic = "force-static"` to build under `output: "export"` — caught by an actual `pnpm build` failure, not assumed); added a site-wide `SoftwareApplication` JSON-LD block plus `authors`/`creator` Next.js metadata, including a `Person` sub-object with `sameAs` links to GitHub/X/LinkedIn so AI agents and search engines can attribute Orbit to Saadaan Hassan (saadaan.dev) directly from structured data, not just the footer; added a 6-question FAQ section (including "Who created Orbit?") with matching `FAQPage` JSON-LD for direct-answer extraction; regenerated `favicon.ico` via `sips` (only image tool available — ImageMagick and Python Pillow are both absent from this machine) from `public/logo.png` at 32×32, cutting it from 370KB to 4.3KB, verified by converting old and new files back to PNG and visually confirming the same mark at a smaller size. Also fixed two stale/inconsistent points in `privacy/page.tsx` found while reviewing it per the maintainer's request: Section 9 no longer references "the app's release notes" (none exist post-pivot), and Section 10 now carries the same "not actively maintained" disclaimer already applied to `SECURITY.md`/`SUPPORT.md`/`GOVERNANCE.md`/`CONTRIBUTING.md`. Verified end to end with a real `pnpm build` — all 6 static routes generated, and the built HTML/robots.txt/sitemap.xml were inspected directly to confirm the JSON-LD, meta tags, FAQ content, and sitemap URLs are all correct. | None outstanding. |
 
 ---
 

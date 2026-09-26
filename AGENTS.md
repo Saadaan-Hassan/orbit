@@ -297,11 +297,13 @@ orbit/
 │   ├── next.config.ts                       ← output: "export"; pnpm build writes out/, deployable to any static host
 │   ├── src/
 │   │   ├── app/
-│   │   │   ├── page.tsx                        ← landing page (Server Component). Hero + "View on GitHub" CTA + clone instructions + "what you'll need to build" disclosure — no downloads, no waitlist form
-│   │   │   ├── layout.tsx                      ← root layout, metadata (metadataBase, OG, Twitter cards)
+│   │   │   ├── page.tsx                        ← landing page (Server Component). Hero + "View on GitHub" CTA + clone instructions + "what you'll need to build" disclosure + FAQ section (FAQPage JSON-LD) — no downloads, no waitlist form
+│   │   │   ├── layout.tsx                      ← root layout, metadata (metadataBase, OG, Twitter cards) + SoftwareApplication JSON-LD
 │   │   │   ├── opengraph-image.tsx             ← auto-wired OG/Twitter image (1200×630, ImageResponse). `dynamic = "force-static"`, no `runtime = "edge"` — required for static export; generated once at build time
+│   │   │   ├── sitemap.ts                      ← file-convention sitemap.xml
+│   │   │   ├── robots.ts                       ← file-convention robots.txt
 │   │   │   ├── globals.css                     ← @import "tailwindcss" (Tailwind v4)
-│   │   │   ├── favicon.ico
+│   │   │   ├── favicon.ico                     ← 32×32 single-resolution ICO, kept small deliberately (was a 370KB multi-res file)
 │   │   │   ├── not-found.tsx                   ← 404 page
 │   │   │   └── privacy/
 │   │   │       └── page.tsx                    ← privacy policy (Server Component) — states plainly Orbit sends no telemetry (OBS-001)
@@ -492,7 +494,9 @@ not just disabled (OBS-001).
 | `landing/next.config.ts` | `output: "export"` (SITE-001) — the whole site builds to static HTML/CSS/JS in `out/`, no Node.js server needed at runtime. |
 | `landing/src/app/page.tsx` | Landing page — Server Component. Hero with a "View on GitHub" CTA + `git clone` snippet + "what you'll need to build" disclosure, "How it works" 3-card section, privacy callout strip. No downloads, no waitlist form — this is a self-build project (see "Distribution" further down). |
 | `landing/src/app/layout.tsx` | Root layout. Sets `metadataBase`, explicit `openGraph` and `twitter` metadata. Canonical URL resolves via `NEXT_PUBLIC_APP_URL` env var. |
-| `landing/src/app/opengraph-image.tsx` | `ImageResponse` — auto-wired by Next.js to og:image and twitter:image metadata. 1200×630 px dark PNG with orbit ring decoration, headline, "Available now for macOS" badge. `export const dynamic = "force-static"`, no `runtime = "edge"` — required for `output: "export"` to prerender it at build time. |
+| `landing/src/app/opengraph-image.tsx` | `ImageResponse` — auto-wired by Next.js to og:image and twitter:image metadata. 1200×630 px dark PNG with orbit ring decoration, headline, "Open source · macOS · Bring your own key" badge. `export const dynamic = "force-static"`, no `runtime = "edge"` — required for `output: "export"` to prerender it at build time. |
+| `landing/src/app/sitemap.ts` | File-convention sitemap (Next.js Metadata API) — lists `/` and `/privacy`. Static-export compatible (no request-time data). |
+| `landing/src/app/robots.ts` | File-convention robots.txt (Next.js Metadata API) — allows all crawlers, points to `/sitemap.xml`. |
 | `landing/src/app/privacy/page.tsx` | Privacy policy — Server Component. Covers all capture types (Phase 2.5–2.9), what gets sent to cloud AI (always BYOK-direct to the provider, no maintainer relay), all user controls, and states plainly that Orbit sends no telemetry of any kind (OBS-001). |
 | `landing/src/components/background-orbit.tsx` | Animated background decoration. |
 | `landing/src/components/header.tsx` | Site header / navigation. |

@@ -40,7 +40,7 @@ export default function PrivacyPolicy() {
         </div>
         <div className="flex flex-col gap-1">
           <p className="text-xs text-zinc-500">
-            Last updated: September 25, 2026 · Policy owner: Saadaan Hassan
+            Last updated: September 27, 2026 · Policy owner: Saadaan Hassan
           </p>
           <p className="text-sm font-light text-zinc-400 mt-2 leading-relaxed">
             Orbit captures activity on your Mac to build a searchable memory
@@ -372,10 +372,12 @@ export default function PrivacyPolicy() {
             9. Updates to This Policy
           </h2>
           <p className="text-sm leading-relaxed font-light">
-            As Orbit evolves, this policy will be updated to keep matching
-            actual behavior. Significant changes will be noted in the
-            app&apos;s release notes. The date at the top of this page
-            reflects the most recent revision.
+            If this policy changes, this page will be updated to keep
+            matching actual behavior — there are no separate release notes
+            to check; Orbit has no packaged release process, so the
+            project&apos;s Git history is the record of what changed and
+            when. The date at the top of this page reflects the most recent
+            revision.
           </p>
         </section>
 
@@ -392,6 +394,10 @@ export default function PrivacyPolicy() {
             >
               {CONTACT_EMAIL}
             </a>
+            . This project is not actively maintained, so there&apos;s no
+            guarantee of a response — but privacy and security reports sent
+            here are still the right way to reach the policy owner if one is
+            possible.
           </p>
         </section>
       </div>

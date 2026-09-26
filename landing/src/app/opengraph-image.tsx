@@ -172,7 +172,7 @@ export default function Image() {
               fontWeight: 500,
             }}
           >
-            Available now for macOS
+            Open source · macOS · Bring your own key
           </span>
         </div>
       </div>
