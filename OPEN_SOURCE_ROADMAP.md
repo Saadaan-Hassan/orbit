@@ -226,7 +226,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | OBS-001 | Agent | DONE | Remove default remote telemetry or make it genuine opt-in | MAN-000, PRIV-001 |
 | SITE-001 | Agent | DONE | Convert landing site to static, no-waitlist operation | MAN-000 |
 | SITE-002 | Agent | DONE (2026-09-27) | SEO/GEO/AEO optimization — sitemap, robots.txt, JSON-LD, FAQ, OG image fix, favicon, creator attribution | SITE-001 |
-| DOC-001 | Agent | PARTIAL | Add chosen license and dependency/asset notices — only remaining item is verifying GitHub's license auto-detection once public (MAN-012) | MAN-002, MAN-005 |
+| DOC-001 | Agent | DONE (2026-09-27) | Add chosen license and dependency/asset notices — GitHub's license auto-detection confirmed working now that the repo is public (`spdx_id: Apache-2.0`, community health 100%) | MAN-002, MAN-005 |
 | DOC-002 | Agent | DONE (2026-09-27) | Create the root public README and build guide | COST-005, DOC-001 |
 | DOC-003 | Agent | DONE (2026-09-27) | Rewrite privacy policy and all product privacy claims | PRIV-006, OBS-001 |
 | DOC-004 | Agent | DONE | Add contribution, security, support, conduct, and governance files | MAN-004, DOC-001 |
@@ -1306,7 +1306,7 @@ bumped to September 27, 2026 to match.
 
 ### DOC-001 — Add license and notices
 
-**PARTIAL, nearly DONE (updated 2026-09-27).** `MAN-002` and `MAN-005` are
+**DONE (2026-09-27).** `MAN-002` and `MAN-005` are
 both now `DONE` — Apache-2.0 chosen and the copyright line confirmed
 correct; nothing purchased/licensed from a third party, so no asset
 attributions or `TRADEMARKS.md` are needed beyond what's already in
@@ -1321,10 +1321,10 @@ passed over. Aligned `license = "Apache-2.0"` across every workspace
 manifest still in the repo (`backend/pyproject.toml`,
 `app/src-tauri/Cargo.toml`, `app/package.json`, `landing/package.json` —
 `worker/package.json` no longer exists, deleted in the 2026-09-26 pivot).
-No `NOTICE` file added (no dependency required one). Only remaining item:
-GitHub's own license auto-detection can't be confirmed until the repo is
-actually public (`MAN-012`) — that's the one thing genuinely gated on a
-step that hasn't happened yet, not an open question.
+No `NOTICE` file added (no dependency required one). The one item that was
+gated on `MAN-012` is now confirmed: with the repo public, GitHub's
+`community/profile` API reports `"health_percentage":100` and correctly
+detects `"spdx_id":"Apache-2.0"` from root `LICENSE`. Nothing left open.
 
 Implementation requirements:
 
@@ -1339,10 +1339,8 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] GitHub can detect the root license. Implemented correctly (root
-      `LICENSE`, unmodified standard text, matches GitHub's own detection
-      convention) but genuinely can't be verified until `MAN-012` makes the
-      repo visible — not an open question, just a check that comes later.
+- [x] GitHub can detect the root license. Confirmed via `community/profile`
+      after `MAN-012` made the repo public: `spdx_id: "Apache-2.0"`.
 - [x] All package license fields agree. Every workspace manifest still in
       the repo says `Apache-2.0`; verified each still parses (`uv run`,
       `cargo check`, and JSON validation on the `package.json` files).
@@ -2521,6 +2519,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-27 | SITE-002 | DONE | `landing/src/app/opengraph-image.tsx`, `sitemap.ts` (new), `robots.ts` (new), `layout.tsx`, `page.tsx`, `favicon.ico`, `privacy/page.tsx`, `AGENTS.md` | Maintainer asked for the landing site to be made fully SEO/GEO/AEO-friendly, with clear creator attribution for both search engines and AI agents. Fixed the stale OG image badge ("Available now for macOS" → "Open source · macOS · Bring your own key"); added file-convention `sitemap.ts`/`robots.ts` (both needed `export const dynamic = "force-static"` to build under `output: "export"` — caught by an actual `pnpm build` failure, not assumed); added a site-wide `SoftwareApplication` JSON-LD block plus `authors`/`creator` Next.js metadata, including a `Person` sub-object with `sameAs` links to GitHub/X/LinkedIn so AI agents and search engines can attribute Orbit to Saadaan Hassan (saadaan.dev) directly from structured data, not just the footer; added a 6-question FAQ section (including "Who created Orbit?") with matching `FAQPage` JSON-LD for direct-answer extraction; regenerated `favicon.ico` via `sips` (only image tool available — ImageMagick and Python Pillow are both absent from this machine) from `public/logo.png` at 32×32, cutting it from 370KB to 4.3KB, verified by converting old and new files back to PNG and visually confirming the same mark at a smaller size. Also fixed two stale/inconsistent points in `privacy/page.tsx` found while reviewing it per the maintainer's request: Section 9 no longer references "the app's release notes" (none exist post-pivot), and Section 10 now carries the same "not actively maintained" disclaimer already applied to `SECURITY.md`/`SUPPORT.md`/`GOVERNANCE.md`/`CONTRIBUTING.md`. Verified end to end with a real `pnpm build` — all 6 static routes generated, and the built HTML/robots.txt/sitemap.xml were inspected directly to confirm the JSON-LD, meta tags, FAQ content, and sitemap URLs are all correct. | None outstanding. |
 | 2026-09-27 | DOC-005 (revised) | DONE | `docs/ARCHITECTURE.md` | Maintainer asked for the doc to be corrected and to show the application's workflow/internal flow via diagrams, not just prose. Re-verified every fact against the actual code before writing anything (port `47821`, 30-minute scheduler interval, `gpt-oss-120b`/`gpt-oss-20b`/`voyage-3-lite` model IDs, `recall.py`'s real call order) rather than trusting the prior version of this doc. Replaced the ASCII trust-boundary box with a Mermaid component diagram, and added three new Mermaid flowcharts: capture (every source through to sanitized SQLite write), background session generation (the 30-minute scheduler loop with explicit no-key branches), and recall (FTS5 → session lookup → Groq synthesis, with the two independent fallback tiers from `ADR-006`). This surfaced one real, previously undocumented fact: with no Groq key, events accumulate as `parse_failed` and no session/Timeline/Project-Card content is ever produced, even though raw-event FTS5 search still works — the old prose glossed over this. All four diagrams were rendered with the Mermaid CLI (`npx @mermaid-js/mermaid-cli`) to confirm they're syntactically valid, and visually inspected as PNGs before committing. | None outstanding. |
 | 2026-09-27 | MAN-012 | DONE | GitHub repo settings (no application code) | Maintainer explicitly directed this to proceed now despite several launch gates (`PRIV-002`, `APPSEC-001`, `COST-001`, `COST-003`, `COST-004`, part of `MAN-001`) still `PARTIAL` pending live-app/GUI verification this environment can't perform — an informed decision, recorded honestly rather than treating the checklist's own "confirm every launch gate" item as satisfied. Set description, homepage, and 15 topics via `gh repo edit`. Created two new rulesets (`gh api .../rulesets`): `main-branch-protection` (PR required with 0 reviewers — a second human reviewer isn't sustainable for a one-person unmaintained project — 7 CI jobs required as status checks, force-push and deletion blocked with no bypass for anyone including the owner) and `version-tag-protection` (deletion/force-update blocked on all `v*` tags). Enabled Dependabot alerts and automated security fixes (worked immediately, repo still private at that point). Flipped visibility to public via `gh repo edit --visibility public --accept-visibility-change-consequences` only after all of the above was already in place, so the repo was never public even briefly without protection. Secret scanning, push protection, and private vulnerability reporting all returned `422`/`404` while private (a free-tier-personal-account plan limit, confirmed by the exact error text) and were retried and enabled immediately after the flip. Restricted Actions to `allowed_actions: selected` with an explicit allowlist matching exactly what `ci.yml`/`codeql.yml` use — confirmed via `security_and_analysis` and `actions/permissions` reads, not just from the write responses. Confirmed via `community/profile` that GitHub now correctly auto-detects the Apache-2.0 license (health 100%), closing `DOC-001`'s last open item. Ran a full `gitleaks` scan against a fresh clone of the now-public repo — first attempt (a `--bare` clone) surfaced 12 false-positive "leaks" because a bare clone has no working-tree `.gitleaksignore` for gitleaks to read; caught this, re-ran against a normal clone matching CI's actual method, got a clean `no leaks found`. Verified the repo page, `SECURITY.md`, and `README.md` are all reachable unauthenticated (200s, real content fetched). Could not verify `heyorbit.saadaan.dev` from this sandbox (DNS for that specific domain doesn't resolve here, while `github.com` does — a sandbox network-allowlist limitation, not a finding about the site). | Two items need the maintainer directly: (1) Settings → Actions → General → "Fork pull request workflows from outside collaborators" — no REST API exists for this setting, verify it manually; (2) a quick logged-out check that `heyorbit.saadaan.dev` itself looks right, since this environment couldn't reach it. |
+| 2026-09-27 | DOC-001 | DONE | `OPEN_SOURCE_ROADMAP.md` (no other code) | `MAN-012`'s completion log already recorded that GitHub's license auto-detection was confirmed working post-public, but `DOC-001`'s own status/acceptance-criteria checkbox was never flipped from `PARTIAL` to match — that was the task's one remaining item, and it's now genuinely resolved. Corrected the status, the task section, and the Task Index row. | None outstanding. |
 
 ---
 
