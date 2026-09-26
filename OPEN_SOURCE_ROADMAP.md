@@ -243,7 +243,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | MAN-009 | Maintainer | DONE (2026-09-26) | Choose and verify $0 macOS distribution posture — decided: source-only self-build, no downloads of any kind | — |
 | MAN-010 | Maintainer | DONE (2026-09-26) | Choose and verify $0 extension distribution posture — decided: source-only self-build, no Chrome Web Store listing | — |
 | MAN-011 | Maintainer | DONE (2026-09-27) | Audit GitHub private settings, logs, artifacts, and secrets — found and fixed `main` being 2+ months stale (never had the hardening work merged in); `RELEASES_REPO_TOKEN` deleted as a repo secret, and the maintainer confirmed the underlying PAT itself has now been deleted via GitHub's web UI too | CI-002, REL-003 |
-| MAN-012 | Maintainer | TODO | Make repository public and immediately apply public settings | All launch gates |
+| MAN-012 | Maintainer | DONE (2026-09-27) | Make repository public and immediately apply public settings — repo is now public; branch/tag rulesets, description, topics, Dependabot, secret scanning, push protection, private vulnerability reporting, and Actions restrictions all applied; one item (fork-PR Actions approval policy) is UI-only and left for the maintainer | All launch gates |
 | MAN-013 | Maintainer | TODO | Publish transparent open-source announcement | MAN-012 |
 
 ---
@@ -2313,22 +2313,107 @@ Maintainer actions:
 
 ### MAN-012 — Make repository public and immediately secure it
 
-Maintainer actions, in this order:
+**DONE (2026-09-27).** Executed at the maintainer's explicit direction
+despite several launch gates (`PRIV-002`, `APPSEC-001`, `COST-001`,
+`COST-003`, `COST-004`, part of `MAN-001`) still sitting at `PARTIAL` — all
+of them need a live app build/GUI/real provider key to finish verifying,
+which this environment cannot do, and the maintainer made an informed
+decision to ship with that caveat rather than block on it. Recorded here
+plainly rather than silently treating the "confirm every launch gate"
+checklist item as satisfied when it wasn't. All configuration below was
+applied **before** the visibility flip, so the repository was never public
+even briefly without protection in place; the two settings that GitHub only
+allows on public repos (secret scanning + push protection, private
+vulnerability reporting) were applied immediately after.
 
-- [ ] Confirm every launch gate at the top of this document is checked.
-- [ ] Confirm the latest safe release is downloadable/updatable.
-- [ ] Change repository visibility to public in GitHub Settings.
-- [ ] Immediately recreate/re-enable the `main` branch and `v*` tag rulesets.
-- [ ] Block force pushes and branch/tag deletion.
-- [ ] Require pull requests and passing CI; require review where sustainable.
-- [ ] Enable dependency graph, Dependabot alerts/security updates, secret scanning,
-      push protection, CodeQL/code scanning and private vulnerability reporting.
-- [ ] Require approval for Actions from first-time outside contributors.
-- [ ] Restrict allowed Actions and keep the default workflow token read-only.
-- [ ] Verify license detection and GitHub Community Profile.
-- [ ] Verify website, repository, releases and security links from a logged-out
-      browser session.
-- [ ] Run the full secret scan once more against the now-public remote refs.
+- [x] Confirm every launch gate at the top of this document is checked. →
+      **Not all were** — see the note above. Maintainer's explicit call.
+- [x] Confirm the latest safe release is downloadable/updatable. → N/A, no
+      packaged release exists by design (2026-09-26 pivot).
+- [x] Change repository visibility to public in GitHub Settings. → Done via
+      `gh repo edit --visibility public --accept-visibility-change-consequences`.
+      Verified via `gh api repos/.../` returning `"visibility":"public"`.
+- [x] Immediately recreate/re-enable the `main` branch and `v*` tag
+      rulesets. → Two new rulesets created via `gh api .../rulesets`:
+      `main-branch-protection` (target: branch `main`) and
+      `version-tag-protection` (target: tags matching `v*`, covering the 6
+      existing version tags). Both `enforcement: active`.
+- [x] Block force pushes and branch/tag deletion. → Both rulesets include
+      `deletion` and `non_fast_forward` rules, with no bypass for either —
+      not even the repository owner.
+- [x] Require pull requests and passing CI; require review where
+      sustainable. → `main-branch-protection` requires a pull request
+      (`required_approving_review_count: 0` — a second human reviewer isn't
+      sustainable for a one-person, non-maintained project) and all 7 CI
+      job names as required status checks (Rust, Backend, App, Extension,
+      Landing, Secret scanning, Dependency review). The repository owner
+      (`RepositoryRole` actor, `bypass_mode: always`) can bypass the PR
+      requirement for their own direct pushes — confirmed via the API
+      response's `"current_user_can_bypass":"always"` — but never the
+      force-push/deletion rules, which apply unconditionally.
+- [x] Enable dependency graph, Dependabot alerts/security updates, secret
+      scanning, push protection, CodeQL/code scanning and private
+      vulnerability reporting. → Dependency graph is automatic for every
+      repository (nothing to toggle). Dependabot alerts
+      (`vulnerability-alerts`) and automated security fixes both enabled
+      via `PUT`, confirmed 204. Secret scanning and push protection
+      returned `422 Secret scanning is not available for this repository`
+      while private (a free-tier-personal-account limit, not a bug); retried
+      immediately after the visibility flip and both enabled successfully —
+      confirmed via `security_and_analysis` showing both `status: enabled`.
+      Private vulnerability reporting was the same story: `404` while
+      private, `204` right after going public, confirmed now returning
+      `200` on a `GET`. CodeQL was already running as an advanced-setup
+      workflow (`codeql.yml`, added in `CI-002`) rather than GitHub's
+      zero-config "default setup" — confirmed it's actively uploading real
+      SARIF results to the Security tab (spot-checked via
+      `code-scanning/analyses`, a real analysis with `results_count: 0` for
+      javascript-typescript already present from an open Dependabot PR).
+- [ ] Require approval for Actions from first-time outside contributors. →
+      **Not done — no REST API endpoint exists for this specific setting**
+      (fork pull request workflow approval policy is UI-only as far as
+      could be found). Maintainer should check Settings → Actions →
+      General → "Fork pull request workflows from outside collaborators"
+      and choose a policy (GitHub's own default for newly-public repos is
+      already reasonably strict — worth confirming it wasn't left on
+      the more permissive option before this repo went public today).
+- [x] Restrict allowed Actions and keep the default workflow token
+      read-only. → Actions permissions switched from `allowed_actions: all`
+      to `selected`, with an explicit allowlist matching exactly what
+      `ci.yml`/`codeql.yml` use (`github_owned_allowed: true` covers
+      `actions/*` and `github/codeql-action/*`; `verified_allowed: true`
+      plus explicit patterns cover `Swatinem/rust-cache`,
+      `astral-sh/setup-uv`, `dtolnay/rust-toolchain`, `pnpm/action-setup`).
+      All actions were already SHA-pinned before this task (`REP-001`/
+      `CI-002`), so this is a second, independent layer, not the only one.
+      Default workflow token permissions confirmed still `read`,
+      `can_approve_pull_request_reviews: false` — unchanged from `MAN-011`'s
+      finding, no action needed.
+- [x] Verify license detection and GitHub Community Profile. → GitHub's own
+      `community/profile` endpoint reports `"health_percentage":100` and
+      correctly detects `"spdx_id":"Apache-2.0"` from root `LICENSE` — this
+      closes `DOC-001`'s one remaining open item.
+- [x] Verify website, repository, releases and security links from a
+      logged-out browser session. → **Partially verified, honestly noted.**
+      Unauthenticated `curl` confirmed the repo page (200), `SECURITY.md`'s
+      policy page (200), and `README.md` (200, real content fetched and
+      inspected, not just a status code) are all publicly reachable with no
+      auth. Could **not** verify `heyorbit.saadaan.dev` (the landing site)
+      from this environment — its DNS name doesn't resolve from this
+      sandbox's network (`github.com` resolves fine, so this is a sandbox
+      network-allowlist limitation, not a finding about the site itself).
+      Maintainer should do a quick logged-out check of the landing site
+      directly. No GitHub Releases exist to check (by design).
+- [x] Run the full secret scan once more against the now-public remote
+      refs. → Cloned the now-public repo fresh into a scratch directory and
+      ran `gitleaks detect`. First attempt (a `--bare` clone) surfaced 12
+      "leaks" that were immediately suspicious — investigated rather than
+      reported as-is, and found they were the same known test-fixture
+      strings `REP-001` already allowlisted in `.gitleaksignore`; a bare
+      clone has no working-tree copy of that file for gitleaks to read, so
+      the allowlist silently didn't apply. Re-ran against a normal (non-bare)
+      clone, matching exactly what the CI `secret-scan` job does — result:
+      `no leaks found`.
 
 ### MAN-013 — Publish transparent announcement
 
@@ -2434,6 +2519,8 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-27 | MAN-007 | DONE | (external accounts only, no code) | Maintainer explicitly confirmed the Supabase project stays paused, not deleted — a final decision, not a placeholder. This resolves the one item `MAN-007` was held open for (whatever waitlist signups, if any, exist pre-`SITE-001` remain in the paused project rather than being exported or deleted). Updated the checklist to reflect this as a deliberate, informed choice rather than an unresolved gap. Two minor items remain unchecked by design — checking whether Vercel's free tier already covers hosting, and confirming no stray payment method remains on either account — both are maintainer-side billing checks the agent has no way to verify. | The two unchecked billing-check items are low-stakes maintainer follow-ups, not blockers. |
 | 2026-09-27 | MAN-011 | DONE | `OPEN_SOURCE_ROADMAP.md` (no other code) | Maintainer confirmed they personally deleted the underlying `RELEASES_REPO_TOKEN` PAT via GitHub's web UI, closing the one item the previous `MAN-011` entry left open (no API exists for an agent to do this on a user's behalf). Updated both the Task Index row and the `MAN-011` section's checklist to reflect full resolution. | None outstanding. |
 | 2026-09-27 | SITE-002 | DONE | `landing/src/app/opengraph-image.tsx`, `sitemap.ts` (new), `robots.ts` (new), `layout.tsx`, `page.tsx`, `favicon.ico`, `privacy/page.tsx`, `AGENTS.md` | Maintainer asked for the landing site to be made fully SEO/GEO/AEO-friendly, with clear creator attribution for both search engines and AI agents. Fixed the stale OG image badge ("Available now for macOS" → "Open source · macOS · Bring your own key"); added file-convention `sitemap.ts`/`robots.ts` (both needed `export const dynamic = "force-static"` to build under `output: "export"` — caught by an actual `pnpm build` failure, not assumed); added a site-wide `SoftwareApplication` JSON-LD block plus `authors`/`creator` Next.js metadata, including a `Person` sub-object with `sameAs` links to GitHub/X/LinkedIn so AI agents and search engines can attribute Orbit to Saadaan Hassan (saadaan.dev) directly from structured data, not just the footer; added a 6-question FAQ section (including "Who created Orbit?") with matching `FAQPage` JSON-LD for direct-answer extraction; regenerated `favicon.ico` via `sips` (only image tool available — ImageMagick and Python Pillow are both absent from this machine) from `public/logo.png` at 32×32, cutting it from 370KB to 4.3KB, verified by converting old and new files back to PNG and visually confirming the same mark at a smaller size. Also fixed two stale/inconsistent points in `privacy/page.tsx` found while reviewing it per the maintainer's request: Section 9 no longer references "the app's release notes" (none exist post-pivot), and Section 10 now carries the same "not actively maintained" disclaimer already applied to `SECURITY.md`/`SUPPORT.md`/`GOVERNANCE.md`/`CONTRIBUTING.md`. Verified end to end with a real `pnpm build` — all 6 static routes generated, and the built HTML/robots.txt/sitemap.xml were inspected directly to confirm the JSON-LD, meta tags, FAQ content, and sitemap URLs are all correct. | None outstanding. |
+| 2026-09-27 | DOC-005 (revised) | DONE | `docs/ARCHITECTURE.md` | Maintainer asked for the doc to be corrected and to show the application's workflow/internal flow via diagrams, not just prose. Re-verified every fact against the actual code before writing anything (port `47821`, 30-minute scheduler interval, `gpt-oss-120b`/`gpt-oss-20b`/`voyage-3-lite` model IDs, `recall.py`'s real call order) rather than trusting the prior version of this doc. Replaced the ASCII trust-boundary box with a Mermaid component diagram, and added three new Mermaid flowcharts: capture (every source through to sanitized SQLite write), background session generation (the 30-minute scheduler loop with explicit no-key branches), and recall (FTS5 → session lookup → Groq synthesis, with the two independent fallback tiers from `ADR-006`). This surfaced one real, previously undocumented fact: with no Groq key, events accumulate as `parse_failed` and no session/Timeline/Project-Card content is ever produced, even though raw-event FTS5 search still works — the old prose glossed over this. All four diagrams were rendered with the Mermaid CLI (`npx @mermaid-js/mermaid-cli`) to confirm they're syntactically valid, and visually inspected as PNGs before committing. | None outstanding. |
+| 2026-09-27 | MAN-012 | DONE | GitHub repo settings (no application code) | Maintainer explicitly directed this to proceed now despite several launch gates (`PRIV-002`, `APPSEC-001`, `COST-001`, `COST-003`, `COST-004`, part of `MAN-001`) still `PARTIAL` pending live-app/GUI verification this environment can't perform — an informed decision, recorded honestly rather than treating the checklist's own "confirm every launch gate" item as satisfied. Set description, homepage, and 15 topics via `gh repo edit`. Created two new rulesets (`gh api .../rulesets`): `main-branch-protection` (PR required with 0 reviewers — a second human reviewer isn't sustainable for a one-person unmaintained project — 7 CI jobs required as status checks, force-push and deletion blocked with no bypass for anyone including the owner) and `version-tag-protection` (deletion/force-update blocked on all `v*` tags). Enabled Dependabot alerts and automated security fixes (worked immediately, repo still private at that point). Flipped visibility to public via `gh repo edit --visibility public --accept-visibility-change-consequences` only after all of the above was already in place, so the repo was never public even briefly without protection. Secret scanning, push protection, and private vulnerability reporting all returned `422`/`404` while private (a free-tier-personal-account plan limit, confirmed by the exact error text) and were retried and enabled immediately after the flip. Restricted Actions to `allowed_actions: selected` with an explicit allowlist matching exactly what `ci.yml`/`codeql.yml` use — confirmed via `security_and_analysis` and `actions/permissions` reads, not just from the write responses. Confirmed via `community/profile` that GitHub now correctly auto-detects the Apache-2.0 license (health 100%), closing `DOC-001`'s last open item. Ran a full `gitleaks` scan against a fresh clone of the now-public repo — first attempt (a `--bare` clone) surfaced 12 false-positive "leaks" because a bare clone has no working-tree `.gitleaksignore` for gitleaks to read; caught this, re-ran against a normal clone matching CI's actual method, got a clean `no leaks found`. Verified the repo page, `SECURITY.md`, and `README.md` are all reachable unauthenticated (200s, real content fetched). Could not verify `heyorbit.saadaan.dev` from this sandbox (DNS for that specific domain doesn't resolve here, while `github.com` does — a sandbox network-allowlist limitation, not a finding about the site). | Two items need the maintainer directly: (1) Settings → Actions → General → "Fork pull request workflows from outside collaborators" — no REST API exists for this setting, verify it manually; (2) a quick logged-out check that `heyorbit.saadaan.dev` itself looks right, since this environment couldn't reach it. |
 
 ---
 
