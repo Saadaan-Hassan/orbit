@@ -28,9 +28,9 @@ would do anyway, not a step that unblocks a response:
   [Privacy and safety rules](#privacy-and-safety-rules) below, and be
   extra sure your change is deliberate, not incidental.
 - **New capture types, new AI providers, schema changes, or anything
-  architectural**: read `AGENTS.md`'s `DO NOT` section and
-  `OPEN_SOURCE_ROADMAP.md` first — several things in this category were
-  already tried and reverted for documented reasons.
+  architectural**: read `AGENTS.md`'s `DO NOT` section and `docs/adr/`
+  first — several things in this category were already tried and reverted
+  for documented reasons.
 - **Features listed as future/unbuilt phases in `AGENTS.md`** (Windows
   support, voice, screenshots): these have a rough shape already planned
   there; worth reading before building something that conflicts with it.

@@ -17,9 +17,9 @@ but don't expect it to.
 - **Issues**: may not get a response. See [`SUPPORT.md`](SUPPORT.md) and
   [`SECURITY.md`](SECURITY.md) for what little process exists.
 - **Architectural decisions**: nobody is making them going forward. The
-  decisions already made, and why, are recorded in `AGENTS.md` and
-  `OPEN_SOURCE_ROADMAP.md` — that history stands as-is; there's no active
-  process for changing it.
+  decisions already made, and why, are recorded in `AGENTS.md`,
+  `docs/ARCHITECTURE.md`, and `docs/adr/` — that history stands as-is;
+  there's no active process for changing it.
 - **Becoming a maintainer**: there's no process for this. If you want to
   take over stewardship of a fork, that's your own project at that point,
   governed however you choose.

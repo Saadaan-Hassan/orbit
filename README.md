@@ -183,9 +183,8 @@ cd landing && pnpm lint && pnpm build
 - [License](LICENSE) — Apache-2.0
 - [Third-party notices](THIRD_PARTY_NOTICES.md) — dependency license review
 - [Privacy policy](https://heyorbit.saadaan.dev/privacy)
-- [Open-source readiness roadmap](OPEN_SOURCE_ROADMAP.md) — the audit trail
-  for this project's path to being public; also doubles as a running list of
-  what's done and what's left
+- [Architecture overview](docs/ARCHITECTURE.md) — trust boundaries, data
+  flow, and links to the threat model and ADRs
 - [Contributing guide](CONTRIBUTING.md) — setup, task selection, tests,
   privacy rules, and DCO sign-off
 - [Security policy](SECURITY.md) — supported versions and private

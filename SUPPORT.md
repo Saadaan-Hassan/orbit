@@ -13,8 +13,6 @@ response from anyone:
 - [README.md](README.md)'s Known Limitations section
 - [`AGENTS.md`](AGENTS.md) — the full architecture reference, including
   what's built, what's planned-but-unbuilt, and documented `DO NOT`s
-- [`OPEN_SOURCE_ROADMAP.md`](OPEN_SOURCE_ROADMAP.md) — the audit trail of
-  what was decided, when, and why
 - `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md`, and
   `docs/PRIVACY_DATA_FLOW.md` for how data moves through the app
 

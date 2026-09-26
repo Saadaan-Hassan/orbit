@@ -165,10 +165,11 @@ control, is compromised.
   itself, and (by the maintainer's own choice) a Vercel deployment of the
   fully static landing site, which has no backend, database, or secrets of
   its own to steal.
-- `MAN-011`/`MAN-012` (see `OPEN_SOURCE_ROADMAP.md`) cover the specific
-  pre-public GitHub hardening steps (branch protection, secret scanning,
-  restricting Actions permissions for first-time contributors) that reduce
-  the blast radius of a compromised maintainer account going forward.
+- The GitHub repo itself is hardened against this: branch/tag protection
+  rulesets (no force-push or deletion, even for the owner), secret
+  scanning with push protection, and Actions restricted to an explicit
+  allowlist of the exact actions the CI workflows use — all reducing the
+  blast radius of a compromised maintainer account.
 
 ## Non-goals
 
@@ -187,6 +188,6 @@ Stated explicitly so they aren't mistaken for oversights:
   compromised the kernel, no userspace application-level control can
   meaningfully defend against them.
 - **No formal cryptographic audit has been performed.** The security work
-  in this repo (see `OPEN_SOURCE_ROADMAP.md`'s `SEC-*`/`PRIV-*`/`APPSEC-*`
-  tasks) is a systematic engineering hardening pass, not a third-party
-  penetration test or formal verification.
+  in this repo (see `docs/adr/` for the individual decisions) is a
+  systematic engineering hardening pass, not a third-party penetration
+  test or formal verification.

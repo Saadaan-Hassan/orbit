@@ -30,9 +30,9 @@ no companion release repository, and no Chrome Web Store listing. This
 matters for the threat model: a released-binary supply chain (build server
 compromise, signing key theft, update-channel hijack) simply isn't a
 category of risk here, because that pipeline doesn't exist. See `AGENTS.md`'s
-`Distribution` section for the full reasoning, and `OPEN_SOURCE_ROADMAP.md`'s
-`ADR-000` ("Accepted target architecture") and its 2026-09-26 update note
-for the decision record.
+`Distribution` section for the full reasoning, and
+[`ADR-000`](adr/ADR-000-zero-maintainer-cost-operation.md) for the decision
+record.
 
 ## Trust boundaries
 
@@ -270,12 +270,10 @@ requires the network. A `work`-intent query additionally excludes
   isn't
 - [`PRIVACY_DATA_FLOW.md`](PRIVACY_DATA_FLOW.md) — every captured field,
   where it's sanitized, what (if anything) leaves the device
-- `docs/adr/` — one ADR per material architecture decision (local API auth,
-  versioned consent, Rust sanitization, canonical exclusions/Keychain
-  storage, Tauri shell hardening, lazy semantic search, telemetry removal)
+- `docs/adr/` — one ADR per material architecture decision, including
+  [`ADR-000`](adr/ADR-000-zero-maintainer-cost-operation.md) (the
+  zero-maintainer-cost, BYOK-only pivot), local API auth, versioned
+  consent, Rust sanitization, canonical exclusions/Keychain storage, Tauri
+  shell hardening, lazy semantic search, and telemetry removal
 - Root `AGENTS.md` — the canonical, exhaustive reference this document
   summarizes; read it before making any architectural change
-- `OPEN_SOURCE_ROADMAP.md` — the audit trail for how this project reached
-  its current security/privacy posture, including decisions that
-  superseded earlier ones (e.g., the 2026-09-26 pivot to source-only
-  distribution)

@@ -220,7 +220,7 @@ orbit/
 │   ├── ARCHITECTURE.md                     ← external-facing trust-boundary map; read this before AGENTS.md if you're new
 │   ├── THREAT_MODEL.md                     ← what's defended against, mitigations, explicit non-goals
 │   ├── PRIVACY_DATA_FLOW.md                ← field-by-field: every captured type, sanitization point, what's sent to AI
-│   ├── adr/                                ← one ADR per material architecture decision (local API auth, consent, sanitization, Keychain storage, Tauri hardening, lazy semantic search, telemetry removal)
+│   ├── adr/                                ← one ADR per material architecture decision (zero-maintainer-cost/BYOK pivot, local API auth, consent, sanitization, Keychain storage, Tauri hardening, lazy semantic search, telemetry removal)
 │   └── screenshots/                        ← app screenshots used in root README.md
 ├── app/                                    ← Tauri v2 desktop app
 │   ├── src/
