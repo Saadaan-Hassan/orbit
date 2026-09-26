@@ -2,7 +2,7 @@ use super::exclusion::path_is_within_watched_folder;
 use super::sanitizer::RedactionPatternCache;
 use chrono::Utc;
 use notify::{RecursiveMode, Watcher};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdCache};
 use sqlx::SqlitePool;
 use std::collections::HashSet;
 use tokio::sync::mpsc;
@@ -138,8 +138,8 @@ async fn read_file_watch_settings(pool: &SqlitePool) -> FileWatchSettings {
 /// Updates the watcher so that `currently_watched` matches the desired set
 /// derived from `new_settings`. Paths no longer desired are unwatched; new
 /// paths are watched. If `enabled` is false the desired set is empty.
-fn sync_watched_folders(
-    watcher: &mut impl Watcher,
+fn sync_watched_folders<T: Watcher, C: FileIdCache>(
+    debouncer: &mut Debouncer<T, C>,
     currently_watched: &mut HashSet<String>,
     new_settings: &FileWatchSettings,
 ) {
@@ -152,7 +152,7 @@ fn sync_watched_folders(
     // Unwatch paths that are no longer desired.
     let to_remove: Vec<String> = currently_watched.difference(&desired).cloned().collect();
     for path in &to_remove {
-        if let Err(unwatch_error) = watcher.unwatch(std::path::Path::new(path.as_str())) {
+        if let Err(unwatch_error) = debouncer.unwatch(std::path::Path::new(path.as_str())) {
             eprintln!("File activity monitor: could not unwatch {path}: {unwatch_error}");
         } else {
             currently_watched.remove(path);
@@ -162,7 +162,7 @@ fn sync_watched_folders(
     // Watch paths that are newly desired.
     let to_add: Vec<String> = desired.difference(currently_watched).cloned().collect();
     for path in &to_add {
-        if let Err(watch_error) = watcher.watch(
+        if let Err(watch_error) = debouncer.watch(
             std::path::Path::new(path.as_str()),
             RecursiveMode::Recursive,
         ) {
@@ -214,7 +214,7 @@ pub async fn start_file_activity_monitor(
     let mut active_settings = read_file_watch_settings(&sqlx_connection_pool).await;
     let mut currently_watched: HashSet<String> = HashSet::new();
     sync_watched_folders(
-        file_system_debouncer.watcher(),
+        &mut file_system_debouncer,
         &mut currently_watched,
         &active_settings,
     );
@@ -308,7 +308,7 @@ pub async fn start_file_activity_monitor(
                 let new_settings =
                     read_file_watch_settings(&sqlx_connection_pool).await;
                 sync_watched_folders(
-                    file_system_debouncer.watcher(),
+                    &mut file_system_debouncer,
                     &mut currently_watched,
                     &new_settings,
                 );
