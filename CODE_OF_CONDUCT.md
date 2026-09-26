@@ -1,5 +1,12 @@
 # Contributor Covenant Code of Conduct
 
+> **Note on enforcement:** this project is not actively maintained (see
+> [`GOVERNANCE.md`](GOVERNANCE.md)) — there's no one currently staffing the
+> reporting address below or acting on the Enforcement section. The
+> standards and guidelines are kept as the norm this project holds itself
+> to, and as a real process for a maintained fork to adopt as-is, not as an
+> active commitment from this repo today.
+
 ## Our Pledge
 
 We as members, contributors, and leaders pledge to make participation in our community a harassment-free experience for everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, caste, color, religion, or sexual identity and orientation.

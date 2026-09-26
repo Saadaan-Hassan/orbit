@@ -1,30 +1,39 @@
 # Contributing to Orbit
 
-Thanks for considering a contribution. Orbit is a solo-maintainer,
-beta-stage project — this doc sets expectations so your time (and the
-maintainer's review time) isn't wasted.
+**This project is not actively maintained** (see
+[`GOVERNANCE.md`](GOVERNANCE.md)) — pull requests may not be reviewed or
+merged, regardless of quality, and issues may not get a response. This
+document isn't a guide to getting something merged; it's a description of
+the conventions this codebase was built with, kept here for anyone who
+forks it and wants to build on it consistently, or on the small chance
+someone does pick up maintenance later.
 
 Read [`AGENTS.md`](AGENTS.md) first. It's the canonical architecture
 reference — data flow, tech stack, file-by-file responsibilities, code
 style, and a `DO NOT` list of things that have already been tried, reverted,
-or ruled out for a reason. A PR that reintroduces something on that list
-will be asked to explain why the reasoning no longer applies, not just
-merged around it.
+or ruled out for a reason, along with why. If you're extending this
+codebase (in a fork or otherwise), that reasoning is worth understanding
+before reintroducing something on that list.
 
 ## Picking a task
 
+Since nobody's triaging issues (see the notice above), "open an issue
+first" won't get you a design discussion the way it would on an actively
+maintained project — treat the guidance below as what a careful contributor
+would do anyway, not a step that unblocks a response:
+
 - **Bug fixes and small, self-contained improvements**: just send a PR.
 - **Anything that touches capture, redaction, AI provider calls, or the
-  privacy model**: open an issue first and describe the change before
-  writing code. These are the highest-risk parts of the codebase — see
-  [Privacy and safety rules](#privacy-and-safety-rules) below.
+  privacy model**: these are the highest-risk parts of the codebase — see
+  [Privacy and safety rules](#privacy-and-safety-rules) below, and be
+  extra sure your change is deliberate, not incidental.
 - **New capture types, new AI providers, schema changes, or anything
-  architectural**: open an issue first. See [`GOVERNANCE.md`](GOVERNANCE.md)
-  for how these get decided.
+  architectural**: read `AGENTS.md`'s `DO NOT` section and
+  `OPEN_SOURCE_ROADMAP.md` first — several things in this category were
+  already tried and reverted for documented reasons.
 - **Features listed as future/unbuilt phases in `AGENTS.md`** (Windows
-  support, voice, screenshots): these have a rough shape already planned.
-  Ask before building, so work isn't duplicated or built against a stale
-  assumption.
+  support, voice, screenshots): these have a rough shape already planned
+  there; worth reading before building something that conflicts with it.
 
 Don't send large, unsolicited refactors. `AGENTS.md`'s `DO NOT` section
 explicitly rules out "add features, refactors, or improvements beyond exact
@@ -181,15 +190,17 @@ Orbit doesn't require a separate contributor license agreement.
 
 ## Pull request scope
 
+These are still good practice even with no one guaranteed to review the
+result:
+
 - One logical change per PR. Split unrelated fixes into separate PRs even
   if you noticed them in the same session.
-- Reference the issue you opened (or explain why one wasn't needed) in the
-  PR description.
 - Fill in the PR template's checkboxes honestly, including the
   data-flow/privacy and cost sections — a "no changes here" answer is fine
-  when it's true, but an unfilled checkbox reads as unreviewed.
-- The maintainer decides what merges, including scope and timing. See
-  [`GOVERNANCE.md`](GOVERNANCE.md).
+  when it's true, but an unfilled checkbox is a poor record for whoever
+  (including future-you) reads this PR later.
+- If a maintainer does become active again, see
+  [`GOVERNANCE.md`](GOVERNANCE.md) for how merge decisions would be made.
 
 ## Release boundaries
 

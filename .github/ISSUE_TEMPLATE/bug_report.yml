@@ -10,9 +10,12 @@ body:
   - type: input
     id: version
     attributes:
-      label: Orbit version
-      description: Shown in the menu bar app, or the filename of the .dmg you installed.
-      placeholder: v0.2.4
+      label: Orbit version and commit
+      description: >-
+        The version shown in the menu bar app, plus the exact commit/branch
+        you built from (`git rev-parse HEAD`) — there are no packaged
+        releases, so the commit is what actually identifies your build.
+      placeholder: v0.2.4, commit abc1234
     validations:
       required: true
 

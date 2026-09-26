@@ -53,16 +53,19 @@ file those as a normal GitHub issue instead.
 
 ## Disclosure expectations
 
-This is a solo-maintainer project without a dedicated security team.
-Response times are best-effort, not contractual:
+**This project is not actively maintained** (see
+[`GOVERNANCE.md`](GOVERNANCE.md)) — there is no dedicated security team, and
+realistically no guarantee a report gets read at all, let alone acted on.
+This isn't a "best-effort, response within a few days" situation; it's
+genuinely unstaffed. Private reporting is still the right move over a
+public issue regardless — it costs you nothing extra, and it means a
+finding doesn't sit publicly exploitable in the meantime if someone
+eventually does pick this project back up (via GitHub's own retention of
+private advisories, or your own copy of the email).
 
-- Acknowledgement: within a few days
-- Initial assessment (confirmed / not a vulnerability / needs more info):
-  as soon as practical after that
-- Fix and coordinated disclosure timeline: agreed with the reporter once
-  the report is confirmed, scaled to severity
-
-Public disclosure happens after a fix is available, or by mutual agreement
-with the reporter if a fix isn't feasible in a reasonable timeframe. Credit
-is given in the security advisory and/or commit message unless you ask to
-stay anonymous.
+If a maintainer does become active again, the intent would be: private
+disclosure preserved and triaged first, credit given in the security
+advisory and/or commit message unless you ask to stay anonymous, and no
+public disclosure before a fix exists or the reporter agrees otherwise.
+None of that is a promise this repo can currently keep — treat it as what
+a response would look like *if* one comes, not a commitment that it will.
