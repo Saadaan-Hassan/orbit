@@ -50,7 +50,7 @@ export default function PrivacyPolicy() {
             cases, with no simplifications that stop being true once you
             look closely.
           </p>
-          <p className="text-xs text-zinc-500 mt-2 italic">
+          <p className="text-xs text-zinc-400 mt-2 italic">
             This page was drafted with AI assistance from Orbit&apos;s own
             source code, not from marketing copy. It is not legal advice,
             and has not yet had a professional legal review — treat it as an

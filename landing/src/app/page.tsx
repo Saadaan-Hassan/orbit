@@ -90,8 +90,8 @@ export default function Page() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(FAQ_JSON_LD) }}
       />
       {/* ── Hero ─────────────────────────────────────────────────────────── */}
-      <section className="relative flex flex-col items-center justify-center pt-16 pb-20 px-6 text-center max-w-6xl mx-auto w-full">
-        <div className="relative z-10 flex flex-col items-center gap-8 max-w-3xl mx-auto">
+      <section className="relative flex flex-col items-center justify-center pt-8 pb-14 px-6 text-center max-w-6xl mx-auto w-full">
+        <div className="relative z-10 flex flex-col items-center gap-6 max-w-3xl mx-auto">
 
           {/* Status badge */}
           <span className="inline-flex items-center gap-2 rounded-full border border-white/5 bg-white/3 backdrop-blur-md px-4 py-1.5 text-[11px] font-semibold text-zinc-400 tracking-wider uppercase animate-pulse-subtle">
@@ -122,7 +122,7 @@ export default function Page() {
             >
               View on GitHub
             </a>
-            <p className="text-[11px] text-zinc-600 text-center font-mono bg-white/[0.02] border border-white/5 rounded-lg py-2.5 px-3">
+            <p className="text-[11px] text-zinc-500 text-center font-mono bg-white/[0.02] border border-white/5 rounded-lg py-2.5 px-3">
               git clone {ORBIT_GITHUB_URL}.git
             </p>
           </div>
@@ -146,14 +146,14 @@ export default function Page() {
           </div>
 
           {/* Privacy trust */}
-          <p className="text-[11px] text-zinc-600 font-light tracking-wide">
+          <p className="text-[11px] text-zinc-400 font-light tracking-wide">
             Local by default · Cloud AI only if you add your own key · No maintainer infrastructure of any kind · Delete anytime
           </p>
         </div>
       </section>
 
       {/* ── How it works ─────────────────────────────────────────────────── */}
-      <section className="w-full max-w-6xl mx-auto px-6 pb-24">
+      <section className="w-full max-w-6xl mx-auto px-6 pb-20">
         {/* Section header */}
         <div className="flex flex-col items-center gap-3 mb-12 text-center">
           <span className="text-[11px] font-semibold text-zinc-500 tracking-widest uppercase">
@@ -179,7 +179,7 @@ export default function Page() {
                 <div className="flex items-center justify-center w-10 h-10 rounded-xl border border-white/8 bg-white/4">
                   <Icon className="h-4.5 w-4.5 text-zinc-300" strokeWidth={1.5} />
                 </div>
-                <span className="text-[11px] font-semibold text-zinc-700 tracking-widest tabular-nums">
+                <span className="text-[11px] font-semibold text-zinc-500 tracking-widest tabular-nums">
                   {step}
                 </span>
               </div>
@@ -199,7 +199,7 @@ export default function Page() {
 
         {/* Privacy callout strip */}
         <div className="mt-6 flex items-center justify-center gap-3 rounded-xl border border-white/5 bg-white/[0.015] px-6 py-4 text-center">
-          <p className="text-xs text-zinc-600 font-light leading-relaxed max-w-xl">
+          <p className="text-xs text-zinc-400 font-light leading-relaxed max-w-xl">
             <span className="text-zinc-400 font-medium">Your privacy is the foundation, not a checkbox.</span>
             {" "}Everything Orbit captures stays on your Mac in a local database, with zero cloud AI, unless you add your own Groq or Voyage AI key — there&apos;s no maintainer-funded shared key. Passwords and secrets are redacted before anything touches disk, whether or not cloud AI is on. You can pause, exclude apps, or wipe everything at any time.{" "}
             <a href="/privacy" className="text-zinc-400 underline underline-offset-2 hover:text-white transition-colors">
