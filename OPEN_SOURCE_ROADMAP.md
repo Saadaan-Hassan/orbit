@@ -5,11 +5,14 @@
 
 **Created:** 2026-09-06  
 **Source repository:** `Saadaan-Hassan/orbit` — currently private  
-**Release repository:** `Saadaan-Hassan/orbit-releases` — currently public  
+**Release repository:** `Saadaan-Hassan/orbit-releases` — retired 2026-09-26,
+being archived (see `ADR-000`'s update note and `MAN-006`); no packaged
+releases are produced by this project anymore  
 **Overall status:** **NOT READY TO MAKE PUBLIC**  
 **Recommended target:** BYOK cloud AI + local FTS5 fallback, no shared provider
-credentials, no required hosted backend, static website, remote telemetry off by
-default, and GitHub-hosted source/releases.
+credentials, no required hosted backend and no maintainer-run infrastructure of
+any kind, static website pointing to the source repo, remote telemetry off by
+default, source-only self-build distribution.
 
 This document tracks both:
 
@@ -51,7 +54,9 @@ Agent rules:
 - Work on one task ID only. Do not opportunistically start later tasks.
 - Read the entire root `AGENTS.md`; also read the nearest nested `AGENTS.md` for
   files being changed.
-- Preserve unrelated user changes and the existing updater compatibility path.
+- Preserve unrelated user changes. There is no updater/release compatibility
+  path to preserve anymore (`REL-001`/`REL-002`/`REL-003` are retired) — do
+  not reintroduce one on the assumption this instruction implies it exists.
 - `DONE` means every acceptance criterion is checked and verification passes.
 - Use `BLOCKED` only with a concrete reason and required next action.
 - If implementation changes architecture, update `AGENTS.md` and the applicable
@@ -79,8 +84,18 @@ Status values used in the index:
 
 The source repository must remain private until all gates below are checked.
 
+**2026-09-26 pivot (see `ADR-000`'s update note below):** the maintainer decided
+to stop shipping packaged releases entirely — no `orbit-releases` repo, no
+signed `.dmg`, no in-app auto-updater, no Chrome Web Store listing. Orbit is
+now source-only/self-build/BYOK, with zero maintainer-run infrastructure of
+any kind (the Cloudflare Worker relay was removed outright, not hardened).
+This retires `REL-001`/`REL-002`/`REL-003` and rescopes `MAN-006`/`MAN-009`/
+`MAN-010` — see their entries below and in the Task Index. The gates below
+are updated to match; struck-through clauses no longer apply.
+
 - [ ] **Cost gate:** no public client can spend a maintainer-owned AI credential
-      (`COST-001` through `COST-005`, `MAN-006`, and `MAN-007`).
+      (`COST-001` through `COST-005`, `MAN-006`). No maintainer-run relay exists
+      for any client to spend against in the first place.
 - [ ] **Local API gate:** all sensitive localhost routes require authentication;
       CORS and origin validation are restrictive (`SEC-001` through `SEC-004`).
 - [ ] **Consent gate:** a new or upgraded installation captures nothing until
@@ -91,14 +106,16 @@ The source repository must remain private until all gates below are checked.
       the actual data flow (`DOC-002`, `DOC-003`, and `DOC-005`).
 - [ ] **Open-source gate:** an OSI-approved license and redistributable asset and
       dependency inventory exist (`MAN-002`, `MAN-005`, `DOC-001`).
-- [ ] **Supply-chain gate:** pull-request CI passes; release Actions are pinned and
-      least-privileged (`CI-001`, `CI-002`, `REL-001`, and `REL-002`).
+- [ ] **Supply-chain gate:** pull-request CI passes and every Action is pinned and
+      least-privileged (`CI-001`, `CI-002`). No release Actions exist to harden
+      (`REL-001`/`REL-002` retired — see pivot note above).
 - [ ] **History gate:** every ref, Actions log, artifact, and release asset has been
       audited for secrets and unacceptable personal data (`REP-001`, `MAN-001`,
       `MAN-003`, and `MAN-011`).
-- [ ] **Release gate:** both macOS architectures install/update as documented, and
-      the existing `orbit-releases` updater path is preserved (`REL-002`,
-      `REL-003`, `MAN-009`).
+- [x] **Distribution gate** (replaces the former "Release gate"): N/A by
+      design — there is no packaged release or updater path to preserve.
+      Anyone who wants a working copy clones the source and runs
+      `pnpm tauri build` themselves (`REL-003`/`MAN-009` retired/rescoped).
 - [ ] **GitHub gate:** post-visibility security settings and rulesets are enabled
       immediately after publication (`MAN-012`).
 
@@ -151,6 +168,29 @@ Public distribution makes a universal shared credential impossible to protect.
 - A future sponsor-funded service must be a separate authenticated product with
   accounts, quotas, rate limits, hard spend caps, and an explicit privacy model.
 
+**Update — 2026-09-26 (maintainer decision, verbatim intent preserved
+below):** the maintainer decided not to continue active development for now
+and to make the repository fully open for others to build on, with zero
+maintainer-run infrastructure of any kind — not just zero maintainer-*paid*
+infrastructure. This supersedes two specific ADR-000 clauses:
+
+- *"The Worker becomes an optional self-hosting template or is removed"* →
+  resolved as **removed**, not templated. `worker/` no longer exists in this
+  repository; both Groq and Voyage calls are BYOK-direct from the backend.
+- *"Keep `orbit-releases` until every installed version can migrate
+  safely"* → superseded. There is no longer any packaged/signed release
+  build, so there is nothing an old installed client needs to migrate from.
+  The `orbit-releases` companion repo, the in-app Tauri auto-updater, and
+  the Chrome Web Store extension listing are all retired, not paused.
+
+This directly retires `REL-001`, `REL-002`, and `REL-003` (nothing left to
+harden, checksum, or preserve compatibility for) and rescopes `MAN-006`
+(now just: tear down the live Worker and revoke its keys, not "deploy a
+transition build first"), `MAN-009`, and `MAN-010` (both resolved as
+"self-build only" rather than left as an open distribution-posture choice).
+See the Task Index and each task's own entry below, and `AGENTS.md`'s
+`Distribution` section for the full user-facing reasoning.
+
 ---
 
 ## Task Index
@@ -193,14 +233,14 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | DOC-006 | Agent | DONE | Align versions/package metadata and clean stale internal documentation | DOC-001, COST-005 |
 | CI-001 | Agent | DONE | Make all workspaces expose real local verification commands | REP-002, PRIV-006 |
 | CI-002 | Agent | DONE | Add pull-request CI, dependency updates, and security scans | CI-001 |
-| REL-001 | Agent | PARTIAL | Harden the release workflow and secret permissions | CI-002, DOC-006 |
-| REL-002 | Agent | TODO | Add checksums, SBOM/provenance, smoke tests, and updater validation | REL-001 |
-| REL-003 | Agent | TODO | Document and preserve `orbit-releases` compatibility | REL-002 |
-| MAN-006 | Maintainer | TODO | Deploy transition build, disable proxy, revoke keys, cap billing | COST-005, REL-003 |
+| REL-001 | Agent | N/A (2026-09-26) | ~~Harden the release workflow and secret permissions~~ — retired, no release workflow exists | CI-002, DOC-006 |
+| REL-002 | Agent | N/A (2026-09-26) | ~~Add checksums, SBOM/provenance, smoke tests, and updater validation~~ — retired, nothing is built/shipped | REL-001 |
+| REL-003 | Agent | N/A (2026-09-26) | ~~Document and preserve `orbit-releases` compatibility~~ — retired, `orbit-releases` archived | REL-002 |
+| MAN-006 | Maintainer | PARTIAL | Tear down the live Cloudflare Worker and revoke its provider keys (rescoped 2026-09-26 — no transition build needed, there is no release to publish). Worker deleted and `orbit-releases` archived by the agent, with explicit maintainer authorization; provider-key revocation still needs the maintainer's own dashboard access | COST-002 |
 | MAN-007 | Maintainer | TODO | Export/delete waitlist data and retire paid/free-tier services | SITE-001 |
 | MAN-008 | Maintainer | TODO | Configure or remove telemetry accounts and retained data | OBS-001 |
-| MAN-009 | Maintainer | TODO | Choose and verify $0 macOS distribution posture | REL-002 |
-| MAN-010 | Maintainer | TODO | Choose and verify $0 extension distribution posture | SEC-004, REL-002 |
+| MAN-009 | Maintainer | DONE (2026-09-26) | Choose and verify $0 macOS distribution posture — decided: source-only self-build, no downloads of any kind | — |
+| MAN-010 | Maintainer | DONE (2026-09-26) | Choose and verify $0 extension distribution posture — decided: source-only self-build, no Chrome Web Store listing | — |
 | MAN-011 | Maintainer | TODO | Audit GitHub private settings, logs, artifacts, and secrets | CI-002, REL-003 |
 | MAN-012 | Maintainer | TODO | Make repository public and immediately apply public settings | All launch gates |
 | MAN-013 | Maintainer | TODO | Publish transparent open-source announcement | MAN-012 |
@@ -1080,7 +1120,16 @@ Acceptance criteria:
 
 ### SITE-001 — Convert landing site to static, no-waitlist operation
 
-**Current status: DONE (2026-09-25).** Confirmed with the maintainer before
+**Superseded by the 2026-09-26 pivot:** the download-buttons-on-the-main-page
+approach described below was correct for the state at the time (2026-09-25)
+but no longer reflects the live page — there are no packaged downloads to
+link to anymore. `page.tsx` now has a "View on GitHub" CTA and a `git clone`
+snippet instead, and `/beta` (the invite-only download page mentioned below)
+has been deleted outright, not merely left as-is. See the pivot's Completion
+Log entry and `AGENTS.md`'s `Distribution` section. The waitlist/Supabase
+removal this task performed is still accurate and unaffected.
+
+**Historical status before the pivot: DONE (2026-09-25).** Confirmed with the maintainer before
 implementing that the requirements text's "add a clear source/download
 link" meant the main public landing page should carry real download buttons
 — the same ones `/beta` (currently invite-only, not indexed) already has —
@@ -1802,7 +1851,17 @@ Acceptance criteria:
 
 ### REL-001 — Harden release workflow
 
-**Current status: PARTIAL (2026-09-26).** Everything checkable from a
+**RETIRED (2026-09-26).** The maintainer decided to stop shipping packaged
+releases entirely (see `ADR-000`'s update note) — `release.yml` and
+`publish-extension.yml` have been deleted from this repository, along with
+the entire `worker/` workspace and the in-app auto-updater. There is no
+release workflow left to harden. The work below was real and correct at
+the time (kept for history/audit trail), but none of it applies to the
+current repository state — do not restore `release.yml` from git history
+based on this section without first re-reading `AGENTS.md`'s `Distribution`
+section and confirming a maintainer actually wants packaged releases back.
+
+**Historical status before retirement: PARTIAL (2026-09-26).** Everything checkable from a
 static/local pass is done and verified; two items depend on live GitHub
 state (a secret's actual configured scope, an environment's actual
 protection rules) that can only be confirmed by the maintainer, not from
@@ -1942,7 +2001,10 @@ Acceptance criteria:
 
 ### REL-002 — Release integrity and updater validation
 
-Implementation requirements:
+**RETIRED (2026-09-26).** No release artifacts, checksums, SBOM, or updater
+exist to validate — see `REL-001`'s retirement note and `ADR-000`'s update.
+
+Implementation requirements (historical — kept for context, not actionable):
 
 - Produce SHA-256 checksums for every distributable asset.
 - Produce an SPDX or CycloneDX SBOM.
@@ -1966,7 +2028,13 @@ Acceptance criteria:
 
 ### REL-003 — Preserve `orbit-releases` compatibility
 
-Implementation requirements:
+**RETIRED (2026-09-26).** There is no installed base to preserve
+compatibility for — no packaged release was ever widely distributed, and
+none will be. The `orbit-releases` companion repository has been archived
+(see `MAN-006`'s entry and the Completion Log). See `REL-001`'s retirement
+note and `ADR-000`'s update.
+
+Implementation requirements (historical — kept for context, not actionable):
 
 - Document why the separate public repository remains: installed clients already
   use its `latest.json` endpoint.
@@ -1987,22 +2055,51 @@ Acceptance criteria:
 
 ## Phase 6 — Manual account cleanup and public launch
 
-### MAN-006 — Deploy transition, disable proxy, revoke keys, cap billing
+### MAN-006 — Tear down the Cloudflare Worker and revoke its keys
 
-Do this only after the safe BYOK/offline release is available, unless immediate
-cost containment justifies breaking AI in old clients.
+**PARTIAL (2026-09-26).** The original task assumed a "transition build"
+published to `orbit-releases` before the Worker could safely go away —
+that no longer applies, since there is no packaged release of any kind
+(see `ADR-000`'s update note, `REL-001`/`REL-002`/`REL-003`). Nothing
+depends on the Worker anymore: the backend has called Groq/Voyage
+BYOK-direct since `COST-002`. This was a straightforward teardown, no
+staged rollout needed.
+
+The maintainer explicitly authorized the agent to perform the Cloudflare
+Worker deletion and the `orbit-releases` repo action directly (verbatim:
+"i want you to do it yourself. you can take the cloudflare worker access as
+well becuase my codex also had access to it"), via the already-authenticated
+`wrangler` CLI (account `webmaker9d@gmail.com`) and the `gh` CLI switched to
+the `github-personal` (`Saadaan-Hassan`) account as instructed. Both of the
+items below the agent could act on are done; the remaining items require
+access to the actual Groq/Voyage/Anthropic/Gemini provider dashboards, which
+the agent does not have.
 
 Maintainer actions:
 
-- [ ] Publish the transition build to `orbit-releases` and verify both architectures.
-- [ ] Confirm the transition build works while the old Worker is unreachable.
-- [ ] Deploy the fail-closed/no-shared-key Worker or a deny-all response.
-- [ ] Explicitly disable/remove `/embed`, which had no kill switch.
-- [ ] Revoke/rotate old Groq, Voyage, Anthropic and Gemini keys.
-- [ ] Delete unused Cloudflare Worker secrets and deployments.
-- [ ] Disable provider auto-recharge and set hard spend caps/alerts.
-- [ ] Check logs/usage after revocation to verify no old client can create charges.
-- [ ] Keep a redacted private record of key IDs/revocation dates; never values.
+- [x] Delete the deployed `orbit-api-proxy` Cloudflare Worker. Done via
+      `npx wrangler delete --name orbit-api-proxy --force` — confirmed gone
+      immediately after (`wrangler deployments list` now returns "This
+      Worker does not exist on your account", code 10007). Deleting the
+      Worker script also removes its bound secrets; Cloudflare does not
+      retain orphaned per-Worker secrets after script deletion.
+- [ ] Revoke/rotate any maintainer-owned Groq, Voyage, Anthropic, and
+      Gemini keys that were ever configured as Worker secrets. Needs the
+      maintainer's own access to each provider's dashboard.
+- [ ] Disable provider auto-recharge and confirm no hard spend cap/alert is
+      still configured against a key that no longer needs one.
+- [ ] Check each provider's dashboard after revocation to confirm no
+      further usage posts against the old key.
+- [ ] Keep a redacted private record of which key IDs were revoked and
+      when; never record the key values themselves.
+- [x] Archive the `orbit-releases` GitHub repository — done via `gh repo
+      archive Saadaan-Hassan/orbit-releases --yes` (chose archive over
+      delete: reversible, and it preserves the historical release record
+      without keeping it as an active/writable repo). Confirmed via `gh
+      repo view` reporting `isArchived: true`. If the maintainer would
+      rather it be deleted outright instead, that's a one-line follow-up
+      the maintainer can do themselves (`gh repo delete`, which the agent
+      will not do unprompted since it's irreversible).
 
 ### MAN-007 — Retire waitlist and unnecessary hosted services
 
@@ -2030,29 +2127,34 @@ Maintainer actions:
 
 ### MAN-009 — Choose $0 macOS distribution posture
 
-Apple Developer Program membership is not part of the $0 baseline.
+**DONE (2026-09-26).** Decided: source-only, self-build. No unsigned/
+ad-hoc-signed downloads are offered at all — the maintainer builds nothing
+for distribution; every user runs `pnpm tauri build` on their own Mac with
+their own toolchain. This sidesteps Gatekeeper friction entirely rather
+than choosing among ad-hoc-signing options: the quarantine flag Gatekeeper
+checks for is only ever set on files downloaded from the internet, never on
+a `.app` compiled locally. README.md's "Status" and "Building from source"
+sections, and `AGENTS.md`'s `Distribution` section, document this. A
+locally-built copy that a user goes on to redistribute to *other people* is
+that redistributor's own signing/notarization responsibility, stated
+explicitly in both docs.
 
-Maintainer actions:
-
-- [ ] Choose: unsigned/ad-hoc-signed downloads with Gatekeeper disclosure, user
-      builds from source, or a separately funded Developer ID membership.
-- [ ] Do not claim notarization if it is not performed.
-- [ ] Test documented right-click/Open behavior on a clean supported Mac.
-- [ ] Never instruct users to disable Gatekeeper globally.
-- [ ] Keep Tauri updater signatures and private-key backup regardless of Apple
-      notarization choice.
+Original open questions (kept for context): Apple Developer Program
+membership was never part of the $0 baseline and remains out of scope,
+since no maintainer-run signing pipeline exists at all now.
 
 ### MAN-010 — Choose $0 extension distribution posture
 
-Maintainer actions:
-
-- [ ] For literal $0, document source build + Load Unpacked limitations and lack of
-      reliable automatic updates.
-- [ ] If using Chrome Web Store later, treat registration as a non-zero distribution
-      cost and complete store privacy/permission disclosures.
-- [ ] Ensure no OAuth publishing credentials remain configured if store automation
-      is not used.
-- [ ] Verify the public extension build pairs securely with the desktop app.
+**DONE (2026-09-26).** Decided: source-only, self-build, same as the
+desktop app. No Chrome Web Store listing exists or is planned — the
+Chrome extension is built locally (`cd extension && pnpm install && pnpm
+build`) and loaded via `chrome://extensions` → Developer mode → Load
+Unpacked. `publish-extension.yml` (the former Chrome Web Store publishing
+workflow) has been deleted, not just left unused. README.md's "Building
+from source" section and `AGENTS.md`'s `Distribution` section document
+this, including the accepted limitation that Load Unpacked has no
+automatic-update mechanism — a user who wants updates re-pulls and
+rebuilds from source.
 
 ### MAN-011 — Audit private GitHub state before visibility change
 
@@ -2110,11 +2212,19 @@ The announcement should state:
 
 Run this only after all implementation tasks are `DONE` and before `MAN-012`.
 
+**2026-09-26:** four items below are struck through — they assumed a
+maintainer-built/signed release and an `orbit-releases` updater feed, which
+no longer exist (see `ADR-000`'s update note). The rest still applies: this
+is source-only distribution, not a lower verification bar.
+
 - [ ] Clean clone into a new temporary directory.
 - [ ] Install every workspace using committed lockfiles.
 - [ ] Run the complete local verification suite with no production secrets.
-- [ ] Build both macOS architectures through the hardened workflow/dry run.
-- [ ] Inspect unpacked application/extension artifacts for `.env`, tokens, source
+- [ ] Build both macOS architectures locally (`pnpm tauri build`, run on
+      Apple Silicon and Intel if both are available) and confirm each
+      launches. ~~Build both macOS architectures through the hardened
+      workflow/dry run.~~
+- [ ] Inspect the built application/extension artifacts for `.env`, tokens, source
       maps, signing material, absolute private paths and captured test data.
 - [ ] Test first launch: no event before consent.
 - [ ] Test each capture opt-in, exclusion, pause and revoke control.
@@ -2123,11 +2233,16 @@ Run this only after all implementation tasks are `DONE` and before `MAN-012`.
 - [ ] Test offline/no-key behavior.
 - [ ] Test user BYOK add/use/disable/delete across restart.
 - [ ] Test full wipe and inspect SQLite/WAL/SHM, search/vector storage and temp files.
-- [ ] Test update from the previous public release on Apple Silicon and Intel.
-- [ ] Verify checksums, updater signature, SBOM and provenance.
+- [ ] ~~Test update from the previous public release on Apple Silicon and Intel.~~
+      N/A — no auto-updater exists.
+- [ ] ~~Verify checksums, updater signature, SBOM and provenance.~~ N/A — no
+      release artifacts are produced by the maintainer.
 - [ ] Review all website/app privacy text against observed network traffic.
-- [ ] Confirm provider/hosting/telemetry dashboards show no maintainer-funded usage.
-- [ ] Confirm the `orbit-releases` latest manifest contains both architectures.
+- [ ] Confirm provider/hosting/telemetry dashboards show no maintainer-funded usage
+      (should show none at all — no maintainer-run infrastructure exists to
+      have usage in the first place).
+- [ ] ~~Confirm the `orbit-releases` latest manifest contains both
+      architectures.~~ N/A — `orbit-releases` is retired.
 
 ---
 
@@ -2161,6 +2276,8 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-25 | DOC-002 | PARTIAL | `README.md` (new), `app/README.md`, `backend/README.md`, `worker/README.md`, `landing/README.md` | Wrote the root README from scratch — none existed before. Covers status/maturity (including the two honest caveats: unsigned/unnotarized, no checksum verification yet), what Orbit does, a full capture/never-capture inventory pulled from the codebase (not old marketing copy), first-launch consent behavior, the BYOK cost model, install instructions with the safe per-app Gatekeeper bypass only (explicitly states never to disable Gatekeeper globally), build commands for all four workspaces plus each one's test command, known limitations, and the warranty disclaimer. Replaced `app/README.md` (still the unedited `create-next-app`/Tauri boilerplate) and added a root-guide link to `backend/README.md`, `worker/README.md`, and `landing/README.md` (the last also still had un-customized boilerplate text). Verified the "Privacy tab" UI label referenced actually matches `App.tsx`'s tab button text, and simplified one heading to avoid an em-dash/anchor-link ambiguity. | Screenshots/demo images were not added — this environment can't launch and interact with the GUI app to capture real images of it; a maintainer should add some before public launch. Next: `DOC-003`. |
 | 2026-09-25 | DOC-003 | PARTIAL | `landing/src/app/privacy/page.tsx`, `landing/src/app/page.tsx`, `landing/src/app/beta/page.tsx` | Full rewrite of the privacy policy from current code, replacing the old copy's two internal contradictions (claimed data "never leaves your device" then described cloud AI transmission; claimed "anonymous analytics" are collected right next to a correct "no telemetry" statement) and its now-false Claude/Gemini processor claims (removed in `COST-002`). Researched Groq's and Voyage AI's actual data-retention policies against their own primary docs before writing about them: Groq doesn't retain inference data by default (30-day troubleshooting-only log, ZDR available); Voyage AI trains on customer data by default unless the user opts out on their own account — called out explicitly since Orbit has no control over that setting. Verified the session-vs-event deletion distinction directly against `routes/memory.py`'s actual DELETE logic rather than assuming: deleting a session unlinks but does not delete its underlying raw events, which can be re-summarized into a new session later; only deleting the events themselves, or a full wipe, is permanent. New sections cover encryption/retention (90-day rolling event retention, no app-level encryption, FileVault recommended), redaction limits (best-effort, not a guarantee), and a warning to get permission before capturing employer/client content. Grep-reviewed `landing/`, in-app UI copy, `README.md`, and `AGENTS.md` for contradictions with the new policy; found and fixed three more instances of "all data stays on your Mac" (main landing hero, its privacy callout strip, and `/beta`) now false once a personal key is configured. Verified: `pnpm build` (static export) and `pnpm lint` both clean. | `DOC-005` (architecture/threat-model doc) doesn't exist yet, so the "policy data flow matches DOC-005" criterion can't be directly confirmed — both were/will be derived from the same verified code, so they should agree once `DOC-005` is written, but that's unconfirmed until then. The cross-document contradiction check was a manual grep, not an automated/formalized tool. Next: `DOC-004`. |
 | 2026-09-25 | APPSEC-001 | PARTIAL | `app/src-tauri/Cargo.toml`, `app/src-tauri/tauri.conf.json`, `app/src-tauri/capabilities/default.json`, `docs/adr/ADR-005-tauri-shell-hardening.md` | Removed the unconditional `devtools` Cargo feature (WRY still exposes devtools automatically in debug builds; release builds no longer force it on). Added a restrictive CSP (`default-src 'self'` plus a `connect-src` scoped to the fixed-port local backend, PostHog, and Sentry — the only hosts the webview itself calls; the Cloudflare Worker and AI providers are never in `connect-src` because only the Python backend calls them). Rewrote `capabilities/default.json` to grant exactly what the webview calls: removed `global-shortcut:default` and six unused `core:window:allow-*` permissions (the hotkey and those window transitions are Rust-native and were never gated by this file), and added the previously-missing `updater:allow-check`, `updater:allow-download-and-install`, `process:allow-restart`, and `dialog:allow-open` — without which auto-update and the watched-folder picker were silently non-functional (both call sites swallow errors by design). Existing entitlements were reviewed and left unchanged; each already carries an inline justification comment and is exercised by a real code path. `macOSPrivateApi: true` is required by the main window's `shadow: false` and the overlay window's transparency/click-through. Verification: `cargo check --bin app` (also validates the capabilities file against plugin permission schemas), `cargo test --bin app` 37/37, `pnpm build` (TypeScript + Vite), `git diff --check` all passed. | Required maintainer action: build a real `.dmg`, confirm right-click → Inspect Element is unavailable, and confirm the local API, PostHog/Sentry, the update check, and the folder picker all still work under the new CSP/capability grant. Record the outcome here before marking `APPSEC-001` DONE. Next: `COST-001`. `PRIV-002`/`PRIV-003` remain PARTIAL, independent of this task. |
+| 2026-09-26 | ADR-000 (pivot) | AMENDED | `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `THIRD_PARTY_NOTICES.md`, `OPEN_SOURCE_ROADMAP.md`, `app/src/App.tsx`, `app/src/hooks/useUpdater.ts` (deleted), `app/src-tauri/src/lib.rs`, `app/src-tauri/Cargo.toml`, `app/package.json`, `app/src-tauri/tauri.conf.json`, `app/src-tauri/capabilities/default.json`, `backend/services/voyage_service.py`, `backend/services/groq_service.py`, `backend/services/claude_service.py` (deleted), `backend/services/gemini_service.py` (deleted), `backend/scheduler.py`, `backend/tests/test_voyage_byok.py`, `backend/tests/test_groq_byok.py`, `backend/tests/test_provider_context_sanitizer.py`, `.github/workflows/release.yml` (deleted), `.github/workflows/publish-extension.yml` (deleted), `.github/workflows/ci.yml`, `.github/dependabot.yml`, `worker/` (deleted entirely), `releases/` (deleted), `landing/src/app/page.tsx`, `landing/src/app/beta/` (deleted), `landing/src/app/privacy/page.tsx` | Maintainer decision, verbatim intent: stop developing this actively for now, make the repo fully public/open, drop the separate `orbit-releases` repo and the idea of cutting releases at all, point the landing page at the GitHub repo with no waitlist, and remove Supabase/R2/Cloudflare/Worker entirely — fully BYOK, self-build only (see `ADR-000`'s update note above). Confirmed via `AskUserQuestion`: drop the Chrome extension's distribution path too; remove the auto-updater entirely (not kill-switch it); maintainer authorized the agent to perform the live Cloudflare Worker teardown itself and to act on the `orbit-releases` repo, using the `github-personal` (`Saadaan-Hassan`) `gh` account, not `github-work`. Made Voyage AI BYOK-direct (`api.voyageai.com`, `Authorization: Bearer`) using the exact pattern the Worker's `/embed` route already implemented as a passthrough — no functionality lost. Removed Groq's dead Worker-fallback branch (a personal key was already required in practice; the fallback path was unreachable in the previous COST-002 state too, just not deleted). Deleted `claude_service.py`/`gemini_service.py` outright (already unused, no BYOK path ever built for either). Removed the Tauri auto-updater plugin/config/capabilities/UI entirely, keeping `tauri-plugin-dialog` (folder picker) and `tauri-plugin-process` (used by the unrelated `restart_app()` command, confirmed via grep before keeping it). Deleted `release.yml`, `publish-extension.yml`, the `worker/` workspace, and `releases/`; removed the CI `worker` job and its Dependabot entry. Updated the landing page (GitHub CTA + clone snippet, no downloads, no waitlist — Supabase/R2 were already gone since `SITE-001`, confirmed via grep against `docs/PHASE_2.md`'s historical-only mentions before concluding there was nothing live to remove) and its privacy policy's Voyage section to match Groq's existing BYOK-direct framing. Rewrote `AGENTS.md` (~15 sections), `README.md` (Status/Installing/Building-from-source/Known-limitations), `CONTRIBUTING.md` (dev setup, test commands, dependency scanning, privacy rules, release boundaries), and `THIRD_PARTY_NOTICES.md` (workspace count 5→4, dropped the `wrangler`/`worker/` LGPL attribution) to remove every Worker/release reference. This entry retires `REL-001`/`REL-002`/`REL-003` and rescopes `MAN-006`/`MAN-009`/`MAN-010` — see the Task Index and each task's own entry. Verification: backend `uv run ruff check .` clean, `uv run mypy .` clean (39 files, down from 41), `uv run python -m unittest discover -s tests -p 'test_*.py'` 66/66; app `cargo check --bin app`/`cargo fmt --check`/`cargo clippy --all-targets -- -D warnings` clean, `cargo test --bin app` 37/37, `pnpm install`/`pnpm typecheck`/`pnpm lint` (7 pre-existing warnings, 0 errors)/`pnpm test` 10/10; landing `pnpm lint` clean, `pnpm build` succeeds (4 static routes); `actionlint`/`zizmor` both clean on the remaining two workflow files. | Not yet done at the time of this row: the actual live teardown (deleting the deployed `orbit-api-proxy` Cloudflare Worker, archiving `orbit-releases`) and committing this pivot's changes — see `MAN-006`'s own entry once that's performed, and check the Completion Log for a follow-up row recording the teardown's outcome. |
+| 2026-09-26 | MAN-006 | PARTIAL | Live Cloudflare Worker (`orbit-api-proxy`), `orbit-releases` GitHub repo | Performed the two teardown actions the maintainer explicitly authorized the agent to do directly (verbatim: "i want you to do it yourself... also for the gh, use gh switch to use my github-personal not the github-work"). Switched `gh` to the `Saadaan-Hassan` account first (`gh auth switch --user Saadaan-Hassan`; confirmed via `gh auth status` showing it active). Deleted the deployed Worker with `npx wrangler delete --name orbit-api-proxy --force` (wrangler already authenticated on this machine as `webmaker9d@gmail.com`, `workers:write` scope) — confirmed gone via a follow-up `wrangler deployments list --name orbit-api-proxy` returning "This Worker does not exist on your account" (code 10007). Archived (not deleted) `orbit-releases` via `gh repo archive Saadaan-Hassan/orbit-releases --yes` — confirmed via `gh repo view` reporting `isArchived: true`; chose archive over delete since the maintainer said "stop" needing it without specifying delete, and archive is reversible while still making the repo read-only and clearly retired. | Provider-key revocation (Groq/Voyage/Anthropic/Gemini dashboards) and confirming no further usage posts against old keys still needs the maintainer's own account access — see the remaining unchecked items in `MAN-006`'s own entry. If the maintainer wants `orbit-releases` deleted rather than archived, that's a one-line follow-up they can do themselves. |
 
 ---
 

@@ -1,10 +1,12 @@
 import { Eye, Layers, Search } from "lucide-react";
 
-const WHAT_TO_EXPECT = [
-  "macOS 13 Ventura or later required",
-  "The app isn't notarized yet, so macOS will block it the first time you open it — click Done (not Move to Bin), then go to System Settings → Privacy & Security, scroll to the bottom, and click \"Open Anyway\" next to Orbit. Open it once more to confirm.",
-  "Accessibility permission needed (you'll be guided through it)",
-  "No account creation — Orbit runs entirely on your Mac",
+const ORBIT_GITHUB_URL = "https://github.com/Saadaan-Hassan/orbit";
+
+const WHAT_YOULL_NEED = [
+  "macOS 13 Ventura or later, plus Xcode Command Line Tools",
+  "Rust, Node.js/pnpm, and Python (uv) — see the README for exact build commands",
+  "Your own Groq API key for AI features (free tier available) — Voyage AI key too if you want semantic search. Fully optional: Orbit works offline with keyword search alone",
+  "Accessibility permission, granted during first launch (you'll be guided through it)",
 ];
 
 const HOW_IT_WORKS = [
@@ -41,7 +43,7 @@ export default function Page() {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-zinc-300 opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-white" />
             </span>
-            Available now for macOS
+            Open source · macOS · Bring your own key
           </span>
 
           {/* Headline */}
@@ -56,38 +58,26 @@ export default function Page() {
             You spend hours rebuilding mental context every time you switch tasks. Orbit remembers your work so you never have to start over.
           </p>
 
-          {/* Download buttons */}
+          {/* Primary CTA */}
           <div className="w-full max-w-md mt-4 flex flex-col gap-2.5">
             <a
-              href="https://github.com/Saadaan-Hassan/orbit-releases/releases/latest/download/Orbit-latest-aarch64.dmg"
+              href={ORBIT_GITHUB_URL}
               className="w-full py-3.5 rounded-xl bg-white text-zinc-950 text-sm font-semibold text-center hover:opacity-90 transition-all"
             >
-              Download for Apple Silicon (M1/M2/M3/M4)
+              View on GitHub
             </a>
-            <a
-              href="https://github.com/Saadaan-Hassan/orbit-releases/releases/latest/download/Orbit-latest-x86_64.dmg"
-              className="w-full py-3 rounded-xl border border-white/10 text-zinc-300 text-xs font-semibold text-center hover:bg-white/5 transition-all"
-            >
-              Download for Intel Mac
-            </a>
-            <p className="text-[11px] text-zinc-600 text-center">
-              Not sure which chip you have? — Apple menu → About This Mac.{" "}
-              <a
-                href="https://github.com/Saadaan-Hassan/orbit-releases/releases/latest"
-                className="underline underline-offset-2 hover:text-zinc-400 transition-colors"
-              >
-                See all release files
-              </a>
+            <p className="text-[11px] text-zinc-600 text-center font-mono bg-white/[0.02] border border-white/5 rounded-lg py-2.5 px-3">
+              git clone {ORBIT_GITHUB_URL}.git
             </p>
           </div>
 
-          {/* What to expect box */}
+          {/* What you'll need box */}
           <div className="w-full max-w-md flex flex-col gap-3 rounded-xl border border-white/5 bg-white/[0.015] p-5 text-left">
             <p className="text-[11px] font-semibold text-zinc-500 tracking-widest uppercase">
-              What to expect
+              What you&apos;ll need
             </p>
             <ul className="flex flex-col gap-2.5">
-              {WHAT_TO_EXPECT.map((item) => (
+              {WHAT_YOULL_NEED.map((item) => (
                 <li
                   key={item}
                   className="flex items-start gap-2.5 text-xs text-zinc-400 font-light leading-relaxed"
@@ -101,7 +91,7 @@ export default function Page() {
 
           {/* Privacy trust */}
           <p className="text-[11px] text-zinc-600 font-light tracking-wide">
-            Local by default · Cloud AI only if you add your own key · Never sold · Delete anytime
+            Local by default · Cloud AI only if you add your own key · No maintainer infrastructure of any kind · Delete anytime
           </p>
         </div>
       </section>

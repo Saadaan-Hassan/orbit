@@ -9,8 +9,6 @@
     "core:window:allow-set-size",
     "core:window:allow-hide",
     "core:window:allow-start-dragging",
-    "updater:allow-check",
-    "updater:allow-download-and-install",
     "process:allow-restart",
     "dialog:allow-open"
   ]

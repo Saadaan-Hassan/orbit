@@ -1,9 +1,13 @@
-"""Regression coverage for COST-002: Voyage AI BYOK, no maintainer fallback.
+"""Regression coverage for Voyage AI BYOK, called directly with no
+maintainer infrastructure in front of it (the former Cloudflare Worker
+relay was removed entirely).
 
 Mirrors test_groq_byok.py's structure. Covers:
   - with no personal key, generate_text_embedding fails fast (no retries,
-    no maintainer-funded fallback exists anymore);
-  - with a personal key, the request carries X-Voyage-Api-Key;
+    no maintainer-funded fallback exists);
+  - with a personal key, the request goes straight to
+    https://api.voyageai.com/v1/embeddings with a standard
+    Authorization: Bearer header;
   - the /settings/voyage-key routes never return the raw key, and the
     add/test/disable/remove lifecycle behaves correctly.
 """
@@ -81,10 +85,10 @@ class VoyageDirectCallRoutingTests(unittest.TestCase):
             return voyage._http_client.requests[0]
 
         request = self._with_voyage(operation, personal_key="voyage_personal_key_0123456789")
-        self.assertEqual(request["args"][0], "/embed")
+        self.assertEqual(request["args"][0], "https://api.voyageai.com/v1/embeddings")
         self.assertEqual(
-            request["kwargs"]["headers"].get("X-Voyage-Api-Key"),
-            "voyage_personal_key_0123456789",
+            request["kwargs"]["headers"].get("Authorization"),
+            "Bearer voyage_personal_key_0123456789",
         )
 
     def test_no_personal_key_fails_immediately_without_any_request(self):
@@ -107,7 +111,7 @@ class VoyageDirectCallRoutingTests(unittest.TestCase):
         self.assertTrue(valid)
         self.assertEqual(reason, "ok")
         self.assertEqual(
-            request["kwargs"]["headers"]["X-Voyage-Api-Key"], "voyage_candidate_key_0123456789"
+            request["kwargs"]["headers"]["Authorization"], "Bearer voyage_candidate_key_0123456789"
         )
 
     def test_key_test_endpoint_reports_invalid_key(self):

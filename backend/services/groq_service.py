@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import time
 from collections.abc import AsyncGenerator
 
@@ -40,11 +39,8 @@ GROQ_CLASSIFY_MODEL = "openai/gpt-oss-20b"
 # the number of events per request is adjusted.
 GROQ_CLASSIFY_CONTEXT_WINDOW_TOKENS = 131_072
 
-_WORKER_URL = os.getenv("WORKER_URL", "")
-
-# BYOK target: when a personal key is configured, requests go straight here
-# instead of through the maintainer's Worker (COST-001) — the user's key and
-# the content of the request never reach the Worker at all in that case.
+# BYOK-only (COST-001) — the user's own key goes straight here. No Worker
+# or other maintainer infrastructure exists to route through instead.
 GROQ_DIRECT_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 _http_client: httpx.AsyncClient | None = None
@@ -129,13 +125,13 @@ async def _call_groq_chat(
     from the request) only for a non-reasoning model, none of which this
     codebase currently calls through this function.
 
-    Groq is Orbit's centrally-funded default provider — no personal key is
-    required. If the user has configured their own key (Settings → AI
-    Provider), requests go straight to api.groq.com with that key as an
-    `Authorization: Bearer` header — never through the maintainer's Worker.
-    Otherwise the Worker is used with its own shared GROQ_API_KEY secret.
+    BYOK-only, no maintainer-funded fallback of any kind: the user's own key
+    (Settings → AI Provider) goes straight to api.groq.com as an
+    `Authorization: Bearer` header — no Worker or other maintainer
+    infrastructure sits in front of this at all.
 
     Returns the raw text content of the model's reply, or None when:
+    - No personal key is configured.
     - This model is in a cooldown from a recent 429 (rate limit) or 401/403
       (bad key) response (COST-005).
     - The request fails for any reason (network error, non-2xx, bad shape).
@@ -167,19 +163,19 @@ async def _call_groq_chat(
         request_body["reasoning_effort"] = reasoning_effort
 
     personal_api_key = await get_groq_api_key()
-    if personal_api_key:
-        target_url = GROQ_DIRECT_API_URL
-        request_headers = {"Authorization": f"Bearer {personal_api_key}"}
-    else:
-        target_url = f"{_WORKER_URL}/chat-groq"
-        request_headers = {}
+    if not personal_api_key:
+        # No maintainer-funded fallback exists, and no Worker to even
+        # attempt a request against — there's nothing left to call at all
+        # without a personal key.
+        logger.debug("No personal Groq key configured — skipping this call.")
+        return None
 
     started_at = time.monotonic()
     try:
         response = await _get_http_client().post(
-            target_url,
+            GROQ_DIRECT_API_URL,
             json=request_body,
-            headers=request_headers,
+            headers={"Authorization": f"Bearer {personal_api_key}"},
             timeout=_GROQ_REQUEST_TIMEOUT_SECONDS,
         )
     except Exception as network_error:
@@ -605,14 +601,12 @@ async def classify_events_batch_groq(events: list[dict]) -> list[dict] | None:
     """
     Classify a batch of raw activity events via the user's own Groq API key.
 
-    Mirrors gemini_service.classify_events_batch's input/output shape and
-    input fidelity exactly (same fields, no truncation) so the two providers
-    are directly comparable and Groq never gives a worse answer purely from
-    missing context: each event gains "category" and "project" fields.
+    Sends full input fidelity (same fields, no truncation) so Groq never
+    gives a worse answer purely from missing context: each event gains
+    "category" and "project" fields.
 
-    Typical batches (tens of events) are sent in a single request, identical
-    to how Gemini handles them. Only when the estimated prompt size would
-    exceed GROQ_CLASSIFY_MODEL's fixed context window (e.g. a large backlog
+    Typical batches (tens of events) are sent in a single request. Only when
+    the estimated prompt size would exceed GROQ_CLASSIFY_MODEL's fixed context window (e.g. a large backlog
     after the app was closed for a while) is the batch split into multiple
     full-fidelity groups — no event's content is ever shortened, only the
     number of events per request is adjusted to fit the model's hard limit.
@@ -673,23 +667,19 @@ async def stream_recall_response_groq(
 ) -> AsyncGenerator[str]:
     """
     Streams a recall answer from Groq and yields raw text delta strings as
-    they arrive. Goes straight to api.groq.com when a personal key is
-    configured (COST-001); otherwise via the maintainer's Worker with its
-    shared key.
+    they arrive. BYOK-only (COST-001) — goes straight to api.groq.com with
+    the user's own key; no maintainer infrastructure sits in front of this.
 
-    Mirrors claude_service.stream_recall_response's signature and yield
-    shape exactly, so recall.py's caller doesn't need to know which provider
-    is behind it. Groq's Chat Completions API is OpenAI-compatible: the
-    system prompt is a "system"-role message (not a separate top-level field
-    like Anthropic's), and streaming chunks arrive as
+    Groq's Chat Completions API is OpenAI-compatible: the system prompt is a
+    "system"-role message, and streaming chunks arrive as
     `data: {"choices":[{"delta":{"content":"..."}}]}` lines, terminated by
-    `data: [DONE]` — a different wire format from Anthropic's
-    content_block_delta events, so this cannot reuse Claude's parser.
+    `data: [DONE]`.
 
     Raises httpx.HTTPStatusError / ConnectError / TimeoutException on
-    failure — recall.py's existing exception handling around the Claude
-    call already catches exactly these and falls back to the offline FTS5
-    message, so no new error handling is needed there.
+    failure, including when no personal key is configured (raised directly,
+    not from a failed request — there's nothing left to call without one) —
+    recall.py's exception handling around this call catches exactly these
+    and falls back to the offline FTS5 message.
     """
     safe_system_prompt, safe_user_prompt, prior_messages = await sanitize_chat_context(
         system_prompt, user_prompt, conversation_history
@@ -713,20 +703,20 @@ async def stream_recall_response_groq(
     }
 
     personal_api_key = await get_groq_api_key()
-    if personal_api_key:
-        target_url = GROQ_DIRECT_API_URL
-        request_headers = {"Authorization": f"Bearer {personal_api_key}"}
-    else:
-        target_url = f"{_WORKER_URL}/chat-groq"
-        request_headers = {}
+    if not personal_api_key:
+        # No maintainer-funded fallback exists, and no Worker to even
+        # attempt a request against. Raise the same exception family a
+        # failed request would, so recall.py's existing handling (falls back
+        # to the offline FTS5 message) applies without any special-casing.
+        raise httpx.ConnectError("No personal Groq key configured")
 
     started_at = time.monotonic()
     try:
         async with _get_http_client().stream(
             "POST",
-            target_url,
+            GROQ_DIRECT_API_URL,
             json=request_body,
-            headers=request_headers,
+            headers={"Authorization": f"Bearer {personal_api_key}"},
             timeout=_GROQ_RECALL_TIMEOUT_SECONDS,
         ) as streaming_response:
             streaming_response.raise_for_status()

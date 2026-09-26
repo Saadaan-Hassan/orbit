@@ -1,13 +1,15 @@
 """
 Voyage AI embedding service.
 
-Generates text embeddings via the Cloudflare Worker /embed route. The Worker
-holds no maintainer-funded Voyage credential (COST-002) — every request must
-carry the user's own key. `database.get_voyage_api_key()` reads it from
-macOS Keychain immediately before use and attaches it as X-Voyage-Api-Key;
-with no personal key configured, embeddings are simply unavailable (session
-generation and recall already degrade gracefully without them — semantic
-search is a supplement to FTS5, never a requirement).
+Generates text embeddings by calling Voyage AI directly — no maintainer
+infrastructure of any kind sits between this backend and Voyage (the former
+Cloudflare Worker BYOK relay was removed entirely; there is nothing left to
+proxy through). `database.get_voyage_api_key()` reads the user's own key
+from macOS Keychain immediately before use and attaches it as a standard
+`Authorization: Bearer` header; with no personal key configured, embeddings
+are simply unavailable (session generation and recall already degrade
+gracefully without them — semantic search is a supplement to FTS5, never a
+requirement).
 
 One httpx.AsyncClient is created at module level and reused for every
 request — never instantiate a new client per call.
@@ -15,20 +17,16 @@ request — never instantiate a new client per call.
 
 import asyncio
 import logging
-import os
 import random
 import time
 
 import httpx
-from dotenv import load_dotenv
 
 from database import get_voyage_api_key
 from services.provider_context_sanitizer import (
     log_provider_diagnostic,
     sanitize_embedding_text,
 )
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +50,11 @@ VOYAGE_EMBEDDING_DIMENSION = 512
 
 HTTP_REQUEST_TIMEOUT_SECONDS = 30.0
 
+# BYOK target — called directly with the user's own key, the same pattern
+# groq_service.py already uses. No maintainer infrastructure sits in front
+# of this at all.
+VOYAGE_DIRECT_API_URL = "https://api.voyageai.com/v1/embeddings"
+
 # COST-005: a bad key (401/403) or a rate limit (429) won't resolve itself
 # between one session's embedding and the next in the same batch — this
 # cooldown stops every session in a backlog from independently rediscovering
@@ -64,15 +67,11 @@ _VOYAGE_AUTH_FAILURE_COOLDOWN_SECONDS = 300.0
 _VOYAGE_DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 90.0
 
 # ---------------------------------------------------------------------------
-# Singleton HTTP client — points at the Cloudflare Worker, not Voyage directly.
+# Singleton HTTP client — no base_url, since every call already goes
+# directly to VOYAGE_DIRECT_API_URL.
 # ---------------------------------------------------------------------------
 
-_worker_url = os.getenv("WORKER_URL", "http://localhost:8787")
-
-_http_client = httpx.AsyncClient(
-    base_url=_worker_url,
-    timeout=HTTP_REQUEST_TIMEOUT_SECONDS,
-)
+_http_client = httpx.AsyncClient(timeout=HTTP_REQUEST_TIMEOUT_SECONDS)
 
 
 def _set_voyage_cooldown(seconds: float) -> None:
@@ -128,9 +127,9 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
 
     personal_api_key = await get_voyage_api_key()
     if not personal_api_key:
-        # No maintainer-funded fallback exists (COST-002) — without a
-        # personal key the Worker would only ever return 401. Fail
-        # immediately rather than spend three retries proving that.
+        # No maintainer-funded fallback exists, and no Worker to even
+        # attempt a request against — there's nothing left to call at all
+        # without a personal key. Fail immediately.
         log_provider_diagnostic(
             provider="voyage",
             model=VOYAGE_EMBEDDING_MODEL,
@@ -148,13 +147,13 @@ async def generate_text_embedding(text_to_embed: str) -> list[float]:
         logger.debug("Voyage cooldown active — skipping this embedding call.")
         raise VoyageUnavailableError("Voyage is in a cooldown after a recent auth/rate-limit failure")
 
-    request_headers = {"X-Voyage-Api-Key": personal_api_key}
+    request_headers = {"Authorization": f"Bearer {personal_api_key}"}
 
     for attempt_number in range(3):
         started_at = time.monotonic()
         try:
             response = await _http_client.post(
-                "/embed", json=request_body, headers=request_headers
+                VOYAGE_DIRECT_API_URL, json=request_body, headers=request_headers
             )
 
             if response.is_success:
@@ -223,9 +222,9 @@ async def test_voyage_api_key(api_key: str) -> tuple[bool, str]:
     """
     try:
         response = await _http_client.post(
-            "/embed",
+            VOYAGE_DIRECT_API_URL,
             json={"input": ["test"], "model": VOYAGE_EMBEDDING_MODEL, "input_type": "document"},
-            headers={"X-Voyage-Api-Key": api_key},
+            headers={"Authorization": f"Bearer {api_key}"},
             timeout=10.0,
         )
     except httpx.TimeoutException:

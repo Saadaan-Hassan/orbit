@@ -74,8 +74,6 @@ class ProviderContextSanitizerTests(unittest.TestCase):
             database_path = Path(directory) / "orbit.db"
             with patch.dict(os.environ, {"ORBIT_DB_PATH": str(database_path)}, clear=False):
                 import database
-                import services.claude_service as claude
-                import services.gemini_service as gemini
                 import services.groq_service as groq
                 import services.provider_context_sanitizer as sanitizer
                 import services.voyage_service as voyage
@@ -83,13 +81,11 @@ class ProviderContextSanitizerTests(unittest.TestCase):
                 asyncio.run(database._async_engine.dispose())
                 database = importlib.reload(database)
                 sanitizer = importlib.reload(sanitizer)
-                claude = importlib.reload(claude)
-                gemini = importlib.reload(gemini)
                 groq = importlib.reload(groq)
                 voyage = importlib.reload(voyage)
                 asyncio.run(database.create_all_tables())
                 result = asyncio.run(
-                    operation(database, sanitizer, claude, gemini, groq, voyage)
+                    operation(database, sanitizer, groq, voyage)
                 )
                 asyncio.run(database._async_engine.dispose())
             return result
@@ -130,13 +126,16 @@ class ProviderContextSanitizerTests(unittest.TestCase):
             return dict(result.fetchone()._mapping)
 
     def test_legacy_database_row_is_redacted_before_groq_classification(self):
-        async def operation(database, sanitizer, claude, gemini, groq, voyage):
+        async def operation(database, sanitizer, groq, voyage):
             legacy_event = await self._insert_legacy_values(database)
             client = _CapturingPostClient(
                 {"choices": [{"message": {"content": '[{"id":"legacy-event","category":"work","project":null}]'}}]}
             )
             groq._http_client = client
-            await groq.classify_events_batch_groq([legacy_event])
+            # A personal key must be configured — Groq is BYOK-only, no
+            # maintainer-funded fallback exists to send this request through.
+            with patch.object(groq, "get_groq_api_key", new=AsyncMock(return_value="gsk_test_key_0123456789")):
+                await groq.classify_events_batch_groq([legacy_event])
             return json.dumps(client.requests[0]["kwargs"]["json"], ensure_ascii=False)
 
         sent_json = self._with_services(operation)
@@ -146,21 +145,24 @@ class ProviderContextSanitizerTests(unittest.TestCase):
         self.assertIn("[REDACTED", sent_json)
 
     def test_recall_query_and_conversation_history_are_redacted_before_streaming(self):
-        async def operation(database, sanitizer, claude, gemini, groq, voyage):
+        async def operation(database, sanitizer, groq, voyage):
             await self._insert_legacy_values(database)
             client = _CapturingStreamClient()
             groq._http_client = client
-            chunks = [
-                chunk
-                async for chunk in groq.stream_recall_response_groq(
-                    system_prompt="system prompt",
-                    user_prompt=f"Find {LEGACY_SECRET} at {LEGACY_PATH}",
-                    conversation_history=[
-                        {"role": "user", "content": f"Earlier: {CUSTOM_SECRET}"},
-                        {"role": "assistant", "content": f"I saw {LEGACY_SECRET}"},
-                    ],
-                )
-            ]
+            # A personal key must be configured — Groq is BYOK-only, no
+            # maintainer-funded fallback exists to send this request through.
+            with patch.object(groq, "get_groq_api_key", new=AsyncMock(return_value="gsk_test_key_0123456789")):
+                chunks = [
+                    chunk
+                    async for chunk in groq.stream_recall_response_groq(
+                        system_prompt="system prompt",
+                        user_prompt=f"Find {LEGACY_SECRET} at {LEGACY_PATH}",
+                        conversation_history=[
+                            {"role": "user", "content": f"Earlier: {CUSTOM_SECRET}"},
+                            {"role": "assistant", "content": f"I saw {LEGACY_SECRET}"},
+                        ],
+                    )
+                ]
             return chunks, json.dumps(client.requests[0]["kwargs"]["json"], ensure_ascii=False)
 
         chunks, sent_json = self._with_services(operation)
@@ -169,28 +171,10 @@ class ProviderContextSanitizerTests(unittest.TestCase):
         self.assertNotIn(CUSTOM_SECRET, sent_json)
         self.assertNotIn(LEGACY_PATH, sent_json)
 
-    def test_claude_gemini_and_voyage_use_the_same_boundary(self):
-        async def operation(database, sanitizer, claude, gemini, groq, voyage):
+    def test_voyage_embedding_request_uses_the_same_boundary(self):
+        async def operation(database, sanitizer, groq, voyage):
             await self._insert_legacy_values(database)
             unsafe_text = f"{LEGACY_SECRET} {CUSTOM_SECRET} {LEGACY_PATH}"
-
-            claude_client = _CapturingPostClient(
-                {"content": [{"text": "summary"}]}
-            )
-            claude._http_client = claude_client
-            await claude.generate_session_summary("system", unsafe_text)
-
-            gemini_client = _CapturingPostClient(
-                {
-                    "candidates": [
-                        {"content": {"parts": [{"text": '[]'}]}}
-                    ]
-                }
-            )
-            gemini._http_client = gemini_client
-            await gemini.classify_events_batch(
-                [{"id": "event", "raw_content": unsafe_text, "app_name": "app", "url": ""}]
-            )
 
             voyage_client = _CapturingPostClient(
                 {"data": [{"embedding": [0.0, 1.0]}]}
@@ -201,26 +185,25 @@ class ProviderContextSanitizerTests(unittest.TestCase):
             ):
                 await voyage.generate_text_embedding(unsafe_text)
 
-            return [
-                json.dumps(claude_client.requests[0]["kwargs"]["json"], ensure_ascii=False),
-                json.dumps(gemini_client.requests[0]["kwargs"]["json"], ensure_ascii=False),
-                json.dumps(voyage_client.requests[0]["kwargs"]["json"], ensure_ascii=False),
-            ]
+            return json.dumps(voyage_client.requests[0]["kwargs"]["json"], ensure_ascii=False)
 
-        provider_payloads = self._with_services(operation)
-        for payload in provider_payloads:
-            self.assertNotIn(LEGACY_SECRET, payload)
-            self.assertNotIn(CUSTOM_SECRET, payload)
-            self.assertNotIn(LEGACY_PATH, payload)
-            self.assertIn("[REDACTED", payload)
+        payload = self._with_services(operation)
+        self.assertNotIn(LEGACY_SECRET, payload)
+        self.assertNotIn(CUSTOM_SECRET, payload)
+        self.assertNotIn(LEGACY_PATH, payload)
 
     def test_provider_diagnostics_exclude_response_bodies(self):
-        async def operation(database, sanitizer, claude, gemini, groq, voyage):
+        async def operation(database, sanitizer, groq, voyage):
             groq._http_client = _CapturingPostClient(
                 {"error": {"message": f"echoed prompt: {LEGACY_SECRET} {LEGACY_PATH}"}},
                 status_code=500,
             )
-            with self.assertLogs("services.provider_context_sanitizer", level="WARNING") as logs:
+            # A personal key must be configured — Groq is BYOK-only, no
+            # maintainer-funded fallback exists to send this request through.
+            with (
+                patch.object(groq, "get_groq_api_key", new=AsyncMock(return_value="gsk_test_key_0123456789")),
+                self.assertLogs("services.provider_context_sanitizer", level="WARNING") as logs,
+            ):
                 result = await groq._call_groq_chat(
                     model="test-model",
                     system_prompt="system",
@@ -237,7 +220,7 @@ class ProviderContextSanitizerTests(unittest.TestCase):
         self.assertNotIn(LEGACY_PATH, log_output)
 
     def test_embedding_metadata_is_redacted_and_bounded(self):
-        async def operation(database, sanitizer, claude, gemini, groq, voyage):
+        async def operation(database, sanitizer, groq, voyage):
             await self._insert_legacy_values(database)
             return await sanitizer.sanitize_provider_metadata(
                 {

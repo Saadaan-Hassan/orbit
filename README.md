@@ -12,16 +12,16 @@ developers.
 ## Status
 
 Beta (`v0.2.4`). Core capture, recall, and privacy controls work day to day.
-Two things are not done yet and you should know about them before installing:
 
-- **The app is not code-signed or notarized by Apple.** macOS Gatekeeper will
-  block it on first launch — see [Installing](#installing) for the safe,
-  per-app way to open it anyway. Do not disable Gatekeeper system-wide to
-  work around this.
-- **Checksum/signature verification for the downloaded `.dmg` isn't
-  published yet.** The in-app auto-updater does verify update signatures
-  before installing anything, but there's currently no way to independently
-  verify a fresh manual download. This is tracked as a follow-up.
+This is a self-build, source-only project — there are no prebuilt
+downloads, no signed releases, and no auto-updater (see
+[Building from source](#building-from-source)). Since you build it
+yourself on your own Mac, there's no Gatekeeper "unidentified developer"
+warning to work around — that quarantine flag only applies to files
+downloaded from the internet, not to an app you compile locally. If you go
+on to distribute a build you made to *other people*, code-signing and
+notarization become your responsibility, using your own Apple Developer
+account; nothing in this repo does that for you.
 
 ## What Orbit does
 
@@ -87,52 +87,53 @@ usage or bill.**
 No telemetry, analytics, or crash reporting of any kind is sent anywhere,
 by anyone, ever — not even anonymized.
 
-## Installing
-
-1. Download the build for your Mac from the
-   [latest release](https://github.com/Saadaan-Hassan/orbit-releases/releases/latest):
-   - [Apple Silicon (M1/M2/M3/M4)](https://github.com/Saadaan-Hassan/orbit-releases/releases/latest/download/Orbit-latest-aarch64.dmg)
-   - [Intel](https://github.com/Saadaan-Hassan/orbit-releases/releases/latest/download/Orbit-latest-x86_64.dmg)
-2. Open the `.dmg` and drag Orbit to Applications.
-3. macOS will block the first launch ("Apple could not verify this app is
-   free of malware"). Click **Done** (not Move to Bin), then go to
-   **System Settings → Privacy & Security**, scroll to the bottom, and
-   click **Open Anyway** next to Orbit. Open it once more to confirm. This
-   per-app exception is the only Gatekeeper step required — you never need
-   to disable Gatekeeper globally.
-4. On first launch, Orbit walks you through granting Accessibility
-   permission (for window tracking) and, optionally, Automation permission
-   (for native browser URL capture) and the capture-consent screen
-   described above.
-
-Requires macOS 13 (Ventura) or later.
-
 ## Building from source
 
-Four independent workspaces. `AGENTS.md` at the repo root has the full
-architecture reference; this is the short version.
+Requires macOS 13 (Ventura) or later, plus Xcode Command Line Tools, Rust,
+Node.js/pnpm, and Python (`uv`). Three independent workspaces — `AGENTS.md`
+at the repo root has the full architecture reference; this is the short
+version.
 
-**Desktop app** (Tauri v2 + React + Rust):
+```bash
+git clone https://github.com/Saadaan-Hassan/orbit.git
+cd orbit
+```
+
+**Desktop app** (Tauri v2 + React + Rust) — run in dev mode:
 ```bash
 cd app && pnpm install && pnpm tauri dev
 ```
 
-**Backend** (FastAPI, Python, `uv` — never `pip`):
+Or build a real, installable (unsigned) `.app`/`.dmg` you can drag into
+Applications:
+```bash
+cd app && pnpm install && pnpm tauri build
+```
+
+**Backend** (FastAPI, Python, `uv` — never `pip`) — only needed standalone
+if you're working on backend code directly; `pnpm tauri dev`/`build` above
+already handles spawning it for the desktop app:
 ```bash
 cd backend && uv sync
 uv run uvicorn main:app --reload --port 47821
-```
-
-**Cloudflare Worker** (BYOK passthrough for Groq/Voyage AI — holds no
-secrets of its own, nothing to configure):
-```bash
-cd worker && npm install && npx wrangler types && npx wrangler dev
 ```
 
 **Landing site** (static Next.js export, no backend of its own):
 ```bash
 cd landing && pnpm install && pnpm dev
 ```
+
+**Chrome extension** (optional, for richer browser capture — the app
+already captures browser URLs natively without it):
+```bash
+cd extension && pnpm install && pnpm build
+```
+Then load it unpacked: `chrome://extensions` → Developer mode → Load
+unpacked → select `extension/dist`.
+
+On first launch, Orbit walks you through granting Accessibility permission
+(for window tracking) and, optionally, Automation permission (for native
+browser URL capture) and the capture-consent screen described above.
 
 Run each workspace's own checks before sending a change — see
 `CONTRIBUTING.md` for the full list (lint/typecheck/test per workspace,
@@ -143,7 +144,6 @@ cd backend && uv run ruff check . && uv run mypy . && uv run python -m unittest 
 cd app/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --bin app
 cd app && pnpm typecheck && pnpm lint && pnpm test && pnpm build
 cd extension && pnpm typecheck && pnpm test && pnpm build
-cd worker && npm run typecheck && npm run test
 cd landing && pnpm lint && pnpm build
 ```
 
@@ -151,7 +151,8 @@ cd landing && pnpm lint && pnpm build
 
 - macOS only (13 Ventura or later). Windows support is a planned future
   phase, not built yet.
-- The app is unsigned/unnotarized (see [Status](#status) above).
+- Source-only, no prebuilt downloads or auto-updates — see
+  [Building from source](#building-from-source).
 - AI features (summaries, chat recall, semantic search) require you to
   bring your own Groq/Voyage API key — there's no free tier funded by the
   maintainer, by design (see [Cloud AI](#cloud-ai-is-fully-optional-bring-your-own-key)).

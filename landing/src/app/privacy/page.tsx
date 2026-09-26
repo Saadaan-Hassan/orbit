@@ -234,7 +234,9 @@ export default function PrivacyPolicy() {
                 directly.
               </li>
               <li>
-                <span className="text-zinc-300 font-medium">Voyage AI</span> — semantic (&ldquo;search by meaning&rdquo;) recall only. Requests go through a small relay the maintainer operates (a Cloudflare Worker) that forwards your key and request to Voyage without storing anything itself — it exists only so the request doesn&apos;t need Voyage&apos;s exact API shape hardcoded into the app. Cloudflare, as the relay operator, sees this traffic in transit.{" "}
+                <span className="text-zinc-300 font-medium">Voyage AI</span> — semantic (&ldquo;search by meaning&rdquo;) recall only. With your key configured, requests go{" "}
+                <span className="text-zinc-300">directly from your Mac to Voyage&apos;s API</span>{" "}
+                — never through any server the maintainer runs, and no maintainer infrastructure of any kind sits in between.{" "}
                 <span className="text-amber-500">
                   Unlike Groq, Voyage&apos;s default is to store and use your
                   data for model training unless you opt out on your own

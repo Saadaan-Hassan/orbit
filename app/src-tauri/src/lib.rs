@@ -280,10 +280,9 @@ where
         // Shell plugin — provides the sidecar() API used in production builds
         // to spawn the bundled orbit-backend binary.
         .plugin(tauri_plugin_shell::init())
-        // Auto-updater: checks the endpoint in tauri.conf.json on startup.
-        // tauri-plugin-dialog drives the "update available" prompt natively.
-        // tauri-plugin-process provides relaunch() after the update installs.
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        // tauri-plugin-dialog: native folder picker (PrivacyPanel's watched-
+        // folders UI). tauri-plugin-process: restart_app()'s relaunch() —
+        // used by ErrorBoundary's restart button, not update-related.
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .setup(move |app| {

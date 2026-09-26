@@ -33,7 +33,7 @@ changes.
 
 ## Development setup
 
-Four independent workspaces — you generally only need the one you're
+Three independent workspaces — you generally only need the one you're
 changing.
 
 **Desktop app** (Tauri v2 + React + Rust):
@@ -45,12 +45,6 @@ cd app && pnpm install && pnpm tauri dev
 ```bash
 cd backend && uv sync
 uv run uvicorn main:app --reload --port 47821
-```
-
-**Cloudflare Worker** (BYOK passthrough — holds no secrets, nothing to
-configure locally):
-```bash
-cd worker && npm install && npx wrangler dev
 ```
 
 **Landing site** (static Next.js export):
@@ -100,13 +94,6 @@ pnpm test
 pnpm build
 ```
 
-**Cloudflare Worker**:
-```bash
-cd worker
-npm run typecheck
-npm run test
-```
-
 **Landing site** (no test suite — it's a static site; lint + a successful
 static build are the checks):
 ```bash
@@ -125,9 +112,8 @@ Changes to capture, redaction, or AI provider request/response handling
 need test coverage — these paths handle real personal data, and a
 regression here is a privacy incident, not just a bug. None of these tests
 make a real network/provider call: backend tests mock every provider HTTP
-call (`_SequencedPostClient`-style test doubles), worker tests mock
-`fetch`, and the JS/TS test suites (app, extension) only cover pure logic
-with no network dependency.
+call (`_SequencedPostClient`-style test doubles), and the JS/TS test suites
+(app, extension) only cover pure logic with no network dependency.
 
 ## Dependency security and license scanning
 
@@ -137,8 +123,6 @@ these aren't wired into a required CI gate yet:
 ```bash
 # JS/TS workspaces (app, extension, landing) — pnpm's built-in scanner
 cd app && pnpm audit        # or extension, landing
-# worker uses npm, not pnpm
-cd worker && npm audit
 
 # Python
 cd backend && uvx pip-audit
@@ -165,9 +149,10 @@ scoped:
   and Python (`redaction_service.py`) — never after, never only at display
   time.
 - **No new AI provider integration** without a BYOK (bring-your-own-key)
-  design and a real plan for keeping any Worker route safe from anonymous
-  abuse. There is no maintainer-funded key for anything, by design
-  (`COST-001`/`COST-002` in `AGENTS.md`) — don't reintroduce one.
+  design — calls go directly from this Mac to the provider's own API with
+  the user's own key, never through a relay. There is no maintainer-funded
+  key for anything, and no maintainer-run infrastructure of any kind, by
+  design (`COST-001`/`COST-002` in `AGENTS.md`) — don't reintroduce either.
 - **No remote telemetry, analytics, or crash reporting of any kind** —
   removed deliberately (`OBS-001`). If you think this should change, open
   an issue first; it needs a genuine opt-in/revoke design, not a dependency
@@ -208,8 +193,8 @@ Orbit doesn't require a separate contributor license agreement.
 
 ## Release boundaries
 
-Contributors don't cut releases. Tags (`v*` for the app, `ext-v*` for the
-Chrome extension) are pushed by the maintainer once a change set is judged
-ready — see the `Release & Distribution` section of `AGENTS.md` for what
-that triggers. Don't bump version numbers in a contribution PR unless asked
-to as part of the change.
+Nobody cuts releases — there's no release process to trigger. Orbit is
+source-only and self-build: no signed `.dmg`, no `orbit-releases` companion
+repo, no Chrome Web Store listing, no auto-updater. See the `Distribution`
+section of `AGENTS.md` for the full reasoning. Don't bump version numbers
+in a contribution PR unless asked to as part of the change.

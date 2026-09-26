@@ -10,7 +10,6 @@ import { PrivacyPanel } from "./components/PrivacyPanel";
 import { RecallSearch } from "./components/RecallSearch";
 import { TimelineView } from "./components/Timeline/TimelineView";
 import { useOnboarding } from "./hooks/useOnboarding";
-import { useUpdater } from "./hooks/useUpdater";
 import { useWindowPosition } from "./hooks/useWindowPosition";
 import { useOrbitStore } from "./store/orbitStore";
 
@@ -23,7 +22,6 @@ export default function App() {
   const [backendStatus, setBackendStatus] = useState<"unknown" | "unavailable" | "ready">("unknown");
   const [startupErrored, setStartupErrored] = useState(false);
   const [accessibilityBannerDismissed, setAccessibilityBannerDismissed] = useState(false);
-  const [updateBannerDismissed, setUpdateBannerDismissed] = useState(false);
   const { positionWindow } = useWindowPosition();
   const {
     isCompleted: onboardingCompleted,
@@ -43,9 +41,6 @@ export default function App() {
   useEffect(() => {
     isCollapsedRef.current = isCollapsed;
   }, [isCollapsed]);
-
-  // Check for updates — does not auto-install; see useUpdater.ts for why.
-  const { updateAvailable, updateVersion, isInstalling, installUpdate } = useUpdater();
 
   // Transition to a hard error screen if the backend hasn't responded within 15 s.
   // Cancels immediately if backendStatus reaches "ready" before the timer fires.
@@ -442,39 +437,6 @@ export default function App() {
                   <line x1="13" y1="3" x2="3" y2="13" />
                 </svg>
               </button>
-            </div>
-          )}
-
-          {/* Update available banner — shown until installed or dismissed.
-              Dismissing only skips this session; the check reruns (and the
-              banner reappears if still on an old version) on next launch. */}
-          {updateAvailable && !updateBannerDismissed && (
-            <div className="flex items-center justify-between gap-2 px-4 py-2 bg-blue-50 dark:bg-blue-900/20 border-b border-blue-100 dark:border-blue-800/30 shrink-0">
-              <p className="text-[11px] text-blue-700 dark:text-blue-400 font-medium leading-tight flex-1 min-w-0">
-                {isInstalling
-                  ? "Installing update — Orbit will restart shortly…"
-                  : `Update available (v${updateVersion}) →`}
-              </p>
-              {!isInstalling && (
-                <>
-                  <button
-                    onClick={() => void installUpdate()}
-                    className="shrink-0 text-[11px] font-semibold text-blue-700 dark:text-blue-400 underline underline-offset-2 cursor-pointer hover:opacity-70 transition-opacity"
-                  >
-                    Restart to update
-                  </button>
-                  <button
-                    onClick={() => setUpdateBannerDismissed(true)}
-                    className="shrink-0 p-0.5 text-blue-500 dark:text-blue-600 hover:opacity-70 transition-opacity cursor-pointer"
-                    aria-label="Dismiss"
-                  >
-                    <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                      <line x1="3" y1="3" x2="13" y2="13" />
-                      <line x1="13" y1="3" x2="3" y2="13" />
-                    </svg>
-                  </button>
-                </>
-              )}
             </div>
           )}
 

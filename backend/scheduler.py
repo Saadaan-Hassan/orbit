@@ -18,14 +18,11 @@ from sqlalchemy import text
 
 from database import _async_engine, get_voyage_api_key
 
-# Claude (services.claude_service) and Gemini (services.gemini_service) are
-# unused here — Groq is the sole provider for session generation and
-# classification. As of COST-002 the Worker no longer has a /chat or
-# /classify route at all (removed, not kill-switched) and holds no
-# maintainer-funded key for either provider — restoring them means designing
-# a Worker route (auth/BYOK) before this file becomes relevant again, not
-# just re-importing SUMMARY_MODEL / generate_session_summary /
-# classify_events_batch.
+# Groq is the sole provider for session generation and classification.
+# Claude and Gemini support (and the Cloudflare Worker that once relayed
+# them) has been removed entirely, not kill-switched — restoring either
+# means building a new BYOK integration from scratch, not re-importing a
+# deleted claude_service.py/gemini_service.py.
 from services.groq_service import classify_events_batch_groq, generate_session_summary_groq
 from services.qdrant_service import add_session_embedding
 

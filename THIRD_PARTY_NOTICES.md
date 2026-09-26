@@ -2,11 +2,11 @@
 
 Orbit is released under the Apache License, Version 2.0 (see `LICENSE`).
 This file records the results of a dependency-license review across all
-five workspaces, as required by `DOC-001`.
+four workspaces, as required by `DOC-001`.
 
 **Scope note:** this covers *software dependencies* only (everything
-resolved by pnpm/cargo/uv/npm across `app/`, `app/src-tauri/`, `backend/`,
-`worker/`, and `landing/`). It does not cover non-code assets (fonts,
+resolved by pnpm/cargo/uv across `app/`, `app/src-tauri/`, `backend/`,
+and `landing/`). It does not cover non-code assets (fonts,
 icons, images, the app logo) — those require the maintainer's own
 redistribution-rights review (`MAN-005`), which has not happened yet. This
 file should be revisited once that's done, in case it surfaces additional
@@ -14,9 +14,9 @@ attributions.
 
 ## Summary
 
-A review of all direct and transitive dependencies across all five
+A review of all direct and transitive dependencies across all four
 workspaces (582 Rust crates, 40 resolved Python packages, and the pnpm/npm
-trees for `app/`, `worker/`, and `landing/`) found:
+trees for `app/` and `landing/`) found:
 
 - **No copyleft license that propagates to Orbit's own source** (no GPL,
   AGPL, or SSPL anywhere, direct or transitive).
@@ -49,9 +49,9 @@ A few items are worth recording even though none of them are blocking:
 ### LGPL, dynamic-link only — never bundled into Orbit's own source
 
 - **`@img/sharp-libvips-*`** native binaries, transitive via `sharp` — an
-  optional dependency pulled in by `wrangler` (`worker/`) and Next.js's
-  image tooling (`landing/`). LGPL-3.0-or-later permits this as a
-  dynamically-linked runtime dependency of build tooling.
+  optional dependency pulled in by Next.js's image tooling (`landing/`).
+  LGPL-3.0-or-later permits this as a dynamically-linked runtime
+  dependency of build tooling.
 
 ### Not what the name suggests
 

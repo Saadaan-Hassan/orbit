@@ -27,7 +27,7 @@ updates:
 
   # ── JS/TS workspaces ────────────────────────────────────────────────────
   # One entry per workspace — each has its own lockfile and independent
-  # dependency set; a single top-level entry can't cover all four.
+  # dependency set; a single top-level entry can't cover all three.
   - package-ecosystem: "npm"
     directory: "/app"
     schedule:
@@ -36,12 +36,6 @@ updates:
 
   - package-ecosystem: "npm"
     directory: "/extension"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-
-  - package-ecosystem: "npm"
-    directory: "/worker"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10

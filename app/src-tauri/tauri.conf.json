@@ -52,7 +52,6 @@
       "icons/icon.icns",
       "icons/icon.png"
     ],
-    "createUpdaterArtifacts": true,
     "externalBin": [
       "../../backend/dist/orbit-backend"
     ],
@@ -61,14 +60,6 @@
       "exceptionDomain": "localhost",
       "signingIdentity": null,
       "minimumSystemVersion": "13.0"
-    }
-  },
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIwMjlDQUM4RDQzN0EwQ0QKUldUTm9EZlV5TW9wSUpkU3ErcTdLNzhaa3h3SWhLaTVBUkFEVGJVTUxUK01XZm5qc2ozZVRQekUK",
-      "endpoints": [
-        "https://github.com/Saadaan-Hassan/orbit-releases/releases/latest/download/latest.json"
-      ]
     }
   }
 }

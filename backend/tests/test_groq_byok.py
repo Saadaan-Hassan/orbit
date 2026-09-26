@@ -85,8 +85,9 @@ class _CapturingStreamClient:
 
 
 class GroqDirectCallRoutingTests(unittest.TestCase):
-    """A personal key must route straight to api.groq.com; no key must keep
-    using the Worker exactly as before (no regression to the shared path)."""
+    """A personal key must route straight to api.groq.com; no key must fail
+    immediately with no request made at all (no Worker or other maintainer
+    infrastructure exists to fall back to)."""
 
     def _with_groq(self, operation, *, personal_key: str | None):
         with tempfile.TemporaryDirectory() as directory:
@@ -157,18 +158,17 @@ class GroqDirectCallRoutingTests(unittest.TestCase):
             "Bearer gsk_test_personal_key_0123456789",
         )
 
-    def test_no_personal_key_still_uses_worker_with_no_auth_header(self):
+    def test_no_personal_key_fails_immediately_without_any_request(self):
         async def operation(groq):
             groq._http_client = _CapturingPostClient(
                 {"choices": [{"message": {"content": "{}"}}]}
             )
-            await groq.generate_session_summary_groq("user prompt", "system prompt")
-            return groq._http_client.requests[0]
+            result = await groq.generate_session_summary_groq("user prompt", "system prompt")
+            return result, groq._http_client.requests
 
-        request = self._with_groq(operation, personal_key=None)
-        self.assertTrue(request["args"][0].endswith("/chat-groq"))
-        self.assertNotIn("api.groq.com", request["args"][0])
-        self.assertEqual(request["kwargs"]["headers"], {})
+        result, requests = self._with_groq(operation, personal_key=None)
+        self.assertIsNone(result)
+        self.assertEqual(requests, [])
 
     def test_key_test_endpoint_never_stores_the_key(self):
         async def operation(groq):
