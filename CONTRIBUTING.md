@@ -61,7 +61,11 @@ cd landing && pnpm install && pnpm dev
 ## Tests
 
 Run the relevant workspace's checks before sending a PR — each workspace
-has real lint/typecheck/test commands, not placeholders (`CI-001`):
+has real lint/typecheck/test commands, not placeholders (`CI-001`). All of
+this also runs automatically on every pull request via
+`.github/workflows/ci.yml` (`CI-002`), plus a secret scan and a dependency
+review — but running it locally first means you're not waiting on CI to
+find out something fails:
 
 **Backend** (Python — ruff for lint, mypy for types, unittest for tests):
 ```bash

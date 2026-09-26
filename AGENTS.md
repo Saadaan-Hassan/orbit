@@ -330,8 +330,13 @@ orbit/
 │   └── latest.json                         ← committed placeholder only — CI generates the real one at release time; not what the updater actually fetches
 ├── scripts/
 │   └── check-versions.sh                   ← DOC-006 version-consistency check; run after bumping app/backend/extension versions, see Build & Run
-└── .github/workflows/
-    └── release.yml                         ← builds + signs .dmg on v* tag push; publishes to Saadaan-Hassan/orbit-releases (see Release & Distribution)
+└── .github/
+    ├── dependabot.yml                       ← CI-002: github-actions, cargo, uv, and per-workspace npm coverage
+    └── workflows/
+        ├── ci.yml                           ← CI-002: PR checks — one job per CI-001 workspace, plus gitleaks + dependency-review
+        ├── codeql.yml                       ← CI-002: CodeQL for javascript-typescript + python (Rust not yet added, see roadmap)
+        ├── release.yml                      ← builds + signs .dmg on v* tag push; publishes to Saadaan-Hassan/orbit-releases (see Release & Distribution)
+        └── publish-extension.yml            ← publishes to the Chrome Web Store on ext-v* tag push
 ```
 
 ---

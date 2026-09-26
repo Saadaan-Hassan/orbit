@@ -11,6 +11,13 @@ on:
 permissions:
   contents: write
 
+# Queue rather than cancel (CI-002): a re-push of the same tag mid-build
+# should wait for the in-flight release to finish, not cancel it partway
+# through and risk a half-published release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # ---------------------------------------------------------------------------
   # Build a signed .dmg and publish it as a GitHub Release.
@@ -41,22 +48,23 @@ jobs:
             arch: x86_64                # this is the current GitHub-hosted x86_64 label
     runs-on: ${{ matrix.runner }}
     environment: dev
+    timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # ── Rust ───────────────────────────────────────────────────────────────
       # dtolnay/rust-toolchain pins an explicit version and sets up caching
       # properly — more reliable than the pre-installed toolchain on the runner.
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (tracks the `stable` branch tip — this action has no version tags)
 
       # Cache key includes matrix.arch — both legs build into the same
       # app/src-tauri/target path (Rust defaults to the host triple, no
       # explicit --target is passed), so an unscoped key would let one
       # architecture's cached build artifacts corrupt the other's.
       - name: Cache Cargo registry + build artefacts
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry/index
@@ -70,12 +78,12 @@ jobs:
       # Pin pnpm to match the major version used locally (11.x) so the
       # lockfile v9 format is accepted without errors.
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: "11"
 
       - name: Set up Node 22 LTS
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: "pnpm"
@@ -98,7 +106,7 @@ jobs:
       # silently download its own matching interpreter regardless of what
       # this step installs.
       - name: Set up Python 3.14
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.14"
 
@@ -157,7 +165,7 @@ jobs:
       # with write access to it (the default secrets.GITHUB_TOKEN only has
       # access to the repo running the workflow).
       - name: Build, sign, and publish Tauri release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
           # Raw base64 key content — Tauri v2 decodes this natively.
@@ -241,10 +249,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
 
       - name: Upload this leg's latest.json as a build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: latest-json-${{ matrix.arch }}
           path: leg-latest-${{ matrix.arch }}.json
+          # Tiny file, only needed transiently by merge-latest-json below —
+          # no reason to keep it at the 90-day default.
+          retention-days: 7
 
   # ---------------------------------------------------------------------------
   # Merge the two single-platform latest.json files (one per architecture)
@@ -256,9 +267,10 @@ jobs:
   merge-latest-json:
     needs: build-and-release
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Download both platform latest.json artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: latest-json-*
           merge-multiple: true

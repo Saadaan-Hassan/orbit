@@ -1,0 +1,51 @@
+name: CodeQL
+
+# CI-002: static analysis coverage where CodeQL supports it. Rust is not
+# included — CodeQL's Rust support requires a compiled-language build step
+# (autobuild or a manual build) and its maturity/availability should be
+# confirmed for this exact CodeQL Action version before adding it here
+# rather than assumed; JavaScript/TypeScript and Python are both mature,
+# interpreted-language CodeQL targets that need no build step.
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  schedule:
+    # Weekly, independent of any PR activity — catches new CodeQL query
+    # coverage against unchanged code, not just newly introduced code.
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+  security-events: write # required to upload results to the Security tab
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+
+      # Both languages here are interpreted — CodeQL analyzes source
+      # directly with no compilation step required.
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: "/language:${{ matrix.language }}"

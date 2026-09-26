@@ -1,0 +1,53 @@
+version: 2
+
+updates:
+  # ── GitHub Actions ──────────────────────────────────────────────────────
+  # Every workflow's Actions are SHA-pinned (CI-002) — this is what actually
+  # keeps them current: Dependabot opens a PR bumping the pin (with the new
+  # version in the diff) whenever a used Action publishes a new release.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # ── Rust (Tauri app) ────────────────────────────────────────────────────
+  - package-ecosystem: "cargo"
+    directory: "/app/src-tauri"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # ── Python (backend, uv) ────────────────────────────────────────────────
+  - package-ecosystem: "uv"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # ── JS/TS workspaces ────────────────────────────────────────────────────
+  # One entry per workspace — each has its own lockfile and independent
+  # dependency set; a single top-level entry can't cover all four.
+  - package-ecosystem: "npm"
+    directory: "/app"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: "npm"
+    directory: "/extension"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: "npm"
+    directory: "/worker"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: "npm"
+    directory: "/landing"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10

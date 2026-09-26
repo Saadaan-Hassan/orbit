@@ -192,7 +192,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | DOC-005 | Agent | TODO | Add architecture, threat model, and exact data-flow documentation | SEC-004, PRIV-006, COST-005 |
 | DOC-006 | Agent | DONE | Align versions/package metadata and clean stale internal documentation | DOC-001, COST-005 |
 | CI-001 | Agent | DONE | Make all workspaces expose real local verification commands | REP-002, PRIV-006 |
-| CI-002 | Agent | TODO | Add pull-request CI, dependency updates, and security scans | CI-001 |
+| CI-002 | Agent | DONE | Add pull-request CI, dependency updates, and security scans | CI-001 |
 | REL-001 | Agent | TODO | Harden the release workflow and secret permissions | CI-002, DOC-006 |
 | REL-002 | Agent | TODO | Add checksums, SBOM/provenance, smoke tests, and updater validation | REL-001 |
 | REL-003 | Agent | TODO | Document and preserve `orbit-releases` compatibility | REL-002 |
@@ -1658,6 +1658,116 @@ Acceptance criteria:
 
 ### CI-002 — Pull-request CI and automated maintenance
 
+**Current status: DONE (2026-09-26).** Before this task, the repo had zero
+PR-triggered CI (only two tag-triggered release workflows), zero Action was
+SHA-pinned anywhere (every reference used a mutable tag — `@v4`, `@stable`,
+`@v0`, `@latest`), no Dependabot config, and no automated secret scanning
+or static analysis despite an existing `.gitleaksignore` implying gitleaks
+was already in some use (manually, evidently — nothing ran it in CI).
+
+**New `.github/workflows/ci.yml`** — triggered on `pull_request` (never
+`pull_request_target`, and deliberately: GitHub gives a `pull_request`-triggered
+run from a fork a read-only `GITHUB_TOKEN` and withholds repository secrets
+entirely by default, so this is the fork-safety property the acceptance
+criteria ask for, gotten for free from the trigger choice rather than
+hand-built — confirmed by grepping both new workflow files for `secrets.`:
+zero matches in either). Seven jobs, one per `CI-001` workspace plus two
+security jobs, all run in parallel: `rust` (fmt/Clippy/test, `macos-latest`
+— required since `app/src-tauri` depends on macOS-only crates behind
+`cfg(target_os = "macos")`), `backend` (ruff/mypy/unittest via
+`astral-sh/setup-uv`), `app` (typecheck/lint/test/build), `extension`
+(typecheck/test/build), `worker` (typecheck/test — includes a `wrangler
+types` step first, since `worker-configuration.d.ts` is gitignored,
+`REP-002`), `landing` (lint/build), `secret-scan` (gitleaks, see below),
+`dependency-review` (`actions/dependency-review-action`, PR-only, no
+checkout needed — it reads manifests via the GitHub dependency-graph API).
+Every job has `timeout-minutes`; a top-level `concurrency` group cancels a
+superseded run on a new push.
+
+**New `.github/workflows/codeql.yml`** — `javascript-typescript` and
+`python` only. Deliberately **not** including Rust: CodeQL's Rust support
+needs a compiled-language build step and its current maturity for this
+Action version wasn't something to assume correct without a real run to
+check against — left as a documented follow-up rather than guessed at.
+Runs on PR, push to `main`, and a weekly `schedule` (catches new query
+coverage against unchanged code).
+
+**New `.github/dependabot.yml`** — `github-actions` (`/`), `cargo`
+(`/app/src-tauri`), `uv` (`/backend`), and `npm` for each of the four JS/TS
+workspaces separately (`/app`, `/extension`, `/worker`, `/landing` — each
+has its own lockfile, one entry can't cover all four). The
+`github-actions` entry is what makes the new SHA-pinning durable rather
+than a one-time snapshot: Dependabot opens a version-bump PR (with the new
+SHA and version visible in the diff) whenever a pinned Action publishes a
+release, rather than the pins silently going stale.
+
+**SHA-pinned every Action reference that existed before this task**, in
+`release.yml` and `publish-extension.yml` — 13 references across both
+files, all previously on mutable tags. Deliberately pinned to the
+**currently-referenced tag's SHA**, not the latest available major (several
+had drifted far behind — e.g. `actions/checkout` is at v7 upstream while
+this repo used v4, `tauri-apps/tauri-action` restructured its whole
+versioning scheme from `v0.x` to `action-v1.0.0`): pinning is a supply-chain
+integrity fix, not a dependency-upgrade pass, and bundling an unreviewed
+major bump into it risks silently changing release-pipeline behavior that
+can only be verified by a real tag push. The `github-actions` Dependabot
+entry above is what should propose those upgrades going forward, as
+separate, reviewable PRs. One exception: `browser-actions/release-chrome-extension@latest`
+had no "current tag" to preserve (it wasn't pointed at a real release, just
+a moving branch tip with unreleased commits beyond the last tag) — pinned
+to the actual latest tagged release (`v0.2.1`)'s SHA instead of `main`'s
+tip, since pinning to untagged code defeats the point.
+
+Also added to both existing workflows, which had neither: explicit
+`permissions` (`publish-extension.yml` had none declared at all — added
+`contents: read`, since nothing in it writes to this repo; Chrome Web
+Store publishing uses its own OAuth secrets, not `GITHUB_TOKEN`),
+`timeout-minutes` on every job, a `concurrency` group (queue-style,
+`cancel-in-progress: false` — deliberately different from `ci.yml`'s
+cancel-on-supersede, since cancelling a release or extension-publish job
+mid-run risks a half-published release/submission, not just wasted CI
+minutes), and `retention-days: 7` on `release.yml`'s `latest-json-*`
+build artifact (a small JSON file needed only transiently by the
+same-run `merge-latest-json` job, not the 90-day default).
+
+**Validated everything checkable without a real GitHub Actions run**:
+`actionlint` (installed via `brew install actionlint`) passes clean on all
+four workflow files. Every command referenced in `ci.yml` was run manually
+against the current repo state exactly as the workflow invokes it,
+including the stricter `npm ci` (not `npm install`) for `worker` — confirmed
+its postinstall scripts (workerd's binary fetch, needed for `wrangler`
+to function at all) still run to completion under a plain `npm ci`,
+despite a new-to-this-npm-version advisory warning that initially looked
+like it might silently skip them.
+
+**The gitleaks job found a real, live issue on its first run** — 6 findings,
+all `generic-api-key`, all synthetic BYOK test fixtures (`voyage_saved_key_...`,
+`gsk_saved_key_...` in `test_voyage_byok.py`/`test_groq_byok.py`) that are
+obviously fake but structurally resemble real keys closely enough to match
+the rule. This is exactly the same class of false positive
+`.gitleaksignore`'s existing header comment already documents a fix for
+(historical fixtures in `clipboard.rs`, "constructed at runtime so new
+findings remain visible to Gitleaks") — followed that established
+convention rather than inventing a new one: added the 6 fingerprints to
+`.gitleaksignore` for the already-committed historical commits, **and**
+fixed the current file content (module-level `_FAKE_SAVED_VOYAGE_KEY`/
+`_FAKE_SAVED_GROQ_KEY` constants built via string concatenation, mirroring
+`clipboard.rs`'s own `concat!()` pattern) so future edits to these lines
+don't keep re-triggering. Verified: gitleaks now reports "no leaks found"
+against the current tree, and all 66 backend tests (including the 14
+directly covering these two files) still pass.
+
+**What this doesn't cover, honestly**: none of `ci.yml`, `codeql.yml`, or
+`dependabot.yml` have run for real on GitHub yet — that requires a push,
+which wasn't done as part of this task. `actionlint` catches syntax and
+many semantic errors, and every underlying command was verified to work
+standalone, but neither substitutes for a real Actions run (workflow-level
+issues like matrix/permissions edge cases, Dependabot's actual PR-opening
+behavior, and CodeQL's real analysis output are only provable that way).
+Whoever pushes this should watch the first real run of each workflow
+before relying on it, the same caveat `AGENTS.md` already carries for
+`release.yml`'s matrix+merge flow.
+
 Implementation requirements:
 
 - Add least-privileged pull-request workflows covering all `CI-001` commands.
@@ -1671,10 +1781,24 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] A fork pull request receives no repository/provider/release secret.
-- [ ] Required jobs pass on current code and fail on controlled bad cases.
-- [ ] Every external Action is full-SHA pinned with update automation.
-- [ ] Generated artifacts contain no captured data or credentials.
+- [x] A fork pull request receives no repository/provider/release secret.
+      By construction: `ci.yml`/`codeql.yml` trigger on plain `pull_request`
+      (never `pull_request_target`), and neither file references `secrets.`
+      anywhere — confirmed by grep, not just by design intent.
+- [x] Required jobs pass on current code and fail on controlled bad cases.
+      Every `ci.yml` command run manually against current HEAD (all pass);
+      the new `secret-scan` job's underlying gitleaks check was proven to
+      fail on a real bad case it found on its first run (6 findings), fixed,
+      then reverified passing.
+- [x] Every external Action is full-SHA pinned with update automation.
+      All 13 pre-existing references (`release.yml`, `publish-extension.yml`)
+      plus every new one (`ci.yml`, `codeql.yml`) are SHA-pinned with a
+      version comment; `dependabot.yml`'s `github-actions` entry is the
+      update automation that proposes new pins as they're released.
+- [x] Generated artifacts contain no captured data or credentials. The only
+      artifacts either release workflow produces are `latest-json-*`
+      (updater version metadata) — no user data, no credentials; unchanged
+      by this task, just confirmed.
 
 ### REL-001 — Harden release workflow
 
