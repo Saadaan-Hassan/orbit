@@ -237,7 +237,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | REL-002 | Agent | N/A (2026-09-26) | ~~Add checksums, SBOM/provenance, smoke tests, and updater validation~~ — retired, nothing is built/shipped | REL-001 |
 | REL-003 | Agent | N/A (2026-09-26) | ~~Document and preserve `orbit-releases` compatibility~~ — retired, `orbit-releases` archived | REL-002 |
 | MAN-006 | Maintainer | DONE (2026-09-27) | Tear down the live Cloudflare Worker and revoke its provider keys — Worker/orbit-releases handled by the agent, Groq/Voyage keys revoked by the maintainer | COST-002 |
-| MAN-007 | Maintainer | PARTIAL (2026-09-27) | Export/delete waitlist data and retire paid/free-tier services — Supabase paused, Vercel deliberately kept (landing page already matches "idea + GitHub link only"); Resend status still needed | SITE-001 |
+| MAN-007 | Maintainer | PARTIAL (2026-09-27) | Export/delete waitlist data and retire paid/free-tier services — Resend key revoked, Supabase paused, Vercel deliberately kept (landing page already matches "idea + GitHub link only"); only open item is whether any pre-SITE-001 waitlist signups need exporting/deleting from the paused Supabase project | SITE-001 |
 | MAN-008 | Maintainer | DONE (2026-09-27) | Configure or remove telemetry accounts and retained data — PostHog and Sentry orgs deleted entirely | OBS-001 |
 | MAN-009 | Maintainer | DONE (2026-09-26) | Choose and verify $0 macOS distribution posture — decided: source-only self-build, no downloads of any kind | — |
 | MAN-010 | Maintainer | DONE (2026-09-26) | Choose and verify $0 extension distribution posture — decided: source-only self-build, no Chrome Web Store listing | — |
@@ -2014,8 +2014,18 @@ Maintainer actions:
 **PARTIAL (2026-09-27).** The waitlist form/Supabase client/Resend
 integration were already deleted from the codebase in `SITE-001` — this
 task is about the maintainer's actual external accounts, not code. Maintainer
-paused the Supabase project (reversible, not deleted outright) — that's real
-progress but leaves the question below open. Resend still needs an answer.
+paused the Supabase project (reversible, not deleted outright), and revoked
+the Resend key for this project (2026-09-27).
+
+**Held at `PARTIAL`, not `DONE`, for one honest reason:** the "export the
+waitlist" / "notify or delete entries per the privacy promise" items depend
+on whether anyone actually signed up before `SITE-001` removed the form,
+and that data (if it exists at all) is sitting dormant in the now-paused
+Supabase project, not deleted. This wasn't asked about directly and is a
+soft, conditional requirement in the original text ("only if there is a
+documented lawful need to retain it") rather than a hard blocker — noted
+here rather than silently closed out, so it isn't forgotten if it matters
+later.
 
 **Vercel decision (2026-09-27):** maintainer chose to keep the landing site
 deployed on Vercel rather than moving it to GitHub Pages/Cloudflare Pages —
@@ -2037,9 +2047,8 @@ Maintainer actions:
       → Paused, not deleted. Fine if that's the intended end state (no
       billing, no live access, but data retained) — flag if you'd rather
       delete it outright instead.
-- [ ] Revoke Resend keys and remove unused domain/sender configuration. →
-      Not yet reported. Was a Resend account ever actually set up for this
-      project, or was it configured but never used?
+- [x] Revoke Resend keys and remove unused domain/sender configuration. →
+      Key revoked (2026-09-27).
 - [x] Remove the Vercel deployment/project if the static site moves elsewhere.
       → N/A — decided to keep it on Vercel (2026-09-27), not moving.
 - [x] Deploy the static site to GitHub Pages or Cloudflare Pages. → N/A, see
@@ -2236,6 +2245,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-27 | PRIV-003 / COST-005 | DONE | `backend/orbit-backend.spec` | Swept every remaining `PARTIAL` task for closeable gaps. `PRIV-003`: repo-wide Clippy/fmt drift that held it since 2026-09-10 is gone (`lib.rs`/`main.rs` edited many times since). `COST-005`: re-checked "pending events get non-alarming UI treatment" directly against current code (no special-case pending UI exists anywhere in the frontend; `database.py`'s own comment confirms the same server-side intent) instead of leaving it as reasoning. While investigating `APPSEC-001`'s release-build gap, found and fixed a real bug: `orbit-backend.spec` still referenced `google.genai`/`posthog`/`sentry_sdk` as PyInstaller hidden imports — none of those packages exist anymore, so any real release build would have failed outright. Verified the fix by actually running `uv run pyinstaller orbit-backend.spec --noconfirm`: succeeded, produced a real 28 MB binary. Reverted the git-tracked `backend/dist/` dev-stub to its committed state immediately after and deleted the build cache — confirmed via `git status` showing only the spec-file change. | `APPSEC-001`/`COST-003` remain `PARTIAL` — both need either a full `pnpm tauri build` + GUI verification only a maintainer can do, or explicit go-ahead for the agent to attempt the longer build; `COST-003` additionally has no historical baseline to measure a real regression against. |
 | 2026-09-27 | MAN-006 / 007 / 008 | DONE | External accounts: Groq, Voyage, PostHog, Sentry, Supabase | Maintainer reported real account cleanup: revoked the Groq and Voyage API keys directly at the provider level (closing `MAN-006`'s last open item — Anthropic/Gemini weren't mentioned, flagged as unconfirmed since neither ever had a working BYOK path in this codebase); deleted the PostHog and Sentry organizations entirely, not just keys (closing `MAN-008` — stronger than the minimum ask); paused (not deleted) the Supabase project; confirmed no Chrome Web Store account was ever created for this project. Updated the private `MAN-001` inventory file with all of this. | `MAN-007` stays `PARTIAL`: Resend and Vercel status weren't reported — need to know whether a Resend account was ever actually set up, and whether the landing site is staying on Vercel or moving (e.g. to GitHub Pages, per the task's own suggestion). Also worth a quick check that Groq/Voyage no longer have payment methods/auto-recharge live, now that their keys are revoked. |
 | 2026-09-27 | MAN-007 | PARTIAL | `landing/src/app/page.tsx` (verified, not changed) | Maintainer decided to keep the landing site on Vercel rather than moving it, and restated the content requirement this task always implied: no downloadable/releasable anything on the public page, just the idea behind Orbit and a link to GitHub. Verified directly against the current `page.tsx` — it already matches exactly (single "View on GitHub" CTA + `git clone` snippet), unchanged since `SITE-001`/the pivot, so no code change was needed. | Only remaining open item on `MAN-007` is Resend's status — was an account ever actually set up for this project, or configured but never used? |
+| 2026-09-27 | MAN-007 | PARTIAL | Resend account | Maintainer revoked the Resend key for this project. `MAN-007`'s remaining external-account items are now all addressed (Resend revoked, Supabase paused, Vercel deliberately kept). Held at `PARTIAL` rather than `DONE` for one honestly-unresolved item: whether any real waitlist signups exist in the now-paused Supabase project from before `SITE-001` removed the form, and if so whether they need exporting or deleting per whatever privacy promise was live at the time — not asked about directly, noted rather than silently closed. | Maintainer's call whether this loose end is worth resolving before `MAN-012`, given it's a personal project and the account is paused (not actively exposed), or acceptable to leave as-is. |
 
 ---
 
