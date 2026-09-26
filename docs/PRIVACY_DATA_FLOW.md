@@ -1,0 +1,94 @@
+# Orbit Privacy Data Flow
+
+Exactly what Orbit captures, where it's sanitized, where it's stored, and
+what (if anything) ever leaves the device. This is the field-level
+companion to [`ARCHITECTURE.md`](ARCHITECTURE.md) and
+[`THREAT_MODEL.md`](THREAT_MODEL.md). The public-facing privacy policy
+(`landing/src/app/privacy/page.tsx`) says the same things in plain language
+for end users; this document is the technical reference it's derived from.
+
+## Nothing is captured before consent
+
+A new or upgraded install captures **nothing** until the user completes the
+first-launch consent screen, which asks about each capture category
+independently. Consent state (`consent_version`, one flag per category) is
+stored in SQLite and defaults every category to off; a missing or corrupt
+consent row fails closed, not open (`PRIV-001`/`PRIV-002`).
+
+## Capture categories, field by field
+
+| Category | Source | Fields captured | Sanitized where | Stored as |
+|---|---|---|---|---|
+| Active app/window | `unified_poller.rs` (native, 8s poll) | App name, window title | Shared Rust sanitizer (`ADR-003`) before INSERT | `events` (`type='window'`) |
+| Clipboard | `clipboard.rs` (500ms poll) | Clipboard text | `detect_sensitive_content_type()` replaces matched secrets with `[REDACTED:type]` **before** the row is ever written | `events` (`type='clipboard'`) |
+| Browser URL (native) | `unified_poller.rs` (osascript, part of the 8s combined poll) | URL, page title | Shared Rust sanitizer | `events` (`type='url'`, `source='native_browser'`) |
+| Browser content (extension, optional) | `content.ts` → `/capture` | Article body (≤2000 chars via Readability), page title, author, site name | `redaction_service.py` (Python port of the Rust patterns) before INSERT | `events` (`type='page_content'`) |
+| Search queries (extension, optional) | `content.ts` → `/capture` | Typed query text, search engine | `redaction_service.py` | `events` (`type='search_query'`) |
+| Link clicks (extension, optional) | `content.ts` → `/capture` | Anchor text, destination URL | Shared sanitizer | `events` (`type='link_click'`) |
+| On-screen text | `screen_content.rs` (AXUIElement, 8s poll) | Visible text of the focused app's UI (≤1500 chars, max depth 3/30 elements) | Shared Rust sanitizer; **`AXSecureTextField` is never read at any depth, unconditionally** | `events` (`type='screen_content'`) |
+| File activity | `file_activity.rs` (FSEvents, in user-chosen watched folders only) | File **path** and action (created/modified/removed) — never file contents | Shared Rust sanitizer (path only) | `events` (`type='file_activity'`) |
+| System state | `system_state.rs` (Darwin notifications) | Lock/unlock/sleep/wake events only | N/A (no free text) | `events` (`type='system_state'`) |
+| App lifecycle | `unified_poller.rs` diff | App launched/quit | N/A (no free text) | `events` (`type='app_lifecycle'`) |
+
+## Never captured, unconditionally — no setting changes this
+
+- Password field content (`AXSecureTextField`, skipped at every traversal
+  depth before any text is read).
+- Keystrokes, key codes, or mouse coordinates. Idle detection
+  (`CGEventSourceSecondsSinceLastEventType`) returns only a count of
+  seconds since the last input event — never what was typed or clicked.
+- File *contents* (only paths and actions, for file activity).
+- Microphone or screen-recording capture (future, unbuilt phases — do not
+  exist in the current app).
+- Network traffic, DNS queries, or HTTP request bodies.
+- Content from password managers or banking apps (excluded by default —
+  the user can exclude any other app or domain too).
+
+## Redaction patterns applied before every disk write
+
+PEM private keys, common API key prefixes (`sk-`, `AIza`, `AKIA`, `xoxb-`,
+`ghp_`, `pk_live_`, `sk_live_`, `pa-`), JWTs, credit-card-shaped numbers,
+SSNs, and crypto addresses all become `[REDACTED:type]` — the event is
+still recorded (Orbit knows *that* something was copied from an app), the
+secret value itself never is. The Python port used for browser-captured
+content applies the same pattern set inline (replacing only the matched
+substring, not the whole field, so surrounding article context survives).
+
+## What's sent to an AI provider, and when
+
+**Only if the user has added their own key** (BYOK) — with no key, none of
+this happens, ever, and no network request is attempted:
+
+| Stage | Provider | What's sent | What's received |
+|---|---|---|---|
+| Event classification | Groq | Already-redacted `raw_content`, `app_name`, `url` for a batch of events | A category label per event (work/research/personal/system/communication) |
+| Session summary | Groq | Already-redacted, fused signal lines (app focus, screen text, file activity, clipboard, browser) for one work session | A structured summary (project, goal, activity, next step, blockers, topics) |
+| Semantic embedding | Voyage AI | Project name, goal, activity, next step, summary, topics — all already-redacted, already generated by the step above | A 512-dimension vector, stored locally in Qdrant |
+| Recall (user query) | Groq | The user's typed query, matching FTS5/session context (already-redacted), last 4 turns of conversation history | A synthesized natural-language answer, streamed back |
+
+Nothing is stored on the provider's side by Orbit's own action — these are
+stateless API calls. What the provider itself retains is between the user
+and that provider (see `THREAT_MODEL.md` §4 for what's known about each
+provider's own retention policy, and its limits).
+
+## Retention and deletion
+
+- Events: retained 90 days on a rolling basis, then eligible for cleanup.
+- Deleting a **session** unlinks its events (`session_id` cleared) but does
+  not delete the underlying events — they can be re-summarized into a new
+  session later.
+- Deleting **events** directly, or a full wipe, is permanent.
+- A full wipe (`routes/privacy.py`) removes SQLite rows (events, sessions,
+  memory objects, FTS index, extension pairings) with secure-delete
+  enabled, truncates the WAL, vacuums freed pages, clears Qdrant vectors,
+  and clears in-memory webview conversation state.
+- A user's own BYOK provider key lives only in the local macOS Keychain —
+  removing it via the Privacy tab deletes it outright, not just disables
+  it.
+
+## User controls
+
+Pause capture entirely, toggle each category independently, exclude
+specific apps or domains, view or delete any individual captured item
+(`MemoryViewer`), or wipe everything with one click — all from the running
+app, no code changes or file editing required.

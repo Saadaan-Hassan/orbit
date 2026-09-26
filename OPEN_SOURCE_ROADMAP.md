@@ -227,9 +227,9 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | SITE-001 | Agent | DONE | Convert landing site to static, no-waitlist operation | MAN-000 |
 | DOC-001 | Agent | PARTIAL | Add chosen license and dependency/asset notices — only remaining item is verifying GitHub's license auto-detection once public (MAN-012) | MAN-002, MAN-005 |
 | DOC-002 | Agent | PARTIAL | Create the root public README and build guide | COST-005, DOC-001 |
-| DOC-003 | Agent | PARTIAL | Rewrite privacy policy and all product privacy claims | PRIV-006, OBS-001 |
+| DOC-003 | Agent | DONE (2026-09-27) | Rewrite privacy policy and all product privacy claims | PRIV-006, OBS-001 |
 | DOC-004 | Agent | DONE | Add contribution, security, support, conduct, and governance files | MAN-004, DOC-001 |
-| DOC-005 | Agent | TODO | Add architecture, threat model, and exact data-flow documentation | SEC-004, PRIV-006, COST-005 |
+| DOC-005 | Agent | DONE (2026-09-27) | Add architecture, threat model, and exact data-flow documentation | SEC-004, PRIV-006, COST-005 |
 | DOC-006 | Agent | DONE | Align versions/package metadata and clean stale internal documentation | DOC-001, COST-005 |
 | CI-001 | Agent | DONE | Make all workspaces expose real local verification commands | REP-002, PRIV-006 |
 | CI-002 | Agent | DONE | Add pull-request CI, dependency updates, and security scans | CI-001 |
@@ -1341,8 +1341,11 @@ Replace empty/default component READMEs or link them clearly to the root guide.
 
 ### DOC-003 — Rewrite privacy policy and claims
 
-**Current status: PARTIAL (2026-09-25).** Rewrote `landing/src/app/privacy/page.tsx`
-entirely from the current code, not the old copy — the previous version had
+**DONE (updated 2026-09-27).** All four acceptance criteria now checked —
+the last one was blocked on `DOC-005` not existing; it does now, and the
+policy's data flow was verified to match it directly. Rewrote
+`landing/src/app/privacy/page.tsx` entirely from the current code, not the
+old copy — the previous version had
 two direct internal contradictions (claimed data "never leaves your device"
 one section before describing what gets sent to cloud AI; claimed
 "anonymous usage analytics" are collected in a section right after stating
@@ -1388,15 +1391,16 @@ Acceptance criteria:
       review (no automated tool exists for this yet — a possible future
       `CI-002` addition), not a formalized static-analysis pass; three
       contradictions found and fixed.
-- [ ] Policy data flow matches `DOC-005` and tests. `DOC-005` (architecture/
-      threat-model doc) doesn't exist yet, so nothing to match against
-      directly — the policy was written from the same verified code/test
-      behavior `DOC-005` will need to describe, so they should agree once
-      it's written, but that's unconfirmed until it exists.
+- [x] Policy data flow matches `DOC-005` and tests. `DOC-005` now exists;
+      directly compared the privacy policy's provider section against
+      `docs/PRIVACY_DATA_FLOW.md` — both describe the same thing (BYOK-direct
+      to Groq/Voyage, no relay of any kind), confirmed via a fresh grep of
+      the policy finding zero remaining Cloudflare/relay mentions (removed
+      in the 2026-09-26 pivot, after this criterion was originally written).
 - [x] Every named provider/service is currently used, optional, or clearly marked
       historical/future. Groq and Voyage AI (both used, both optional,
-      BYOK), Cloudflare (named as the Voyage relay operator). Claude/Gemini
-      are not mentioned anywhere.
+      BYOK, called directly with no relay). Claude/Gemini are not mentioned
+      anywhere.
 - [x] Deletion semantics distinguish a session summary from linked raw events.
       Verified directly against `routes/memory.py`, not assumed.
 
@@ -1451,31 +1455,62 @@ Acceptance criteria:
 
 ### DOC-005 — Architecture, threat model, and data flow
 
-Add/update:
+**DONE (2026-09-27).** Wrote all three requested documents from the current,
+verified codebase — not from older planning docs, which are stale in
+several places already flagged by `DOC-006`. Each cross-references the
+others and points to `AGENTS.md`/`docs/adr/` for full implementation
+detail rather than duplicating it, to avoid creating a second source of
+truth that drifts.
 
-- `docs/ARCHITECTURE.md`
-- `docs/THREAT_MODEL.md`
-- `docs/PRIVACY_DATA_FLOW.md`
-- accepted ADRs under `docs/adr/`
-- root `AGENTS.md`
-
-Requirements:
-
-- Diagram Rust capture, extension capture, SQLite/FTS5, sidecar, optional provider,
-  updater and website as separate trust boundaries.
-- Enumerate all captured/transmitted fields and sanitizer/exclusion points.
-- Cover hostile webpage, local process, extension, provider, dependency, release,
-  update, database theft and maintainer-account threats.
-- Document fail-closed behavior, credential ownership, retention/deletion and
-  remaining accepted risks.
-- Remove obsolete rules requiring all AI through the maintainer Worker.
-- Ensure future agents cannot reintroduce centrally funded fallbacks accidentally.
+- `docs/ARCHITECTURE.md` — trust-boundary diagram (7 layers: hostile input
+  → Rust capture → extension → local storage → FastAPI backend → AI
+  providers → landing site), monorepo layout, one-paragraph data-flow
+  summary, distribution-model note (no release pipeline exists, so a
+  released-binary supply chain isn't a risk category here at all).
+- `docs/THREAT_MODEL.md` — 7 threat categories (hostile web content, local
+  process, compromised extension, AI provider, dependency/build supply
+  chain, local database theft, maintainer-account compromise), each with
+  concrete mitigations pointing to the actual code/ADR that implements
+  them, plus an explicit "Non-goals" section (not a multi-user system, not
+  resistant to a root-level local attacker, no formal crypto audit
+  performed — stated plainly rather than implied).
+- `docs/PRIVACY_DATA_FLOW.md` — a field-by-field table of every capture
+  category (app/window, clipboard, browser URL/content/search/clicks,
+  on-screen text, file activity, system state, app lifecycle) with its
+  exact sanitization point and storage location, a "never captured"
+  section, the redaction pattern list, a table of exactly what's sent to
+  Groq/Voyage at each pipeline stage (classification, session summary,
+  embedding, recall) and what's received back, and retention/deletion
+  behavior (90-day rolling retention, session-delete vs. event-delete
+  distinction, full-wipe behavior).
+- `AGENTS.md`'s monorepo tree updated to list the three new docs and
+  `docs/adr/` (previously undocumented in the tree at all).
+- No ADRs needed adding — the 2026-09-26 pivot's architecture change is
+  already recorded as `ADR-000`'s update note in `OPEN_SOURCE_ROADMAP.md`
+  itself, and every other material decision already has one under
+  `docs/adr/`.
+- "Remove obsolete rules requiring all AI through the maintainer Worker" and
+  "ensure future agents cannot reintroduce centrally funded fallbacks
+  accidentally" were already satisfied by the 2026-09-26 pivot's `AGENTS.md`
+  rewrite (its `No Cloudflare Worker` section and `DO NOT` list) —
+  reverified clean via a fresh grep for any remaining "must route through
+  Worker"-style language; the one hit found is in that same historical
+  section, correctly framed in past tense.
 
 Acceptance criteria:
 
-- [ ] Documentation matches executable code and automated tests.
-- [ ] Every material architecture decision has an ADR.
-- [ ] Remaining risks and non-goals are explicit.
+- [x] Documentation matches executable code and automated tests. Written
+      directly from current code (Rust capture modules, `local_api_security.py`,
+      redaction services, provider services) and `AGENTS.md`'s own
+      already-verified content, not from older planning docs.
+- [x] Every material architecture decision has an ADR. 7 ADRs exist under
+      `docs/adr/`; the one architecture-level decision without a dedicated
+      file (the 2026-09-26 distribution pivot) is recorded as an update to
+      `ADR-000` in `OPEN_SOURCE_ROADMAP.md`, cross-referenced from
+      `ARCHITECTURE.md`.
+- [x] Remaining risks and non-goals are explicit. `THREAT_MODEL.md`'s
+      "Accepted residual risk" callouts (§1, §4, §6) and its dedicated
+      "Non-goals" section.
 
 ### DOC-006 — Versions, package metadata, and stale docs
 
@@ -2246,6 +2281,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-27 | MAN-006 / 007 / 008 | DONE | External accounts: Groq, Voyage, PostHog, Sentry, Supabase | Maintainer reported real account cleanup: revoked the Groq and Voyage API keys directly at the provider level (closing `MAN-006`'s last open item — Anthropic/Gemini weren't mentioned, flagged as unconfirmed since neither ever had a working BYOK path in this codebase); deleted the PostHog and Sentry organizations entirely, not just keys (closing `MAN-008` — stronger than the minimum ask); paused (not deleted) the Supabase project; confirmed no Chrome Web Store account was ever created for this project. Updated the private `MAN-001` inventory file with all of this. | `MAN-007` stays `PARTIAL`: Resend and Vercel status weren't reported — need to know whether a Resend account was ever actually set up, and whether the landing site is staying on Vercel or moving (e.g. to GitHub Pages, per the task's own suggestion). Also worth a quick check that Groq/Voyage no longer have payment methods/auto-recharge live, now that their keys are revoked. |
 | 2026-09-27 | MAN-007 | PARTIAL | `landing/src/app/page.tsx` (verified, not changed) | Maintainer decided to keep the landing site on Vercel rather than moving it, and restated the content requirement this task always implied: no downloadable/releasable anything on the public page, just the idea behind Orbit and a link to GitHub. Verified directly against the current `page.tsx` — it already matches exactly (single "View on GitHub" CTA + `git clone` snippet), unchanged since `SITE-001`/the pivot, so no code change was needed. | Only remaining open item on `MAN-007` is Resend's status — was an account ever actually set up for this project, or configured but never used? |
 | 2026-09-27 | MAN-007 | PARTIAL | Resend account | Maintainer revoked the Resend key for this project. `MAN-007`'s remaining external-account items are now all addressed (Resend revoked, Supabase paused, Vercel deliberately kept). Held at `PARTIAL` rather than `DONE` for one honestly-unresolved item: whether any real waitlist signups exist in the now-paused Supabase project from before `SITE-001` removed the form, and if so whether they need exporting or deleting per whatever privacy promise was live at the time — not asked about directly, noted rather than silently closed. | Maintainer's call whether this loose end is worth resolving before `MAN-012`, given it's a personal project and the account is paused (not actively exposed), or acceptable to leave as-is. |
+| 2026-09-27 | DOC-005 | DONE | `docs/ARCHITECTURE.md` (new), `docs/THREAT_MODEL.md` (new), `docs/PRIVACY_DATA_FLOW.md` (new), `AGENTS.md` | Wrote all three requested docs from the current verified codebase, not older planning docs. `ARCHITECTURE.md`: 7-layer trust-boundary diagram, monorepo layout, one-paragraph data-flow summary, distribution-model note (no release pipeline exists at all, so that whole risk category doesn't apply). `THREAT_MODEL.md`: 7 threat categories (hostile web content, local process, compromised extension, AI provider, dependency/build supply chain, local database theft, maintainer-account compromise) each with concrete code-referenced mitigations, plus an explicit non-goals section. `PRIVACY_DATA_FLOW.md`: field-by-field table of every capture category with its exact sanitization point, a "never captured" list, the redaction pattern list, and a table of exactly what's sent to Groq/Voyage at each pipeline stage. No new ADRs needed — 7 already exist under `docs/adr/`, and the one architecture-level decision without a dedicated file (the pivot) is `ADR-000`'s update note. Updated `AGENTS.md`'s monorepo tree to list the new docs and `docs/adr/` (previously missing from the tree entirely). Reverified "no obsolete Worker-routing rules" via a fresh grep — clean, the pivot's `AGENTS.md` rewrite already handled this. This also closes `DOC-003`'s last open criterion: cross-checked the privacy policy's provider section directly against `PRIVACY_DATA_FLOW.md` and confirmed they agree (both BYOK-direct, no relay); fixed a stale note in `DOC-003`'s own acceptance criteria that still said Cloudflare was "the Voyage relay operator," true before the pivot, false since. | None outstanding for `DOC-005` or `DOC-003`. |
 
 ---
 

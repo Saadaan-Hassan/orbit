@@ -217,6 +217,10 @@ orbit/
 ├── AGENTS.md                               ← you are here
 ├── CLAUDE.md                               ← symlink: ln -sf AGENTS.md CLAUDE.md
 ├── docs/
+│   ├── ARCHITECTURE.md                     ← external-facing trust-boundary map; read this before AGENTS.md if you're new
+│   ├── THREAT_MODEL.md                     ← what's defended against, mitigations, explicit non-goals
+│   ├── PRIVACY_DATA_FLOW.md                ← field-by-field: every captured type, sanitization point, what's sent to AI
+│   ├── adr/                                ← one ADR per material architecture decision (local API auth, consent, sanitization, Keychain storage, Tauri hardening, lazy semantic search, telemetry removal)
 │   ├── Orbit_Complete_Build_Plan.md
 │   ├── PHASE_0.md                          ← ✅ complete
 │   ├── PHASE_1.md                          ← ✅ complete
