@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -40,7 +40,9 @@ struct BackendReadyState(std::sync::Mutex<Option<bool>>);
 
 pub fn generate_local_api_session_token() -> String {
     let mut token_bytes = [0_u8; 32];
-    OsRng.fill_bytes(&mut token_bytes);
+    SysRng
+        .try_fill_bytes(&mut token_bytes)
+        .expect("OS random number source unavailable");
     URL_SAFE_NO_PAD.encode(token_bytes)
 }
 
