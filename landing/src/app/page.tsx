@@ -199,7 +199,7 @@ export default function Page() {
 
         {/* Privacy callout strip */}
         <div className="mt-6 flex items-center justify-center gap-3 rounded-xl border border-white/5 bg-white/[0.015] px-6 py-4 text-center">
-          <p className="text-xs text-zinc-400 font-light leading-relaxed max-w-xl">
+          <p className="text-xs text-zinc-400 font-light leading-relaxed">
             <span className="text-zinc-400 font-medium">Your privacy is the foundation, not a checkbox.</span>
             {" "}Everything Orbit captures stays on your Mac in a local database, with zero cloud AI, unless you add your own Groq or Voyage AI key — there&apos;s no maintainer-funded shared key. Passwords and secrets are redacted before anything touches disk, whether or not cloud AI is on. You can pause, exclude apps, or wipe everything at any time.{" "}
             <a href="/privacy" className="text-zinc-400 underline underline-offset-2 hover:text-white transition-colors">
