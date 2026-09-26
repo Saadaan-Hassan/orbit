@@ -32,6 +32,14 @@ raw keyword search, which always works, even fully offline) and gives you a
 specific answer: real file names, real URLs, real project names, not a
 generic "you worked on some code."
 
+<p align="center">
+  <img src="docs/screenshots/recall.png" alt="Orbit's Recall tab showing project cards for several in-progress projects, each with a short summary and time spent" width="49%">
+  <img src="docs/screenshots/timeline.png" alt="Orbit's Timeline tab showing a day's sessions on a proportional strip, with one session expanded to show its goal, activity, and 'where you left off'" width="49%">
+</p>
+
+*(Session content above is placeholder data for illustration — Orbit writes
+its own summaries from what it actually observes.)*
+
 ## What it captures, and what it never does
 
 Orbit runs entirely on your Mac. Everything below is stored locally in
@@ -67,6 +75,10 @@ click. Nothing is captured before you complete the first-launch consent
 screen, which asks about each capture category independently — there's no
 single "accept all" that turns on more than you intended.
 
+<p align="center">
+  <img src="docs/screenshots/privacy-consent.png" alt="Orbit's Privacy tab showing an independent on/off toggle for each capture category — clipboard, apps and window titles, browser tabs, file activity, and on-screen text" width="70%">
+</p>
+
 ## Cloud AI is fully optional (bring your own key)
 
 Orbit's AI-written summaries and its chat-style recall use Groq. **There is
@@ -86,6 +98,10 @@ usage or bill.**
 
 No telemetry, analytics, or crash reporting of any kind is sent anywhere,
 by anyone, ever — not even anonymized.
+
+<p align="center">
+  <img src="docs/screenshots/privacy-byok.png" alt="Orbit's Privacy tab showing the bring-your-own-key fields for Groq and Voyage AI, each stating plainly what leaves your Mac when a key is active, plus a one-click permanent wipe of all captured data" width="70%">
+</p>
 
 ## Building from source
 

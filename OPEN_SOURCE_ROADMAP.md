@@ -226,7 +226,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | OBS-001 | Agent | DONE | Remove default remote telemetry or make it genuine opt-in | MAN-000, PRIV-001 |
 | SITE-001 | Agent | DONE | Convert landing site to static, no-waitlist operation | MAN-000 |
 | DOC-001 | Agent | PARTIAL | Add chosen license and dependency/asset notices — only remaining item is verifying GitHub's license auto-detection once public (MAN-012) | MAN-002, MAN-005 |
-| DOC-002 | Agent | PARTIAL | Create the root public README and build guide | COST-005, DOC-001 |
+| DOC-002 | Agent | DONE (2026-09-27) | Create the root public README and build guide | COST-005, DOC-001 |
 | DOC-003 | Agent | DONE (2026-09-27) | Rewrite privacy policy and all product privacy claims | PRIV-006, OBS-001 |
 | DOC-004 | Agent | DONE | Add contribution, security, support, conduct, and governance files | MAN-004, DOC-001 |
 | DOC-005 | Agent | DONE (2026-09-27) | Add architecture, threat model, and exact data-flow documentation | SEC-004, PRIV-006, COST-005 |
@@ -1304,21 +1304,35 @@ Acceptance criteria:
 
 ### DOC-002 — Root README and build guide
 
-**Current status: PARTIAL (2026-09-25).** Root `README.md` written from
-scratch (none existed before). Every item below is met except screenshots —
-this environment has no way to launch the GUI app and capture real images
-of it, so that item is a genuine, flagged gap, not an oversight. Also
-replaced the default boilerplate `app/README.md` (still had the unedited
-`create-next-app`/Tauri template text) and added root-guide links to
-`backend/README.md`, `worker/README.md`, and `landing/README.md` (the
-latter also still had un-customized boilerplate intro text).
+**DONE (updated 2026-09-27).** Root `README.md` written from scratch (none
+existed before). Screenshots (the one item left open as of 2026-09-25) are
+now done too — see below. Also replaced the default boilerplate
+`app/README.md` (still had the unedited `create-next-app`/Tauri template
+text) and added root-guide links to `backend/README.md` and
+`landing/README.md` (the latter also still had un-customized boilerplate
+intro text; `worker/README.md` no longer exists — `worker/` was deleted in
+the 2026-09-26 pivot).
 
 The root README must include:
 
 - [x] honest description and current maturity/status;
-- [ ] screenshots/demo whose content contains no private user data — not
-      done; no way to launch and capture the GUI app in this environment.
-      A maintainer should add real screenshots before public launch.
+- [x] screenshots/demo whose content contains no private user data — done
+      (2026-09-27). Turned out the "no way to launch/capture the GUI app"
+      limitation was environmental (macOS Screen Recording permission), not
+      fundamental — once granted, the maintainer launched the app and took
+      real screenshots. The real database had 251 genuine captured events
+      from development testing (real file paths, real screen text) that
+      would have been inappropriate in a public README; rather than wipe
+      real data to make screenshots look good, added realistic placeholder
+      sessions instead (11 sessions across 3 days, mixed work/personal
+      projects with continuity across days) and captured screenshots of the
+      Recall, Timeline, and Privacy tabs, explicitly skipping the Memories/
+      Events view since real captured data was still visible there. Four
+      screenshots (`docs/screenshots/*.png`) wired into `README.md` next to
+      the claims they support (Recall+Timeline under "What Orbit does",
+      capture-consent toggles under "What it captures", BYOK fields under
+      "Cloud AI"), with an explicit caption noting the session content is
+      placeholder data.
 - [x] supported macOS/architecture matrix;
 - [x] short architecture and capture-to-cloud data-flow summary;
 - [x] exactly what is captured, stored, transmitted and excluded;
@@ -2282,6 +2296,7 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-27 | MAN-007 | PARTIAL | `landing/src/app/page.tsx` (verified, not changed) | Maintainer decided to keep the landing site on Vercel rather than moving it, and restated the content requirement this task always implied: no downloadable/releasable anything on the public page, just the idea behind Orbit and a link to GitHub. Verified directly against the current `page.tsx` — it already matches exactly (single "View on GitHub" CTA + `git clone` snippet), unchanged since `SITE-001`/the pivot, so no code change was needed. | Only remaining open item on `MAN-007` is Resend's status — was an account ever actually set up for this project, or configured but never used? |
 | 2026-09-27 | MAN-007 | PARTIAL | Resend account | Maintainer revoked the Resend key for this project. `MAN-007`'s remaining external-account items are now all addressed (Resend revoked, Supabase paused, Vercel deliberately kept). Held at `PARTIAL` rather than `DONE` for one honestly-unresolved item: whether any real waitlist signups exist in the now-paused Supabase project from before `SITE-001` removed the form, and if so whether they need exporting or deleting per whatever privacy promise was live at the time — not asked about directly, noted rather than silently closed. | Maintainer's call whether this loose end is worth resolving before `MAN-012`, given it's a personal project and the account is paused (not actively exposed), or acceptable to leave as-is. |
 | 2026-09-27 | DOC-005 | DONE | `docs/ARCHITECTURE.md` (new), `docs/THREAT_MODEL.md` (new), `docs/PRIVACY_DATA_FLOW.md` (new), `AGENTS.md` | Wrote all three requested docs from the current verified codebase, not older planning docs. `ARCHITECTURE.md`: 7-layer trust-boundary diagram, monorepo layout, one-paragraph data-flow summary, distribution-model note (no release pipeline exists at all, so that whole risk category doesn't apply). `THREAT_MODEL.md`: 7 threat categories (hostile web content, local process, compromised extension, AI provider, dependency/build supply chain, local database theft, maintainer-account compromise) each with concrete code-referenced mitigations, plus an explicit non-goals section. `PRIVACY_DATA_FLOW.md`: field-by-field table of every capture category with its exact sanitization point, a "never captured" list, the redaction pattern list, and a table of exactly what's sent to Groq/Voyage at each pipeline stage. No new ADRs needed — 7 already exist under `docs/adr/`, and the one architecture-level decision without a dedicated file (the pivot) is `ADR-000`'s update note. Updated `AGENTS.md`'s monorepo tree to list the new docs and `docs/adr/` (previously missing from the tree entirely). Reverified "no obsolete Worker-routing rules" via a fresh grep — clean, the pivot's `AGENTS.md` rewrite already handled this. This also closes `DOC-003`'s last open criterion: cross-checked the privacy policy's provider section directly against `PRIVACY_DATA_FLOW.md` and confirmed they agree (both BYOK-direct, no relay); fixed a stale note in `DOC-003`'s own acceptance criteria that still said Cloudflare was "the Voyage relay operator," true before the pivot, false since. | None outstanding for `DOC-005` or `DOC-003`. |
+| 2026-09-27 | DOC-002 | DONE | `docs/screenshots/*.png` (new), `README.md`, `~/.orbit/orbit.db` (dummy sessions) | Closed the one item `DOC-002` had been missing since 2026-09-25. Screenshots turned out achievable once the maintainer granted Screen Recording permission — the earlier "no way to launch/capture the GUI app" note was an environmental gap, not a fundamental one. The real database had 251 genuine events from development testing (real file paths, real screen text) that would have been inappropriate in a public README; rather than wipe real data, added 11 realistic placeholder sessions across 3 days (mixed work/personal projects, some recurring across days to show continuity) via direct SQLite inserts. Maintainer then captured real screenshots of Recall, Timeline, and two Privacy views, explicitly skipping Memories/Events since real data was still visible there. Verified each of the 4 chosen screenshots actually shows what its filename claims before wiring them in. Placed each screenshot next to the specific claim it supports in `README.md` (Recall+Timeline under "What Orbit does", capture-consent toggles under "What it captures", BYOK fields under "Cloud AI") with an explicit caption noting the session content is placeholder data — not silently passing off fake data as real usage. Also fixed a stale `worker/README.md` reference in `DOC-002`'s own status note (`worker/` was deleted in the pivot). | None outstanding for `DOC-002`. |
 
 ---
 
