@@ -18,10 +18,6 @@ from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 # for its loop and protocol backends that PyInstaller won't detect statically.
 uvicorn_hidden = collect_submodules("uvicorn")
 
-# Collect all google.genai submodules — the SDK uses lazy imports internally.
-genai_hidden = collect_submodules("google.genai")
-genai_hidden += collect_submodules("google.ai.generativelanguage_v1beta")
-
 # qdrant_client uses dynamic imports for its REST and gRPC backends.
 qdrant_hidden = collect_submodules("qdrant_client")
 
@@ -41,7 +37,6 @@ a = Analysis(
     ],
     hiddenimports=[
         *uvicorn_hidden,
-        *genai_hidden,
         *qdrant_hidden,
         # anyio: asyncio backend is selected dynamically at runtime
         "anyio._backends._asyncio",
@@ -51,12 +46,6 @@ a = Analysis(
         "sqlalchemy.dialects.sqlite.aiosqlite",
         # aiosqlite registers itself as a SQLAlchemy dialect at import time
         "aiosqlite",
-        # posthog SDK
-        "posthog",
-        # sentry FastAPI integration hooks in via middleware
-        "sentry_sdk.integrations.fastapi",
-        "sentry_sdk.integrations.starlette",
-        "sentry_sdk.integrations.asyncio",
         # standard-library modules used transitively by httpx / email clients
         "email.mime.text",
         "email.mime.multipart",

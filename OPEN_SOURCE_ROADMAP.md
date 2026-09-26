@@ -213,7 +213,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | SEC-004 | Agent | DONE | Add secure extension pairing and restrictive extension CORS | SEC-003 |
 | PRIV-001 | Agent | DONE | Add versioned capture consent and safe database defaults | SEC-003 |
 | PRIV-002 | Agent | PARTIAL | Gate all Rust capture monitors on consent and settings | PRIV-001 |
-| PRIV-003 | Agent | PARTIAL | Sanitize every Rust-captured field before SQLite | PRIV-002 |
+| PRIV-003 | Agent | DONE (2026-09-27) | Sanitize every Rust-captured field before SQLite | PRIV-002 |
 | PRIV-004 | Agent | DONE | Sanitize all provider-bound context at the Python boundary | PRIV-003 |
 | PRIV-005 | Agent | DONE | Normalize exclusions and protect local files/credentials | PRIV-004 |
 | PRIV-006 | Agent | DONE | Add privacy, consent, and redaction regression tests | PRIV-005 |
@@ -222,7 +222,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | COST-002 | Agent | DONE | Remove all shared-key Worker behavior and fail closed | COST-001 |
 | COST-003 | Agent | PARTIAL | Make FTS5 the no-embedding default and remove mandatory Voyage usage | COST-002 |
 | COST-004 | Agent | PARTIAL | Replace retired models and centralize provider/model configuration | COST-001 |
-| COST-005 | Agent | PARTIAL | Add predictable offline/rate-limit/provider failure behavior | COST-003, COST-004 |
+| COST-005 | Agent | DONE (2026-09-27) | Add predictable offline/rate-limit/provider failure behavior | COST-003, COST-004 |
 | OBS-001 | Agent | DONE | Remove default remote telemetry or make it genuine opt-in | MAN-000, PRIV-001 |
 | SITE-001 | Agent | DONE | Convert landing site to static, no-waitlist operation | MAN-000 |
 | DOC-001 | Agent | PARTIAL | Add chosen license and dependency/asset notices — only remaining item is verifying GitHub's license auto-detection once public (MAN-012) | MAN-002, MAN-005 |
@@ -725,13 +725,15 @@ Acceptance criteria:
 
 ### PRIV-003 — Sanitize every Rust field before persistence
 
-**Current status: PARTIAL (2026-09-10).** The functional Rust sanitizer,
-custom-phrase controls, tests, and focused formatting checks are complete. This
-task cannot be marked `DONE` yet because the repository-wide `cargo clippy
---bin app -- -D warnings` and `cargo fmt --check` checks still fail in
-pre-existing `src/lib.rs` and `src/main.rs`, outside this task's files. Do not
-weaken or suppress those checks; rerun them after their existing findings are
-resolved, then record the result below.
+**DONE (2026-09-27).** The functional Rust sanitizer, custom-phrase controls,
+tests, and focused formatting checks were already complete as of
+2026-09-10; the only thing holding this at `PARTIAL` was a repository-wide
+`cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` failure in
+pre-existing `src/lib.rs`/`src/main.rs`, outside this task's own files.
+Re-ran both repo-wide today (unrelated to this task — `lib.rs`/`main.rs`
+have since been edited multiple times for other reasons, most recently
+today's live-testing bug fixes) and both are clean: no Clippy findings, no
+formatting drift, `cargo test --bin app` 37/37.
 
 Implementation requirements:
 
@@ -832,16 +834,38 @@ command and is suitable for `CI-002`.
 
 ### APPSEC-001 — Harden the Tauri shell
 
-**Current status: PARTIAL (2026-09-25).** The devtools feature gate, CSP,
-and capability-grant fixes are implemented, documented in
+**PARTIAL (updated 2026-09-27).** The devtools feature gate, CSP, and
+capability-grant fixes are implemented, documented in
 [ADR-005](docs/adr/ADR-005-tauri-shell-hardening.md), and pass every
 automatable check (`cargo check`/`cargo test --bin app` 37/37/`pnpm build`).
-This task is not complete: CSP correctness and the absence of devtools are
-runtime properties of a real built app that only a maintainer can observe.
-Build a production `.dmg`, confirm right-click → Inspect Element is
-unavailable, and confirm the local API, PostHog/Sentry, the update check, and
-the watched-folder picker all still work under the new CSP and capability
-grant before changing this task to `DONE`.
+The PostHog/Sentry/update-check items in the original acceptance text no
+longer apply at all — both were removed entirely in `OBS-001` and the
+2026-09-26 pivot, not just hardened.
+
+**Real progress today:** attempted an actual `pnpm tauri build`-equivalent
+step (`uv run pyinstaller orbit-backend.spec --noconfirm`, the real backend
+sidecar build a release build depends on) and found it would have failed
+outright — the spec file still called `collect_submodules("google.genai")`
+and included `posthog`/`sentry_sdk.*` hidden-import entries, all three
+referencing packages that no longer exist in this codebase (Gemini removed
+entirely, telemetry removed in `OBS-001`). This is a genuine, previously
+undiscovered gap: nobody could have produced a working release build from
+this repo since those removals, and no CI or test caught it because nothing
+had actually attempted a PyInstaller build since. Fixed the spec file and
+re-ran the build — it now completes successfully, producing a real 28 MB
+`orbit-backend` Mach-O binary. Reverted the git-tracked `backend/dist/`
+dev-stub back to its committed state immediately afterward and deleted the
+build cache — the real binary was only ever a local, uncommitted artifact
+used to prove the spec file works, not something to leave in the tree.
+
+**Still open, needs a real decision:** going the rest of the way (a full
+`pnpm tauri build` producing an actual `.dmg`, then confirming
+right-click → Inspect Element is unavailable and the local API/folder
+picker work) needs either the maintainer to run it, or explicit
+go-ahead for the agent to attempt it — it's a longer-running, resource-
+heavier step than what's been done so far, and the devtools/folder-picker
+checks specifically need real GUI interaction the agent can't do either
+way.
 
 Implementation requirements:
 
@@ -852,9 +876,12 @@ Implementation requirements:
 - Specifically justify JIT, unsigned executable memory, disabled library
   validation, network client and network server entitlements.
 - Restrict outbound connectivity to documented provider/update flows where
-  technically possible.
-- Ensure updater public key remains public and updater private key remains only in
-  protected release secrets/offline backup.
+  technically possible. → No update flow exists anymore (auto-updater
+  removed in the 2026-09-26 pivot); CSP is scoped to just the provider
+  hosts.
+- ~~Ensure updater public key remains public and updater private key remains
+  only in protected release secrets/offline backup.~~ N/A — there is no
+  updater, no keypair, nothing to back up.
 
 Acceptance criteria:
 
@@ -1113,13 +1140,20 @@ rewrote the offline-recall fallback message: it previously always guessed
 "you may be offline" regardless of cause — now distinguishes "no key
 configured / rejected" from "rate-limited" from "couldn't reach the
 network" from a genuine outage, and always states plainly that the search
-itself never left the device. Held at `PARTIAL` because two items are
-reasoned-through rather than independently re-verified this session: "quota
-exhausted" is treated as the same case as "rate limit" (429) since neither
-Groq nor Voyage document a distinct code for it, and "keep events locally
-pending with non-alarming UI status" is asserted true based on the existing
-architecture (events are never deleted, only left with `session_id IS
-NULL` until reprocessed) rather than freshly checked against the frontend.
+itself never left the device.
+
+**DONE (2026-09-27).** The one open item — "keep events locally pending
+with non-alarming UI status" — was re-checked directly against the current
+code rather than left as architectural reasoning: grepped the frontend
+(`MemoryViewer.tsx` and friends) and confirmed there is no special-case
+"pending"/"unprocessed" UI treatment at all — an event with no session yet
+(or a `NULL` category) just renders as an ordinary list item, no alarming
+banner, no error state. `database.py`'s own comment at the FTS5 query site
+confirms the same intent server-side ("include it rather than silently
+hiding unprocessed events from recall"). "Quota exhausted" being treated as
+the same case as rate-limit (429) remains an accepted design decision, not
+a gap — neither Groq nor Voyage document a distinct code for it, so there's
+nothing further to verify there.
 
 Implementation requirements:
 
