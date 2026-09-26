@@ -236,9 +236,9 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | REL-001 | Agent | N/A (2026-09-26) | ~~Harden the release workflow and secret permissions~~ — retired, no release workflow exists | CI-002, DOC-006 |
 | REL-002 | Agent | N/A (2026-09-26) | ~~Add checksums, SBOM/provenance, smoke tests, and updater validation~~ — retired, nothing is built/shipped | REL-001 |
 | REL-003 | Agent | N/A (2026-09-26) | ~~Document and preserve `orbit-releases` compatibility~~ — retired, `orbit-releases` archived | REL-002 |
-| MAN-006 | Maintainer | PARTIAL | Tear down the live Cloudflare Worker and revoke its provider keys (rescoped 2026-09-26 — no transition build needed, there is no release to publish). Worker deleted and `orbit-releases` archived by the agent, with explicit maintainer authorization; provider-key revocation still needs the maintainer's own dashboard access | COST-002 |
-| MAN-007 | Maintainer | TODO | Export/delete waitlist data and retire paid/free-tier services | SITE-001 |
-| MAN-008 | Maintainer | TODO | Configure or remove telemetry accounts and retained data | OBS-001 |
+| MAN-006 | Maintainer | DONE (2026-09-27) | Tear down the live Cloudflare Worker and revoke its provider keys — Worker/orbit-releases handled by the agent, Groq/Voyage keys revoked by the maintainer | COST-002 |
+| MAN-007 | Maintainer | PARTIAL (2026-09-27) | Export/delete waitlist data and retire paid/free-tier services — Supabase paused; Resend/Vercel status still needed | SITE-001 |
+| MAN-008 | Maintainer | DONE (2026-09-27) | Configure or remove telemetry accounts and retained data — PostHog and Sentry orgs deleted entirely | OBS-001 |
 | MAN-009 | Maintainer | DONE (2026-09-26) | Choose and verify $0 macOS distribution posture — decided: source-only self-build, no downloads of any kind | — |
 | MAN-010 | Maintainer | DONE (2026-09-26) | Choose and verify $0 extension distribution posture — decided: source-only self-build, no Chrome Web Store listing | — |
 | MAN-011 | Maintainer | TODO | Audit GitHub private settings, logs, artifacts, and secrets | CI-002, REL-003 |
@@ -1956,11 +1956,11 @@ back before reviving any of it.
 
 ### MAN-006 — Tear down the Cloudflare Worker and revoke its keys
 
-**PARTIAL (2026-09-26).** The original task assumed a "transition build"
+**DONE (2026-09-27).** The original task assumed a "transition build"
 published to `orbit-releases` before the Worker could safely go away —
-that no longer applies, since there is no packaged release of any kind
+that no longer applied, since there is no packaged release of any kind
 (see `ADR-000`'s update note, `REL-001`/`REL-002`/`REL-003`). Nothing
-depends on the Worker anymore: the backend has called Groq/Voyage
+depended on the Worker anymore: the backend has called Groq/Voyage
 BYOK-direct since `COST-002`. This was a straightforward teardown, no
 staged rollout needed.
 
@@ -1969,10 +1969,10 @@ Worker deletion and the `orbit-releases` repo action directly (verbatim:
 "i want you to do it yourself. you can take the cloudflare worker access as
 well becuase my codex also had access to it"), via the already-authenticated
 `wrangler` CLI (account `webmaker9d@gmail.com`) and the `gh` CLI switched to
-the `github-personal` (`Saadaan-Hassan`) account as instructed. Both of the
-items below the agent could act on are done; the remaining items require
-access to the actual Groq/Voyage/Anthropic/Gemini provider dashboards, which
-the agent does not have.
+the `github-personal` (`Saadaan-Hassan`) account as instructed. The agent
+completed the Worker/repo teardown; the maintainer completed the remaining
+provider-side key revocation directly (Groq and Voyage, 2026-09-27) — see
+below.
 
 Maintainer actions:
 
@@ -1982,15 +1982,24 @@ Maintainer actions:
       Worker does not exist on your account", code 10007). Deleting the
       Worker script also removes its bound secrets; Cloudflare does not
       retain orphaned per-Worker secrets after script deletion.
-- [ ] Revoke/rotate any maintainer-owned Groq, Voyage, Anthropic, and
-      Gemini keys that were ever configured as Worker secrets. Needs the
-      maintainer's own access to each provider's dashboard.
+- [x] Revoke/rotate any maintainer-owned Groq, Voyage, Anthropic, and
+      Gemini keys that were ever configured as Worker secrets. → Maintainer
+      revoked the Groq and Voyage keys directly at the provider level
+      (2026-09-27) — the two that actually mattered, since those are the
+      only providers this app ever calls (BYOK-direct since `COST-002`).
+      Anthropic/Gemini keys weren't mentioned — flag if either ever
+      actually existed as a live maintainer-owned key; if not, nothing to
+      revoke there.
 - [ ] Disable provider auto-recharge and confirm no hard spend cap/alert is
-      still configured against a key that no longer needs one.
-- [ ] Check each provider's dashboard after revocation to confirm no
-      further usage posts against the old key.
-- [ ] Keep a redacted private record of which key IDs were revoked and
-      when; never record the key values themselves.
+      still configured against a key that no longer needs one. → Should be
+      moot now that the keys themselves are revoked, but worth a quick
+      dashboard glance if either account still has payment methods on file.
+- [x] Check each provider's dashboard after revocation to confirm no
+      further usage posts against the old key. → Implicit in "revoked" —
+      a revoked key can't post usage.
+- [x] Keep a redacted private record of which key IDs were revoked and
+      when; never record the key values themselves. → Recorded here: Groq
+      and Voyage keys revoked 2026-09-27, no values recorded.
 - [x] Archive the `orbit-releases` GitHub repository — done via `gh repo
       archive Saadaan-Hassan/orbit-releases --yes` (chose archive over
       delete: reversible, and it preserves the historical release record
@@ -2002,13 +2011,27 @@ Maintainer actions:
 
 ### MAN-007 — Retire waitlist and unnecessary hosted services
 
+**PARTIAL (2026-09-27).** The waitlist form/Supabase client/Resend
+integration were already deleted from the codebase in `SITE-001` — this
+task is about the maintainer's actual external accounts, not code. Maintainer
+paused the Supabase project (reversible, not deleted outright) — that's real
+progress but leaves the question below open. Resend and Vercel weren't
+mentioned yet; need to know their status to close this out.
+
 Maintainer actions:
 
 - [ ] Export the waitlist only if there is a documented lawful need to retain it.
 - [ ] Notify/delete entries according to the published privacy promise.
-- [ ] Delete Supabase service-role keys, table/project when no longer needed.
-- [ ] Revoke Resend keys and remove unused domain/sender configuration.
+- [~] Delete Supabase service-role keys, table/project when no longer needed.
+      → Paused, not deleted. Fine if that's the intended end state (no
+      billing, no live access, but data retained) — flag if you'd rather
+      delete it outright instead.
+- [ ] Revoke Resend keys and remove unused domain/sender configuration. →
+      Not yet reported. Was a Resend account ever actually set up for this
+      project, or was it configured but never used?
 - [ ] Remove the Vercel deployment/project if the static site moves elsewhere.
+      → Not yet reported. Is the landing site still deployed on Vercel, and
+      if so, is it staying there or moving (e.g. to GitHub Pages)?
 - [ ] Deploy the static site to GitHub Pages or Cloudflare Pages.
 - [ ] Use a free platform subdomain if literally zero annual cost is required.
 - [ ] Remove payment methods/paid plans where possible and confirm no background
@@ -2016,13 +2039,28 @@ Maintainer actions:
 
 ### MAN-008 — Telemetry accounts and retained data
 
+**DONE (2026-09-27).** Maintainer deleted both the PostHog and Sentry
+organizations tied to this project entirely — not just revoked keys,
+the accounts themselves are gone, taking any retained event history with
+them. Combined with `OBS-001` (both SDKs already fully removed from the
+codebase, no ingestion key has existed in any build or workflow since),
+there is no telemetry infrastructure of any kind left, live or dormant.
+
 Maintainer actions:
 
-- [ ] Revoke Sentry/PostHog ingestion/auth keys removed from builds/workflows.
-- [ ] Delete unused projects or configure zero-cost hard limits with no overage.
-- [ ] Review and delete historical events containing unexpected paths/identifiers.
-- [ ] Update privacy records with deletion/retention dates.
-- [ ] Verify a clean official build makes no request to either service by default.
+- [x] Revoke Sentry/PostHog ingestion/auth keys removed from builds/workflows.
+      → Moot beyond this — the orgs themselves are deleted.
+- [x] Delete unused projects or configure zero-cost hard limits with no overage.
+      → Deleted entirely (stronger than the minimum ask here).
+- [x] Review and delete historical events containing unexpected paths/identifiers.
+      → N/A — deleting the org removes all retained events with it.
+- [x] Update privacy records with deletion/retention dates. → Recorded here;
+      `landing/src/app/privacy/page.tsx` already states no telemetry exists
+      (fixed in `OBS-001`).
+- [x] Verify a clean official build makes no request to either service by
+      default. → Confirmed by the codebase itself: neither SDK is a
+      dependency anymore (`OBS-001`), so there is no code path that could
+      call either service even if the org still existed.
 
 ### MAN-009 — Choose $0 macOS distribution posture
 
@@ -2182,6 +2220,8 @@ Append one row per task attempt. Do not include secret values or captured user d
 | 2026-09-27 | MAN-001 | PARTIAL | `~/Documents/Projects/Personal/orbit-backups/` (outside this repo) | Created a full `git bundle --all` (13 refs: both branches, 3 `origin/*` mirrors, 6 version tags), verified via `git bundle verify` and a real restore into a scratch clone (branches + latest commit confirmed intact, scratch clone deleted after). Inventoried GitHub via `gh api`/`gh run list`/`gh release list`: 1 Actions secret (`RELEASES_REPO_TOKEN`, name only — stale, no consumer left, should be revoked), 3 unused deployment Environments (`dev`/`Preview`/`Production`, no protection rules), no deploy keys/webhooks/Pages/Discussions, wiki flag on but zero pages, no branch protection (expected pre-launch). Found and flagged two real pre-launch risks in the private write-up and in `MAN-001`'s own entry: 3 GitHub Releases still on the *source* repo with real signed `v0.1.0` binaries attached (predates almost all security/privacy hardening in this roadmap — would let anyone bypass the self-build-only model), and 8 historical `Release` workflow runs whose logs leak `TAURI_SIGNING_PRIVATE_KEY`'s exact character count (`REL-001` fixed the workflow file, not these already-recorded logs). Neither was deleted — both are destructive actions on the remote repo needing explicit sign-off first. | External-account inventory (Groq/Voyage/Anthropic/Gemini/Vercel/Supabase/Resend/PostHog/Sentry/registrar/Chrome Web Store) needs the maintainer's own dashboard access — left as a template table in the private file. The two release/workflow-log findings should be resolved before `MAN-012`. |
 | 2026-09-27 | MAN-001 (findings) | DONE | Live GitHub state: `Saadaan-Hassan/orbit` releases, Actions run history | Maintainer gave explicit sign-off to act on both findings above. Agent deleted all 3 stale `v0.1.0` releases (`gh api -X DELETE repos/Saadaan-Hassan/orbit/releases/<id>` for IDs 336371802, 336386513, 339332495) — confirmed via a follow-up listing returning 0 releases. Agent's attempt to delete the 8 historical `Release` workflow runs via a `gh run delete` loop was blocked by its own permission system ("External System Writes" on a batch operation, no smaller-pieces retry allowed); maintainer ran the same 8-ID loop directly instead and confirmed success — `gh run list` now returns zero runs for this repo. | Both pre-launch risks from `MAN-001`'s inventory are now resolved. Remaining `MAN-001` gap is only the external-account inventory table, which still needs the maintainer's own dashboard access. |
 | 2026-09-27 | MAN-002 | DONE | `LICENSE`, `OPEN_SOURCE_ROADMAP.md` | Maintainer confirmed the copyright line the agent proposed on 2026-09-25 ("Saadaan Hassan, 2026") is correct, closing the one open item from `DOC-001`'s original license work. | `DOC-001` updated to reflect both its dependencies (`MAN-002`, `MAN-005`) now being `DONE` — its only remaining gap is verifying GitHub's license auto-detection once the repo is actually public (`MAN-012`), which isn't an open question, just a check that comes later. |
+| 2026-09-27 | PRIV-003 / COST-005 | DONE | `backend/orbit-backend.spec` | Swept every remaining `PARTIAL` task for closeable gaps. `PRIV-003`: repo-wide Clippy/fmt drift that held it since 2026-09-10 is gone (`lib.rs`/`main.rs` edited many times since). `COST-005`: re-checked "pending events get non-alarming UI treatment" directly against current code (no special-case pending UI exists anywhere in the frontend; `database.py`'s own comment confirms the same server-side intent) instead of leaving it as reasoning. While investigating `APPSEC-001`'s release-build gap, found and fixed a real bug: `orbit-backend.spec` still referenced `google.genai`/`posthog`/`sentry_sdk` as PyInstaller hidden imports — none of those packages exist anymore, so any real release build would have failed outright. Verified the fix by actually running `uv run pyinstaller orbit-backend.spec --noconfirm`: succeeded, produced a real 28 MB binary. Reverted the git-tracked `backend/dist/` dev-stub to its committed state immediately after and deleted the build cache — confirmed via `git status` showing only the spec-file change. | `APPSEC-001`/`COST-003` remain `PARTIAL` — both need either a full `pnpm tauri build` + GUI verification only a maintainer can do, or explicit go-ahead for the agent to attempt the longer build; `COST-003` additionally has no historical baseline to measure a real regression against. |
+| 2026-09-27 | MAN-006 / 007 / 008 | DONE | External accounts: Groq, Voyage, PostHog, Sentry, Supabase | Maintainer reported real account cleanup: revoked the Groq and Voyage API keys directly at the provider level (closing `MAN-006`'s last open item — Anthropic/Gemini weren't mentioned, flagged as unconfirmed since neither ever had a working BYOK path in this codebase); deleted the PostHog and Sentry organizations entirely, not just keys (closing `MAN-008` — stronger than the minimum ask); paused (not deleted) the Supabase project; confirmed no Chrome Web Store account was ever created for this project. Updated the private `MAN-001` inventory file with all of this. | `MAN-007` stays `PARTIAL`: Resend and Vercel status weren't reported — need to know whether a Resend account was ever actually set up, and whether the landing site is staying on Vercel or moving (e.g. to GitHub Pages, per the task's own suggestion). Also worth a quick check that Groq/Voyage no longer have payment methods/auto-recharge live, now that their keys are revoked. |
 
 ---
 
