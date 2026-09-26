@@ -81,7 +81,7 @@ dependencies = [
  "arboard",
  "base64 0.22.1",
  "chrono",
- "core-foundation 0.9.4",
+ "core-foundation 0.10.1",
  "notify",
  "notify-debouncer-full",
  "rand",
