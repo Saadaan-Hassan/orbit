@@ -1120,54 +1120,15 @@ Acceptance criteria:
 
 ### SITE-001 — Convert landing site to static, no-waitlist operation
 
-**Superseded by the 2026-09-26 pivot:** the download-buttons-on-the-main-page
-approach described below was correct for the state at the time (2026-09-25)
-but no longer reflects the live page — there are no packaged downloads to
-link to anymore. `page.tsx` now has a "View on GitHub" CTA and a `git clone`
-snippet instead, and `/beta` (the invite-only download page mentioned below)
-has been deleted outright, not merely left as-is. See the pivot's Completion
-Log entry and `AGENTS.md`'s `Distribution` section. The waitlist/Supabase
-removal this task performed is still accurate and unaffected.
-
-**Historical status before the pivot: DONE (2026-09-25).** Confirmed with the maintainer before
-implementing that the requirements text's "add a clear source/download
-link" meant the main public landing page should carry real download buttons
-— the same ones `/beta` (currently invite-only, not indexed) already has —
-not just a "watch for releases" link. That's what shipped: Orbit is now
-publicly downloadable directly from the indexed landing page, not gated
-behind an invite. `/beta` was kept as-is rather than removed, since an
-existing invite link may still point there and it's harmless now that the
-main page offers the same thing. "Repository"/"Discussions" links were not
-added — the source repo isn't public yet (`MAN-012` hasn't happened) and
-linking a private repo to the public would just 404; the release-download
-option (explicitly listed as valid on its own) was used instead, since
-`orbit-releases` is already public and already proven working via `/beta`.
-
-Implementation requirements:
-
-- Remove Supabase, Resend, server actions, waitlist form and confirmation email.
-- Replace signup with links to GitHub Releases, repository, Discussions and/or
-  release watching.
-- Ensure the site can be statically exported and hosted on GitHub Pages or
-  Cloudflare Pages without server functions.
-- Remove unused environment variables, dependencies and personal-data language.
-- Add a clear source/download link and unsigned/notarized status.
-- Preserve accessible, responsive behavior and metadata.
-
-Acceptance criteria:
-
-- [x] Static build succeeds without Supabase/Resend credentials. `pnpm build`
-      with `output: "export"` succeeds with zero env vars set — neither
-      dependency exists in the project anymore.
-- [x] No form stores email or other personal data. No form exists anywhere
-      on the site.
-- [x] No server runtime is required. Verified directly: every route in the
-      build output is `○` (static); `out/` contains only static
-      HTML/CSS/JS/image files, no API routes, no server bundle.
-- [x] All links point to intended public repositories/releases. Download
-      buttons point to the already-public `orbit-releases` repo's fixed
-      `orbit-latest-*` release assets (the same pattern `/beta` already
-      used successfully).
+**DONE.** Removed Supabase/Resend/the waitlist form/server actions entirely;
+the site is a static export (`output: "export"`) with no server, no form,
+and no personal data collected. Originally (2025-09-25) shipped with public
+download buttons pointing at `orbit-releases`; **superseded by the
+2026-09-26 pivot** — there are no packaged downloads anymore, so `page.tsx`
+now has a "View on GitHub" CTA and a `git clone` snippet instead, and
+`/beta` (the old invite-only download page) has been deleted. See the
+pivot's Completion Log entry and `AGENTS.md`'s `Distribution` section. The
+waitlist/Supabase removal itself is unaffected and still accurate.
 
 ---
 
@@ -1246,16 +1207,15 @@ The root README must include:
 - [x] first-launch permission/consent behavior;
 - [x] offline capability and optional BYOK setup;
 - [x] source build prerequisites and commands for every workspace;
-- [x] release downloads, checksums/signature verification and Gatekeeper guidance
-      — checksum verification is honestly stated as not yet available
-      (tracked at `REL-002`) rather than described as if it exists.
+- [x] source build/Gatekeeper guidance — superseded by the 2026-09-26 pivot:
+      there are no release downloads or checksums anymore (`REL-002`
+      retired), so this is now "build it yourself" guidance instead, per
+      README's current "Building from source" section.
 - [x] no instruction to disable Gatekeeper globally — explicit per-app-only
       instruction, with an explicit "never disable globally" statement.
 - [x] cost statement: no maintainer-hosted AI; users control provider charges;
 - [x] links to privacy, security, contribution, support, roadmap and license
-      — security/contribution/support are honestly listed as "not
-      published yet" (`DOC-004`, not done) rather than linked to files
-      that don't exist.
+      — all now published (`DOC-004` is `DONE`).
 - [x] known limitations and project roadmap;
 - [x] statement that open-source software is provided without warranty.
 
@@ -1849,207 +1809,28 @@ Acceptance criteria:
       (updater version metadata) — no user data, no credentials; unchanged
       by this task, just confirmed.
 
-### REL-001 — Harden release workflow
+### REL-001/002/003 — Release workflow, integrity, and `orbit-releases` compatibility
 
 **RETIRED (2026-09-26).** The maintainer decided to stop shipping packaged
 releases entirely (see `ADR-000`'s update note) — `release.yml` and
-`publish-extension.yml` have been deleted from this repository, along with
-the entire `worker/` workspace and the in-app auto-updater. There is no
-release workflow left to harden. The work below was real and correct at
-the time (kept for history/audit trail), but none of it applies to the
-current repository state — do not restore `release.yml` from git history
-based on this section without first re-reading `AGENTS.md`'s `Distribution`
-section and confirming a maintainer actually wants packaged releases back.
+`publish-extension.yml` are deleted, along with the `worker/` workspace and
+the in-app auto-updater. There is no release workflow, artifact, checksum,
+SBOM, or updater feed left to harden, validate, or preserve compatibility
+for, and no installed base to migrate. `orbit-releases` has been archived
+(`MAN-006`).
 
-**Historical status before retirement: PARTIAL (2026-09-26).** Everything checkable from a
-static/local pass is done and verified; two items depend on live GitHub
-state (a secret's actual configured scope, an environment's actual
-protection rules) that can only be confirmed by the maintainer, not from
-here — held at `PARTIAL` rather than `DONE` specifically because of those,
-not because the workflow-file work is incomplete.
-
-Installed `zizmor` (a GitHub Actions–specific security auditor, not just a
-YAML/schema linter like `actionlint`) for this pass — it found real issues
-`actionlint` structurally can't, since it understands GitHub Actions'
-specific threat model (secret exposure, template injection, permission
-scope) rather than just YAML shape:
-
-- **3 high-confidence template-injection findings** in `release.yml`:
-  `${{ github.ref_name }}` interpolated directly into `run:` shell blocks
-  (`gh release upload/download ${{ github.ref_name }} ...`) — a tag name is
-  attacker-influenceable by anyone who can push a tag, and directly
-  interpolating an expression into a shell command is exactly the injection
-  pattern GitHub's own security docs warn against. Fixed by referencing the
-  runner-provided `$GITHUB_REF_NAME` environment variable instead (quoted)
-  — one instance had an automated fix available and was verified against
-  the other two, fixed identically by hand.
-- **1 high-confidence excessive-permissions finding**: `contents: write` at
-  the workflow level applies to every job, including ones that don't need
-  it and any added later. Moved to job-level grants on the two jobs that
-  actually call `gh release upload`/`tauri-action` — see the code comment
-  on why it's not removed further: every such call already explicitly
-  overrides to `RELEASES_REPO_TOKEN` instead of the ambient `GITHUB_TOKEN`,
-  which suggests `contents: write` may not be exercised at all, but
-  confirming that with certainty needs a real run, not static analysis.
-- **2 low-confidence cache-poisoning findings** (one each in `release.yml`
-  and `publish-extension.yml`): reviewed and explicitly accepted rather
-  than "fixed" — the tool's own suggested auto-fix (`lookup-only: true`)
-  would silently defeat the cache entirely (it only checks existence, never
-  restores or saves), a real functional regression for a false-positive-risk
-  finding. Both workflows trigger only on tag push, which requires push
-  access — no fork/PR-triggered workflow in this repo shares either cache's
-  key scope, so the actual exploitability here is very low. Documented
-  inline at each finding rather than silently ignored.
-- **1 low-confidence artipacked finding**, repeated 9× across all 4
-  workflow files (every `actions/checkout` step): none set
-  `persist-credentials: false`. None of these jobs push back to their own
-  repo, so this has zero functional cost — added everywhere.
-
-Beyond what zizmor caught, implemented the rest of this task's explicit
-requirements:
-
-- **`curl | sh` uv installer replaced** with `astral-sh/setup-uv` (already
-  SHA-pinned in `CI-002`'s `ci.yml`, reused here) — also a correctness fix,
-  not just security: `astral-sh/setup-uv`'s `python-version-file` reads
-  `backend/.python-version` directly, which is the real source of truth
-  `uv` already used to resolve its interpreter (per `AGENTS.md`: "uv can
-  silently download its own matching interpreter regardless of what this
-  step installs") — the separate `actions/setup-python` step it replaced
-  was already vestigial for that reason.
-- **Signing-key-length print removed.** `echo "Signing key is present
-  (${#TAURI_SIGNING_PRIVATE_KEY} chars)"` leaked the key's exact character
-  count into build logs — no operational value, real (if minor) metadata
-  leak about a secret. Now just confirms presence.
-- **Tag/version consistency validated before building**, in both release
-  workflows, as a fast-failing gate job/step ahead of the two expensive
-  macOS builds: `release.yml` gets a new `validate` job comparing the
-  pushed tag against `app/src-tauri/tauri.conf.json`'s version (plus
-  running `scripts/check-versions.sh`, `DOC-006`) before `build-and-release`
-  is allowed to start; `publish-extension.yml` gets an equivalent check
-  against `extension/manifest.json`. No changelog-consistency check was
-  added — `CHANGELOG.md`'s own documented policy (`DOC-004`) is that
-  release notes are generated per tag on GitHub, not hand-maintained
-  in-repo, so there's no changelog file content that could go stale against
-  a version bump in the first place.
-- **`environment: dev` → `environment: release`** in `release.yml`. Flagged
-  prominently in-line, not just here: if the release secrets
-  (`TAURI_SIGNING_PRIVATE_KEY`, `RELEASES_REPO_TOKEN`, `WORKER_URL`) are
-  currently scoped to the `dev` GitHub Environment specifically (Settings →
-  Environments) rather than at the repo level, this rename alone breaks the
-  next release until a `release` environment exists with the same secrets
-  — and the rename's actual point (protection rules — required reviewers,
-  branch restrictions) needs the maintainer to configure it on GitHub;
-  nothing in a workflow file can create environment protection rules.
-  **Do not tag a release until this is confirmed on GitHub.**
-- **`RELEASES_REPO_TOKEN` scope**: `AGENTS.md` already documents it as "a
-  GitHub PAT (fine-grained, scoped to just `orbit-releases`, Contents:
-  Read/write)" — taken as already satisfying this requirement per existing
-  documentation, but this is a live secret's actual configured grant, which
-  genuinely cannot be independently verified from a static repo checkout;
-  the maintainer is the only one who can confirm the real token matches
-  what's documented.
-- **Fork/PR workflows cannot reach signing or release credentials**:
-  satisfied by construction, not new code — `release.yml`/`publish-extension.yml`
-  trigger only on `push: tags:`, never `pull_request`/`pull_request_target`,
-  so no fork-PR code path can reach either workflow at all, regardless of
-  permissions.
-
-Verified: `actionlint` and `zizmor` both clean (zizmor: 0 remaining
-high/medium findings beyond the 3 documented-accepted cache-poisoning
-ones) across all four workflow files; `scripts/check-versions.sh` and all
-66 backend tests still pass; the new tag-matching shell logic in both
-`validate` steps tested manually against real values from this repo.
-
-**What's NOT verified, honestly**: a real dry-run build of both
-architectures (this task's own acceptance criterion) — building a macOS
-Tauri app with a full Rust compile and PyInstaller sidecar isn't something
-this environment can do, and the workflow itself can only truly be proven
-correct by GitHub actually running it. Same caveat as `CI-002` and the
-existing note in `AGENTS.md` about `release.yml`'s matrix+merge flow.
-
-Implementation requirements:
-
-- Pin every Action, especially extension publishing, to a reviewed full SHA.
-- Replace `curl | sh` installers with pinned/verified installation.
-- Minimize top-level and job permissions; use a protected `release` environment,
-  not `dev`.
-- Keep `RELEASES_REPO_TOKEN` fine-grained to `orbit-releases` Contents read/write
-  only, unless a safe same-repo migration is deliberately performed later.
-- Use the Python version required by the backend.
-- Validate source tag, package version and changelog consistency before building.
-- Ensure fork/PR workflows cannot reach signing or release credentials.
-- Avoid printing signing-key length/content or sensitive environment details.
-
-Acceptance criteria:
-
-- [x] Workflow security/lint check passes. `actionlint` and `zizmor` (a
-      real GitHub-Actions-specific security auditor, not just YAML/schema
-      linting) both clean, beyond 3 documented-and-accepted low-confidence
-      cache-poisoning findings — see above for why those are accepted, not
-      fixed.
-- [x] All third-party Actions are immutable SHA pins. Already true from
-      `CI-002`; reverified after this task's edits.
-- [ ] Release job alone receives only necessary secrets. Scoped
-      `contents: write` to the job level (was workflow-level) — genuinely
-      unverified whether it's needed *at all*, since every actual write
-      goes through `RELEASES_REPO_TOKEN` instead; needs a real run to
-      confirm safely, so left at the conservative (present) grant rather
-      than guessed away.
-- [ ] A dry run builds both architectures without publishing. Not
-      performable from this environment (no macOS Tauri build + PyInstaller
-      sidecar compile here) — needs a real GitHub Actions run.
-
-### REL-002 — Release integrity and updater validation
-
-**RETIRED (2026-09-26).** No release artifacts, checksums, SBOM, or updater
-exist to validate — see `REL-001`'s retirement note and `ADR-000`'s update.
-
-Implementation requirements (historical — kept for context, not actionable):
-
-- Produce SHA-256 checksums for every distributable asset.
-- Produce an SPDX or CycloneDX SBOM.
-- Add GitHub artifact attestation/provenance when available.
-- Smoke-test Apple Silicon and Intel bundles.
-- Validate signatures and confirm `latest.json` contains both
-  `darwin-aarch64` and `darwin-x86_64` before publishing it.
-- Test update from the last public version to the candidate release.
-- Document verification commands and preserve old assets required by installed
-  clients.
-- Back up the Tauri updater private key securely outside GitHub; never rotate it
-  casually.
-
-Acceptance criteria:
-
-- [ ] Candidate artifacts, checksums, SBOM and attestations are mutually linked.
-- [ ] Both architecture installs launch and use the secured sidecar.
-- [ ] Updater accepts authentic releases and rejects tampered metadata/artifacts.
-- [ ] No personal captured data, `.env`, source map secret or signing material is
-      present in packages.
-
-### REL-003 — Preserve `orbit-releases` compatibility
-
-**RETIRED (2026-09-26).** There is no installed base to preserve
-compatibility for — no packaged release was ever widely distributed, and
-none will be. The `orbit-releases` companion repository has been archived
-(see `MAN-006`'s entry and the Completion Log). See `REL-001`'s retirement
-note and `ADR-000`'s update.
-
-Implementation requirements (historical — kept for context, not actionable):
-
-- Document why the separate public repository remains: installed clients already
-  use its `latest.json` endpoint.
-- Verify its README, license/distribution notice, source-commit link, checksums,
-  security contact and retention policy.
-- Ensure every release links to the exact source tag/commit used to build it.
-- Do not delete/overwrite old required assets without testing updater behavior.
-- Document a future two-endpoint transition if releases ever move to the source
-  repository.
-
-Acceptance criteria:
-
-- [ ] Current installed public version can discover the safe transition release.
-- [ ] Release assets identify source, architecture, version and verification data.
-- [ ] The updater endpoint remains stable through source-repository publication.
+Before this retirement, `REL-001` had reached `PARTIAL`: `zizmor` found and
+the agent fixed 3 template-injection findings (`${{ github.ref_name }}`
+interpolated into shell blocks) and 1 excessive-permissions finding
+(workflow-level `contents: write` narrowed to job-level) in `release.yml`;
+2 low-confidence cache-poisoning findings were reviewed and accepted rather
+than "fixed" (the tool's own auto-fix would have silently defeated the
+cache); `curl | sh` was replaced with `astral-sh/setup-uv`; a
+tag/version-consistency gate was added before both release builds. None of
+that work is actionable anymore. Do not restore `release.yml` from git
+history on the strength of this note — re-read `AGENTS.md`'s `Distribution`
+section first and confirm a maintainer actually wants packaged releases
+back before reviving any of it.
 
 ---
 
@@ -2252,32 +2033,32 @@ Append one row per task attempt. Do not include secret values or captured user d
 
 | Date | Task | Result | Files/areas changed | Verification/evidence | Follow-up/blocker |
 |---|---|---|---|---|---|
-| 2026-09-06 | ROADMAP | CREATED | `OPEN_SOURCE_ROADMAP.md` | Created from the pre-public architecture, cost, privacy, repository and release audit | Begin with `MAN-000` and `MAN-001` |
-| 2026-09-06 | MAN-000 | DONE | `OPEN_SOURCE_ROADMAP.md` | Maintainer accepted ADR-000: BYOK + local FTS5 baseline; no shared provider credentials or anonymous sponsor-funded AI at launch | Next: MAN-001 backup/service inventory, then MAN-002 license choice |
-| 2026-09-06 | REP-001 | DONE | `.gitignore`, `.gitleaksignore`, `app/src-tauri/src/capture/clipboard.rs` | Gitleaks 8.30.1: full reachable history scan passed with 0 findings after six exact old clipboard-test fixture fingerprints were allowlisted; changed source/config files scanned clean. `cargo test capture::clipboard::tests` passed 23/23. `git diff --check` and sensitive-path/example-file ignore checks passed. The ignored local `.env.sentry-build-plugin` correctly scans as one Sentry build credential; value was not read or recorded. | `cargo fmt --check` still reports pre-existing formatting drift across unrelated Rust files; deliberately not reformatted in this scoped task. Keep the local Sentry credential uncommitted; rotate/remove it in `OBS-001`/`MAN-008`. |
-| 2026-09-06 | SEC-001 | DONE | `docs/adr/ADR-001-local-api-authentication.md`, `OPEN_SOURCE_ROADMAP.md` | Accepted ADR defines per-session sidecar authentication, extension-only paired credentials, exact production/paired origins, a protected stable-port model, restart/revocation behavior, threat model, target data flow, and direct implementation mapping. `git diff --check` passed. | Implement `SEC-002` before changing callers; current local API remains unauthenticated until then. |
-| 2026-09-08 | SEC-002 | DONE | `backend/local_api_security.py`, `backend/main.py`, request models, backend security tests, `app/src-tauri/src/main.rs` | Universal middleware requires the 256-bit app-session bearer credential for every registered route; it validates loopback Host and exact Tauri origin, has restrictive preflight/CORS, rejects credential query parameters, limits request/field sizes, removes API schema endpoints, and makes `/health` authenticated/no-content. Production rejects a missing/invalid token. `uv run python -m unittest discover -s tests -v` passed 6/6; compilation and `git diff --check` passed. | SEC-003 must generate/deliver the token and migrate desktop callers. The existing extension intentionally cannot authenticate until SEC-004 adds explicit pairing and capture-only authorization. Rust's full formatter still reports unrelated pre-existing drift outside this task. |
-| 2026-09-08 | SEC-003 | DONE | Tauri sidecar lifecycle, `app/src/lib/local-api.ts`, all desktop API callers, development-origin configuration, security tests | Rust generates a fresh 32-byte OS-CSPRNG token per app session, passes it only via the sidecar child environment, authenticates readiness, and never kills an unknown port occupant. The single module-memory webview client obtains the token through a main-window Tauri command and attaches it to every desktop API request; no direct local-backend `fetch` remains. It clears on unmount/401; startup emits the existing safe unavailable state on failure. `cargo check --bin app`, token unit test, frontend `pnpm build` (including TypeScript), backend security tests 6/6, and `git diff --check` passed. | SEC-004 must add the distinct paired extension token; no browser extension can use the sidecar yet. A full Rust formatter still reports unrelated pre-existing formatting drift. |
-| 2026-09-08 | SEC-004 | DONE | Pairing routes/table/middleware, extension popup and service worker, desktop Privacy pairing controls, extension permission documentation | Orbit issues five-minute, one-use in-memory pairing codes from its authenticated UI. A Chrome-origin pairing request receives a distinct random capture-only token; only its hash and exact extension ID are stored. Middleware permits that token only on `/capture` from that paired origin, revocation/full wipe invalidates it, and browser auth failures visibly require re-pairing. `uv run python -m unittest discover -s tests -v` passed 7/7; desktop `pnpm build`, extension `pnpm build`, backend compilation, and `git diff --check` passed. | Load the built extension manually in Chrome before public release to validate Chrome-origin behavior and pairing UX on a real profile. |
-| 2026-09-08 | PRIV-001 | DONE | `ADR-002`, consent migration/API, safe database defaults, migration tests, backend dependency lock | Consent version 1 records independent capture choices and defaults all of them off. Fresh and upgraded databases are paused until review; absent rows fail closed. Existing native-browser/file/screen toggles also update their consent category. `greenlet` is now an explicit SQLAlchemy async runtime dependency. Backend tests passed 9/9, including fresh and existing-schema migration coverage; compilation and `git diff --check` passed. | PRIV-002 must enforce this record in every Rust monitor and replace remaining Rust fail-open defaults before any capture can resume. |
-| 2026-09-10 | PRIV-002 | PARTIAL | Rust clipboard, file activity, screen-content, unified-poller, system-state, capture API, onboarding, Privacy settings, and consent regression tests | Capture defaults fail closed. Every native monitor and the extension-facing `/capture` API now requires the relevant accepted category; unknown event types are denied. Onboarding and Privacy settings provide independent choices plus an explicit keep-off action. Consent/pause settings refresh locally within about five seconds (or the next eight-second monitor poll). `uv run python -m unittest discover -s tests -v` passed 12/12, `pnpm build`, `cargo test --bin app` 34/34, `cargo check`, focused Rust formatting, and staged/unstaged diff checks passed. No acceptance criterion is checked yet because live app behavior still requires maintainer observation. | Required maintainer action: test clean and upgraded profiles; confirm first launch and skip create no events; independently enable then revoke each category; apply global pause; restart; and inspect the local timeline/database for no events while disabled. Record the outcome, date, app build, and any exception here. Keep this task PARTIAL and the Consent gate blocked until that verification is recorded. |
-| 2026-09-10 | PRIV-004 | DONE | Shared Python provider-context sanitizer; Groq, Claude, Gemini, Voyage, Qdrant metadata, recall diagnostics, and provider-boundary tests | A single final boundary redacts static credential/PII/path/URL patterns plus local exact-match phrases, caps chat fields/requests, classification batches, embeddings, and vector metadata, and is called immediately before every AI/embedding HTTP request. Provider diagnostics contain only provider, model, operation, status, duration, and safe error kind; raw prompts/responses are not logged. `uv run python -m unittest discover -s tests -v` passed 17/17, including a synthetic secret inserted into a legacy SQLite event row, recall query/history interception, all provider services, metadata bounds, and a response-body-safe diagnostic test. | Continue with `PRIV-005`. `PRIV-002` remains PARTIAL pending the maintainer's live UI verification. |
-| 2026-09-10 | PRIV-005 | DONE | Canonical exclusion policy, FastAPI/Rust capture enforcement, macOS Keychain migration, owner-only local storage repair, ADR-004, and regression tests | `services/exclusion_policy.py` owns defaults and normalization; SQLite distributes canonical values to native and extension capture. Domains include true subdomains but not suffix lookalikes; watched-folder boundaries are enforced before every Python/Rust write. `~/.orbit`, SQLite/WAL/SHM, Qdrant, device ID, and onboarding marker receive owner-only modes without following symlinks. Groq keys use macOS Keychain; a legacy SQLite key is deleted only after a successful Keychain transfer/check, and subprocess output is never logged. `uv run python -m unittest discover -s tests -p 'test_*.py'` passed 24/24; focused suite passed 7/7 with ResourceWarnings treated as errors; `cargo test --bin app` passed 36/36; `python -m compileall -q .` and `git diff --check` passed. | Continue with `PRIV-006`. `PRIV-002` remains PARTIAL pending the maintainer's live UI verification. |
-| 2026-09-10 | PRIV-006 | DONE | Focused privacy regression suite, secure wipe compaction, in-memory history clearing, Rust secure-field test, and backend test command documentation | `test_privacy_regression_suite.py` proves fresh/upgraded pre-consent rejection, every extension capture category's consent/pause/exclusion gate, corrupt/missing settings fail-closed behavior, wipe of SQLite/FTS/sessions/memory/pairings plus Qdrant invocation, and capture-only extension pairing/revocation. Existing Rust sanitizer/provider-boundary tests cover non-secure secret redaction, URL/path/window-title leaks, legacy unsafe rows, and secure-field skipping; the secure-field branch now has a direct Rust unit test. A successful wipe enables SQLite secure-delete, truncates WAL, vacuums freed pages, and clears webview conversation/pending-query state. `backend/README.md` documents `uv run python -m unittest discover -s tests -p 'test_*.py'` for `CI-002`. The full backend suite passed 29/29 with `ResourceWarning` promoted to errors; `gitleaks detect --source tests --no-git --redact --exit-code 1` found no leaks; `cargo test --bin app` passed 37/37; `pnpm build`, backend compilation, and `git diff --check` passed. | Continue with `APPSEC-001`. `PRIV-002` remains PARTIAL pending the maintainer's live UI verification. |
-| 2026-09-10 | PRIV-003 | PARTIAL | `ADR-003`; shared Rust sanitizer; all active/retained Rust event writers; local exact-match pattern table/API/UI; migration test | All active and retained Rust event-insert sources now sanitize their captured strings; URLs strip fragments, redact userinfo and sensitive query values; static patterns cover credentials, keys, headers, JWTs, connection strings, payment/identity data, email/phone, and local custom phrases. `cargo test --bin app` passed 30/30, `cargo check --bin app`, focused `rustfmt --check` for changed capture files, backend tests 9/9, `pnpm build`, and both staged/unstaged `git diff --check` passed. | Keep PARTIAL: repository-wide Clippy fails an existing collapsible-if in `src/lib.rs`, and repository-wide formatter reports existing drift in `src/lib.rs` and `src/main.rs`. Fix and rerun those global checks before marking this task DONE. Consent gate remains blocked by PRIV-002. |
-| 2026-09-25 | COST-001 | PARTIAL | `backend/services/groq_service.py`, `backend/routes/settings.py`, `backend/tests/test_groq_byok.py`, `app/src/hooks/useGroqKeySettings.ts`, `app/src/components/PrivacyPanel.tsx`, `AGENTS.md` | Added `GROQ_DIRECT_API_URL` (`https://api.groq.com/openai/v1/chat/completions`) and rewired all three Groq call sites (session summary, classification, recall streaming) plus a new `test_groq_api_key()` to use it with `Authorization: Bearer <key>` whenever `database.get_groq_api_key()` returns a personal key — the Worker is bypassed entirely in that case; with no personal key, behavior is unchanged (Worker, no auth header). Added `POST /settings/groq-key/test` (validates a candidate key with a free Groq `/models` call, never persists it). Built the "Your Own Groq Key" PrivacyPanel section: add/replace/test/remove/temporarily-disable, a persistent explicit disclosure that captured context and queries leave the Mac once a key is active, and a `GET /settings/groq-key` response that only ever returns `{configured, enabled}` — never the key. Rewrote every `AGENTS.md` passage claiming all AI goes through the Worker unconditionally (Critical Architecture Facts, AI Models table, Security & Privacy Rules, Environment Variables, DO NOT section, Key Files entries) to describe the Groq BYOK exception. Verification: `uv run python -m unittest discover -s tests -p 'test_*.py'` 37/37 (8 new: 4 asserting the direct-URL/Bearer-header routing per call site, 1 asserting the no-key path is unchanged, 1 asserting the test endpoint never stores the key, 2 asserting the full add/test/disable/remove route lifecycle and that the raw key never appears in a response); `pnpm build` (TypeScript + Vite) clean. | Required maintainer action: launch a real build, add a personal key, quit and relaunch Orbit, confirm `GET /settings/groq-key` still reports `configured: true` (Keychain + SQLite persistence — no automated test restarts the app). Next: `COST-002`. |
-| 2026-09-25 | COST-002 | DONE | `worker/src/index.ts` (rewrite), `worker/src/index.test.ts`, `worker/README.md`, `worker/package.json`, `backend/services/keychain_service.py`, `backend/services/voyage_service.py`, `backend/database.py`, `backend/routes/settings.py` (rewrite), `backend/tests/test_voyage_byok.py`, `backend/tests/test_provider_context_sanitizer.py`, `backend/scheduler.py` (comment), `app/src/hooks/useApiKeySettings.ts` (replaces `useGroqKeySettings.ts`), `app/src/hooks/useProviderStatus.ts` (deleted), `app/src/components/PrivacyPanel.tsx`, `AGENTS.md` | Scope confirmed with the maintainer via an explicit question before implementing (see status note above): all four providers' maintainer-funded Worker credentials removed; Claude/Gemini removed outright (unused, no BYOK anywhere); Voyage given the same BYOK treatment as Groq; Worker stays a lightweight passthrough, not a hardened self-host template. Rewrote `worker/src/index.ts`: `WorkerEnvironment` is now an empty interface, `/chat` and `/classify` and `/provider-status` deleted, `/chat-groq` and `/embed` each require the caller's own key header with no fallback (401 otherwise). Generalized `keychain_service.py` (`_store_api_key_sync`/`_get_api_key_sync`/etc. parameterized by account) and added Voyage Keychain functions alongside the existing Groq ones. `voyage_service.py`: `generate_text_embedding` now requires `database.get_voyage_api_key()`, raises immediately with zero network calls if absent (no maintainer fallback exists), fast-fails on 401 without retrying; added `test_voyage_api_key()`. Rewrote `routes/settings.py` with shared provider-agnostic CRUD helpers powering both `/settings/groq-key` and the new `/settings/voyage-key` (+ `.../test`, `.../enabled`); removed `/settings/provider-status` (nothing left to proxy). Generalized the frontend BYOK hook/UI (`useApiKeySettings.ts`, one `ApiKeySection` component) and rendered it twice (Groq, Voyage) in PrivacyPanel; deleted `useProviderStatus.ts` and the old admin-status UI it powered. Added a Vitest suite for the Worker (auth/routing/passthrough/no-credential-surface, 12 tests) — this Worker had zero test infrastructure before. Rewrote every stale Worker/kill-switch/BYOK claim in `AGENTS.md` (Critical Architecture Facts, AI Models, data-flow diagrams, Cloudflare Worker section, Environment Variables, DO NOT, Key Files, monorepo tree). Verification: backend `uv run python -m unittest discover -s tests -p 'test_*.py'` 43/43 (6 new Voyage tests, 1 existing Groq/Gemini/Claude/Voyage boundary test updated to mock a personal Voyage key); `cd worker && npm run test` 12/12 (new); `pnpm build` (TypeScript + Vite) clean. | **The live, already-deployed Worker still runs the pre-COST-002 code and remains genuinely exposed (`/embed` has no kill switch, zero auth) until the maintainer runs `npx wrangler deploy` from `worker/` — not done here, deployment requires explicit authorization.** Next: `COST-003` — note its own scope (making Voyage/Qdrant fully optional) now partially overlaps with the BYOK work done here; check current state before assuming the original task text is unchanged. |
-| 2026-09-25 | COST-003 | PARTIAL | `backend/services/qdrant_service.py`, `backend/main.py`, `backend/scheduler.py`, `backend/services/voyage_service.py`, `backend/routes/recall.py`, `backend/tests/test_offline_recall.py`, `docs/adr/ADR-006-optional-lazy-semantic-search.md`, `AGENTS.md` | Decision: Qdrant retained (not removed) but made fully lazy — see ADR-006. `qdrant_service.py`'s `add_session_embedding()`/`search_sessions_semantic()` now call `generate_text_embedding()` *before* touching the Qdrant client; with no personal Voyage key that raises immediately and Qdrant's local storage is never created. Removed the unconditional `initialize_qdrant_collection()` calls from `main.py`'s startup and `scheduler.py`'s every-30-minutes cycle; `scheduler.py` now checks `get_voyage_api_key()` before attempting an embedding at all, logging `debug` (not `warning`) when none is configured — was previously warning on every cycle forever for the now-common no-key case. Found and fixed a real regression while verifying this: `routes/recall.py` ran Qdrant semantic search and Groq synthesis in one `try` block, so `VoyageKeyNotConfiguredError` (a plain `RuntimeError`, not an `httpx.*` exception) escaped the `except` clause into the catch-all handler and replied "Sorry, something went wrong" instead of ever calling Groq — meaning a user with a valid Groq key but no Voyage key got no AI-synthesized recall answer at all, not just no semantic search. Restructured so semantic search soft-fails to an empty list (Groq still runs on FTS5-only/DB-scan context) and only a genuine Groq-side failure triggers the plain-FTS5-text fallback. Verification: `uv run python -m unittest discover -s tests -p 'test_*.py'` 47/47 (4 new in `test_offline_recall.py`, covering the exact regression above, the full-offline path, the time-range DB-scan independence, and that Qdrant's client is never touched without a key). | Packaging size/startup regression was not measured (requires a built macOS app bundle, outside this environment) — reasoned qualitatively in ADR-006 instead; a maintainer should do an actual before/after comparison before marking `DONE`. Next: `COST-004`. |
-| 2026-09-25 | COST-004 | PARTIAL | `backend/services/groq_service.py`, `backend/tests/test_groq_model_migration.py`, `AGENTS.md` | **Live production bug, verified via Groq's own current docs (not training data):** `llama-3.1-8b-instant`/`llama-3.3-70b-versatile` (Orbit's classification/recall models) were retired for free/developer tier on 2026-08-16 — every real BYOK user's classification and recall has been silently failing since then. Also verified the roadmap's suggested `qwen/qwen3.6-27b` alternative was itself deprecated 2026-09-14; used `openai/gpt-oss-120b` for recall instead (Groq's other listed replacement, already proven in this codebase for session summaries). `GROQ_CLASSIFY_MODEL` → `openai/gpt-oss-20b`, `GROQ_RECALL_MODEL` → `openai/gpt-oss-120b`. Both are reasoning models — added `reasoning_effort="low"` to the classification call (previously had none, since the old model didn't support/need it) and to the recall streaming request body. Added `GROQ_CLASSIFY_REASONING_TOKEN_HEADROOM = 500` to classification's `max_tokens` calculation, since its tight per-event budget was sized for a non-reasoning model with zero chain-of-thought overhead — documented explicitly as a reasoned estimate, not empirically calibrated. Kept the existing 30-event group cap and repetition-loop-defense token ceiling as a conservative default, since whether `openai/gpt-oss-20b` shares the old model's specific repetition-loop failure mode is unverified. Updated every stale model-name reference across `AGENTS.md`. Verification: `uv run python -m unittest discover -s tests -p 'test_*.py'` 52/52 (5 new in `test_groq_model_migration.py`: correct model IDs, `reasoning_effort` present on classification/recall/session-summary, reasoning headroom reflected in outgoing `max_tokens`). | **No live Groq account was available to confirm any of this against real API responses** — implemented from Groq's current documentation and this codebase's own established `reasoning_effort` pattern, not empirical testing. A maintainer with a real Groq key should run one real classification cycle and one real recall query and watch specifically for truncated/empty classification results (raise `GROQ_CLASSIFY_REASONING_TOKEN_HEADROOM` if so) and recall latency near the 30s timeout, before marking `DONE`. Next: `COST-005`. |
-| 2026-09-25 | COST-005 | PARTIAL | `backend/services/groq_service.py`, `backend/services/voyage_service.py`, `backend/routes/recall.py`, `backend/tests/test_provider_failure_modes.py`, `backend/tests/test_offline_recall.py`, `AGENTS.md` | Audited both providers' error handling against the full named-failure matrix (no key, invalid key, rate limit/quota, outage, timeout, malformed response, offline network) and closed two real gaps found in the process: Groq's `_call_groq_chat` cooled down on 429 but never on 401/403, meaning an invalid key was independently rediscovered by every classification group, session summary, and recall query in a cycle instead of being remembered; Voyage had no cooldown mechanism at all. Added `_GROQ_AUTH_FAILURE_COOLDOWN_SECONDS`/`_VOYAGE_AUTH_FAILURE_COOLDOWN_SECONDS` (300s) for 401/403 and a 429 cooldown for Voyage (honouring `Retry-After`, reusing Groq's existing default of 90s), plus jitter on Voyage's exponential backoff. Rewrote the offline-recall fallback (`_describe_groq_unavailable_reason()` + `_format_fts5_fallback()`) to name the actual cause (no/bad key vs. rate-limited vs. network problem vs. outage) instead of always guessing "you may be offline," and to always state plainly that the search itself never left the device. Verification: `uv run python -m unittest discover -s tests -p 'test_*.py'` 66/66 (13 new in `test_provider_failure_modes.py` covering the full matrix for both providers plus proof that Groq never retries within a call and Voyage is bounded to exactly 3 attempts; 2 new in `test_offline_recall.py` for the reworded fallback message). | Two items reasoned through rather than independently re-verified: "quota exhausted" is treated as the same case as "rate limit" (429) — neither provider documents a separate code for it; "keep events locally pending with non-alarming UI status" is asserted true from existing architecture (events are never deleted, only left with `session_id IS NULL` until reprocessed) without a fresh frontend check. Next: `OBS-001`. |
-| 2026-09-25 | OBS-001 | DONE | `backend/main.py`, `backend/scheduler.py`, `backend/routes/feedback.py`, `backend/routes/recall.py`, `backend/services/analytics_service.py` (deleted), `backend/services/sentry_service.py` (deleted), `backend/pyproject.toml`/`uv.lock`, `app/src/main.tsx`, `app/src/instrument.ts` (deleted), `app/src/hooks/useAnalytics.ts` (deleted), `app/src/hooks/useRecall.ts`, `app/src/components/{ErrorBoundary,MemoryViewer,PrivacyPanel}.tsx`, `app/vite.config.ts`, `app/package.json`/`pnpm-lock.yaml`, `app/src-tauri/src/lib.rs`, `app/src-tauri/tauri.conf.json`, `.github/workflows/release.yml`, `landing/src/app/privacy/page.tsx`, `docs/adr/ADR-005-tauri-shell-hardening.md` (update note), `docs/adr/ADR-007-remove-telemetry.md`, `AGENTS.md` | Maintainer confirmed removal over opt-in (see status note above). Deleted both service files and every `capture_analytics_event`/`useAnalytics`/`Sentry.captureException` call site; `ErrorBoundary` now logs render errors to `console.error` only. Removed `posthog`/`sentry-sdk[fastapi]` (backend, via `uv remove`) and `@posthog/react`/`@sentry/react`/`posthog-js`/`@sentry/vite-plugin` (frontend, via `pnpm remove`), and the `sentryVitePlugin`/hidden-sourcemap step from `vite.config.ts` (sourcemaps now off — nothing consumes them). Removed the `SIDECAR_POSTHOG_API_KEY`/`SIDECAR_SENTRY_DSN` compile-time constants and their `.env()` sidecar-spawn calls from `lib.rs` (`cargo check` confirmed clean). Removed the six telemetry secrets from the release workflow's Tauri build step. Narrowed the CSP's `connect-src` to drop `*.posthog.com`/`*.i.posthog.com`/`*.sentry.io` (nothing calls them anymore). Fixed the landing privacy policy's now-false claim that Orbit sends telemetry. Verification: backend `uv run python -m unittest discover -s tests -p 'test_*.py'` 66/66 unaffected; frontend `pnpm build` clean, bundle dropped 830 KB → 492 KB JS (652 → 313 modules, chunk-size warning gone); `cargo check --bin app` and `cargo test --bin app` 37/37 clean; `git diff --check` clean. | Historical `docs/PHASE_*.md` build logs still describe the old Sentry/PostHog setup as originally built — left alone, in scope for `DOC-006` (stale internal docs), not this task. Next: `SITE-001`. |
-| 2026-09-25 | SITE-001 | DONE | `landing/next.config.ts`, `landing/src/app/page.tsx`, `landing/src/app/opengraph-image.tsx`, `landing/src/app/beta/page.tsx`, `landing/src/app/not-found.tsx`, `landing/src/components/{header,footer}.tsx`, `landing/package.json`/`pnpm-lock.yaml`, `landing/.env.example`, `landing/README.md`, `landing/src/lib/waitlist-actions.ts` (deleted), `landing/src/lib/supabase.ts` (deleted), `landing/src/components/waitlist-form.tsx` (deleted), `landing/src/emails/waitlist-confirmation.tsx` (deleted), `landing/supabase-schema.sql` (deleted), `AGENTS.md` | Scope confirmed with the maintainer before implementing (see status note above): direct public download buttons on the main page, not a "watch releases" link. Deleted the waitlist form, its Server Action, the Supabase client, the React Email template, and the Supabase schema file; removed `@supabase/supabase-js`/`resend`/`react-email`/`zod` (all now-unused). Added `output: "export"` to `next.config.ts`. Rewrote `page.tsx`'s hero: same download buttons and unsigned/notarization "what to expect" disclosure `/beta` already has, using the same already-public `orbit-releases` URLs. Fixed two build errors static export surfaced: `opengraph-image.tsx` needed `export const dynamic = "force-static"`, which is incompatible with its existing `runtime = "edge"` (removed); every `next/image` usage (header, footer, beta, not-found) needed the `unoptimized` prop since default Image Optimization requires a server. Updated `package.json` (`start` removed — `next start` doesn't work against an export build; added `preview` via `npx serve out`) and `README.md` accordingly. Fixed copy that referenced "waitlist"/"Join the Waitlist" in `beta/page.tsx` and the OG image text, now stale. Fixed `privacy/page.tsx`'s telemetry claim while already there (see `OBS-001`'s entry — done as part of that task, not this one, but touches this same directory). Verification: `pnpm build` succeeds, every route reports `○` (static); inspected `out/` directly — pure static files, zero API routes, zero server bundle; `pnpm lint` clean. | None — all four acceptance criteria verified directly against the actual build output, no live-app gap this time. Next: `DOC-001`. |
-| 2026-09-25 | DOC-001 | PARTIAL | `LICENSE` (new), `THIRD_PARTY_NOTICES.md` (new), `backend/pyproject.toml`, `app/src-tauri/Cargo.toml`, `app/package.json`, `landing/package.json`, `worker/package.json`, `OPEN_SOURCE_ROADMAP.md` (`MAN-002` decision recorded, row left for maintainer to flip) | `MAN-002` resolved via direct conversation with the maintainer: Apache-2.0, after a background dependency-license scan (582 Rust crates, 40 Python packages, all JS/TS trees) confirmed nothing in the codebase would constrain the choice. Fetched the license text directly from `apache.org/licenses/LICENSE-2.0.txt` via `curl` (not retyped from memory) and diffed the written `LICENSE` file's body against it byte-for-byte before proceeding. Copyright line uses "Saadaan Hassan, 2026" (matches every commit author and the actual project start) — proposed, not separately confirmed; flagged in `MAN-002`'s own entry for the maintainer to correct if wrong. `THIRD_PARTY_NOTICES.md` documents the scan's findings in full, including the non-blocking borderline cases (MPL-2.0, LGPL, GPLv2-with-bootloader-exception, and a `BSL-1.0` naming false-alarm — Boost Software License, not Business Source License). Added `license = "Apache-2.0"` to all five workspace manifests; `worker/package.json` had been left at npm's `"ISC"` init default, never actually chosen — fixed. Verified: all three `package.json` files still valid JSON, `uv run` still resolves `pyproject.toml`, `cargo check --bin app` still compiles. | Two real gaps, both external to this session: asset notices (fonts/icons/images/logo) need `MAN-005`'s redistribution-rights review first, and GitHub's license auto-detection can't be confirmed without a live repo to check it against. Maintainer should also confirm the copyright-holder name in `LICENSE` is correct, then flip `MAN-002` to `DONE` themselves. Next: `DOC-002`. |
-| 2026-09-25 | DOC-002 | PARTIAL | `README.md` (new), `app/README.md`, `backend/README.md`, `worker/README.md`, `landing/README.md` | Wrote the root README from scratch — none existed before. Covers status/maturity (including the two honest caveats: unsigned/unnotarized, no checksum verification yet), what Orbit does, a full capture/never-capture inventory pulled from the codebase (not old marketing copy), first-launch consent behavior, the BYOK cost model, install instructions with the safe per-app Gatekeeper bypass only (explicitly states never to disable Gatekeeper globally), build commands for all four workspaces plus each one's test command, known limitations, and the warranty disclaimer. Replaced `app/README.md` (still the unedited `create-next-app`/Tauri boilerplate) and added a root-guide link to `backend/README.md`, `worker/README.md`, and `landing/README.md` (the last also still had un-customized boilerplate text). Verified the "Privacy tab" UI label referenced actually matches `App.tsx`'s tab button text, and simplified one heading to avoid an em-dash/anchor-link ambiguity. | Screenshots/demo images were not added — this environment can't launch and interact with the GUI app to capture real images of it; a maintainer should add some before public launch. Next: `DOC-003`. |
-| 2026-09-25 | DOC-003 | PARTIAL | `landing/src/app/privacy/page.tsx`, `landing/src/app/page.tsx`, `landing/src/app/beta/page.tsx` | Full rewrite of the privacy policy from current code, replacing the old copy's two internal contradictions (claimed data "never leaves your device" then described cloud AI transmission; claimed "anonymous analytics" are collected right next to a correct "no telemetry" statement) and its now-false Claude/Gemini processor claims (removed in `COST-002`). Researched Groq's and Voyage AI's actual data-retention policies against their own primary docs before writing about them: Groq doesn't retain inference data by default (30-day troubleshooting-only log, ZDR available); Voyage AI trains on customer data by default unless the user opts out on their own account — called out explicitly since Orbit has no control over that setting. Verified the session-vs-event deletion distinction directly against `routes/memory.py`'s actual DELETE logic rather than assuming: deleting a session unlinks but does not delete its underlying raw events, which can be re-summarized into a new session later; only deleting the events themselves, or a full wipe, is permanent. New sections cover encryption/retention (90-day rolling event retention, no app-level encryption, FileVault recommended), redaction limits (best-effort, not a guarantee), and a warning to get permission before capturing employer/client content. Grep-reviewed `landing/`, in-app UI copy, `README.md`, and `AGENTS.md` for contradictions with the new policy; found and fixed three more instances of "all data stays on your Mac" (main landing hero, its privacy callout strip, and `/beta`) now false once a personal key is configured. Verified: `pnpm build` (static export) and `pnpm lint` both clean. | `DOC-005` (architecture/threat-model doc) doesn't exist yet, so the "policy data flow matches DOC-005" criterion can't be directly confirmed — both were/will be derived from the same verified code, so they should agree once `DOC-005` is written, but that's unconfirmed until then. The cross-document contradiction check was a manual grep, not an automated/formalized tool. Next: `DOC-004`. |
-| 2026-09-25 | APPSEC-001 | PARTIAL | `app/src-tauri/Cargo.toml`, `app/src-tauri/tauri.conf.json`, `app/src-tauri/capabilities/default.json`, `docs/adr/ADR-005-tauri-shell-hardening.md` | Removed the unconditional `devtools` Cargo feature (WRY still exposes devtools automatically in debug builds; release builds no longer force it on). Added a restrictive CSP (`default-src 'self'` plus a `connect-src` scoped to the fixed-port local backend, PostHog, and Sentry — the only hosts the webview itself calls; the Cloudflare Worker and AI providers are never in `connect-src` because only the Python backend calls them). Rewrote `capabilities/default.json` to grant exactly what the webview calls: removed `global-shortcut:default` and six unused `core:window:allow-*` permissions (the hotkey and those window transitions are Rust-native and were never gated by this file), and added the previously-missing `updater:allow-check`, `updater:allow-download-and-install`, `process:allow-restart`, and `dialog:allow-open` — without which auto-update and the watched-folder picker were silently non-functional (both call sites swallow errors by design). Existing entitlements were reviewed and left unchanged; each already carries an inline justification comment and is exercised by a real code path. `macOSPrivateApi: true` is required by the main window's `shadow: false` and the overlay window's transparency/click-through. Verification: `cargo check --bin app` (also validates the capabilities file against plugin permission schemas), `cargo test --bin app` 37/37, `pnpm build` (TypeScript + Vite), `git diff --check` all passed. | Required maintainer action: build a real `.dmg`, confirm right-click → Inspect Element is unavailable, and confirm the local API, PostHog/Sentry, the update check, and the folder picker all still work under the new CSP/capability grant. Record the outcome here before marking `APPSEC-001` DONE. Next: `COST-001`. `PRIV-002`/`PRIV-003` remain PARTIAL, independent of this task. |
-| 2026-09-26 | ADR-000 (pivot) | AMENDED | `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `THIRD_PARTY_NOTICES.md`, `OPEN_SOURCE_ROADMAP.md`, `app/src/App.tsx`, `app/src/hooks/useUpdater.ts` (deleted), `app/src-tauri/src/lib.rs`, `app/src-tauri/Cargo.toml`, `app/package.json`, `app/src-tauri/tauri.conf.json`, `app/src-tauri/capabilities/default.json`, `backend/services/voyage_service.py`, `backend/services/groq_service.py`, `backend/services/claude_service.py` (deleted), `backend/services/gemini_service.py` (deleted), `backend/scheduler.py`, `backend/tests/test_voyage_byok.py`, `backend/tests/test_groq_byok.py`, `backend/tests/test_provider_context_sanitizer.py`, `.github/workflows/release.yml` (deleted), `.github/workflows/publish-extension.yml` (deleted), `.github/workflows/ci.yml`, `.github/dependabot.yml`, `worker/` (deleted entirely), `releases/` (deleted), `landing/src/app/page.tsx`, `landing/src/app/beta/` (deleted), `landing/src/app/privacy/page.tsx` | Maintainer decision, verbatim intent: stop developing this actively for now, make the repo fully public/open, drop the separate `orbit-releases` repo and the idea of cutting releases at all, point the landing page at the GitHub repo with no waitlist, and remove Supabase/R2/Cloudflare/Worker entirely — fully BYOK, self-build only (see `ADR-000`'s update note above). Confirmed via `AskUserQuestion`: drop the Chrome extension's distribution path too; remove the auto-updater entirely (not kill-switch it); maintainer authorized the agent to perform the live Cloudflare Worker teardown itself and to act on the `orbit-releases` repo, using the `github-personal` (`Saadaan-Hassan`) `gh` account, not `github-work`. Made Voyage AI BYOK-direct (`api.voyageai.com`, `Authorization: Bearer`) using the exact pattern the Worker's `/embed` route already implemented as a passthrough — no functionality lost. Removed Groq's dead Worker-fallback branch (a personal key was already required in practice; the fallback path was unreachable in the previous COST-002 state too, just not deleted). Deleted `claude_service.py`/`gemini_service.py` outright (already unused, no BYOK path ever built for either). Removed the Tauri auto-updater plugin/config/capabilities/UI entirely, keeping `tauri-plugin-dialog` (folder picker) and `tauri-plugin-process` (used by the unrelated `restart_app()` command, confirmed via grep before keeping it). Deleted `release.yml`, `publish-extension.yml`, the `worker/` workspace, and `releases/`; removed the CI `worker` job and its Dependabot entry. Updated the landing page (GitHub CTA + clone snippet, no downloads, no waitlist — Supabase/R2 were already gone since `SITE-001`, confirmed via grep against `docs/PHASE_2.md`'s historical-only mentions before concluding there was nothing live to remove) and its privacy policy's Voyage section to match Groq's existing BYOK-direct framing. Rewrote `AGENTS.md` (~15 sections), `README.md` (Status/Installing/Building-from-source/Known-limitations), `CONTRIBUTING.md` (dev setup, test commands, dependency scanning, privacy rules, release boundaries), and `THIRD_PARTY_NOTICES.md` (workspace count 5→4, dropped the `wrangler`/`worker/` LGPL attribution) to remove every Worker/release reference. This entry retires `REL-001`/`REL-002`/`REL-003` and rescopes `MAN-006`/`MAN-009`/`MAN-010` — see the Task Index and each task's own entry. Verification: backend `uv run ruff check .` clean, `uv run mypy .` clean (39 files, down from 41), `uv run python -m unittest discover -s tests -p 'test_*.py'` 66/66; app `cargo check --bin app`/`cargo fmt --check`/`cargo clippy --all-targets -- -D warnings` clean, `cargo test --bin app` 37/37, `pnpm install`/`pnpm typecheck`/`pnpm lint` (7 pre-existing warnings, 0 errors)/`pnpm test` 10/10; landing `pnpm lint` clean, `pnpm build` succeeds (4 static routes); `actionlint`/`zizmor` both clean on the remaining two workflow files. | Not yet done at the time of this row: the actual live teardown (deleting the deployed `orbit-api-proxy` Cloudflare Worker, archiving `orbit-releases`) and committing this pivot's changes — see `MAN-006`'s own entry once that's performed, and check the Completion Log for a follow-up row recording the teardown's outcome. |
-| 2026-09-26 | MAN-006 | PARTIAL | Live Cloudflare Worker (`orbit-api-proxy`), `orbit-releases` GitHub repo | Performed the two teardown actions the maintainer explicitly authorized the agent to do directly (verbatim: "i want you to do it yourself... also for the gh, use gh switch to use my github-personal not the github-work"). Switched `gh` to the `Saadaan-Hassan` account first (`gh auth switch --user Saadaan-Hassan`; confirmed via `gh auth status` showing it active). Deleted the deployed Worker with `npx wrangler delete --name orbit-api-proxy --force` (wrangler already authenticated on this machine as `webmaker9d@gmail.com`, `workers:write` scope) — confirmed gone via a follow-up `wrangler deployments list --name orbit-api-proxy` returning "This Worker does not exist on your account" (code 10007). Archived (not deleted) `orbit-releases` via `gh repo archive Saadaan-Hassan/orbit-releases --yes` — confirmed via `gh repo view` reporting `isArchived: true`; chose archive over delete since the maintainer said "stop" needing it without specifying delete, and archive is reversible while still making the repo read-only and clearly retired. | Provider-key revocation (Groq/Voyage/Anthropic/Gemini dashboards) and confirming no further usage posts against old keys still needs the maintainer's own account access — see the remaining unchecked items in `MAN-006`'s own entry. If the maintainer wants `orbit-releases` deleted rather than archived, that's a one-line follow-up they can do themselves. |
+| 2026-09-06 | ROADMAP | CREATED | `OPEN_SOURCE_ROADMAP.md` | Created from the pre-public architecture/cost/privacy/repo/release audit. | Begin with `MAN-000`/`MAN-001`. |
+| 2026-09-06 | MAN-000 | DONE | `OPEN_SOURCE_ROADMAP.md` | Maintainer accepted ADR-000: BYOK + local FTS5 baseline, no shared credentials. | — |
+| 2026-09-06 | REP-001 | DONE | `.gitignore`, `.gitleaksignore`, `clipboard.rs` | Gitleaks full-history scan clean after allowlisting 6 old test-fixture fingerprints. `cargo test` 23/23. | Rotate the local `.env.sentry-build-plugin` credential in `OBS-001`/`MAN-008`. |
+| 2026-09-06 | SEC-001 | DONE | `docs/adr/ADR-001-local-api-authentication.md` | Accepted ADR: per-session sidecar auth, extension pairing, threat model, target data flow. | Implement `SEC-002`; local API stays unauthenticated until then. |
+| 2026-09-08 | SEC-002 | DONE | `backend/local_api_security.py`, `main.py` | Bearer-token middleware on every route; validates Host/origin, restrictive CORS. Tests 6/6. | `SEC-003` must generate/deliver the token to desktop callers. |
+| 2026-09-08 | SEC-003 | DONE | Tauri sidecar lifecycle, `local-api.ts` | Rust generates a per-session token via sidecar env; webview client attaches it to every request, no direct `fetch` remains. `pnpm build`, tests 6/6. | `SEC-004` must add the distinct paired extension token. |
+| 2026-09-08 | SEC-004 | DONE | Pairing routes/table, extension | 5-minute one-use pairing codes issue a capture-only token per extension; hash-only storage; revocation invalidates it. Tests 7/7. | Manually load the built extension in Chrome before public release to validate real-profile pairing UX. |
+| 2026-09-08 | PRIV-001 | DONE | `ADR-002`, consent migration | Versioned consent record, all capture categories off by default; absent rows fail closed. Tests 9/9. | `PRIV-002` must enforce this in every Rust monitor. |
+| 2026-09-10 | PRIV-002 | PARTIAL | Rust monitors, capture API, onboarding | Capture defaults fail closed; every monitor + `/capture` requires the relevant accepted category. Tests 12/12, `cargo test` 34/34. | Needs maintainer live-UI verification (clean/upgraded profile, opt-in/revoke, global pause, restart) before `DONE` — Consent gate stays blocked until recorded here. |
+| 2026-09-10 | PRIV-004 | DONE | Shared provider-context sanitizer | Final redaction boundary called immediately before every AI/embedding HTTP request; diagnostics carry no raw prompt/response. Tests 17/17. | Continue `PRIV-005`. |
+| 2026-09-10 | PRIV-005 | DONE | Exclusion policy, Keychain migration | Canonical exclusion defaults distributed to native+extension capture; `~/.orbit`/SQLite/Qdrant repaired to owner-only; Groq key moved to Keychain. Tests 24/24 + 7/7 focused. | Continue `PRIV-006`. |
+| 2026-09-10 | PRIV-006 | DONE | Privacy regression suite | Full consent/pause/exclusion/wipe regression coverage; secure wipe now truncates WAL and vacuums. Tests 29/29. | Continue `APPSEC-001`. |
+| 2026-09-10 | PRIV-003 | PARTIAL | Rust sanitizer, event writers | All active Rust event writers sanitize captured strings (credentials, keys, JWTs, PII) before SQLite. Tests 30/30. | Repo-wide Clippy/fmt drift outside this task's scope must be fixed before `DONE`; Consent gate stays blocked by `PRIV-002`. |
+| 2026-09-25 | COST-001 | PARTIAL | `groq_service.py`, settings routes, PrivacyPanel | Groq calls go BYOK-direct (`Authorization: Bearer`) whenever a personal key exists, bypassing the Worker; added key add/test/remove UI. Tests 37/37. | Maintainer should verify Keychain/SQLite key persistence across an app restart. |
+| 2026-09-25 | COST-002 | DONE | Worker rewrite, `voyage_service.py`, settings routes | All maintainer-funded Worker keys removed; Claude/Gemini removed outright (unused); Voyage given the same BYOK treatment as Groq. Tests 43/43 + 12/12 (Worker). | Superseded 2026-09-26 — the Worker itself is now deleted entirely, not just its shared keys (see the pivot entry below). |
+| 2026-09-25 | COST-003 | PARTIAL | `qdrant_service.py`, `scheduler.py`, `recall.py`, ADR-006 | Qdrant made fully lazy (never touched without a Voyage key). Found and fixed a real regression: a missing Voyage key was silently breaking Groq recall too, not just semantic search. Tests 47/47. | Packaging size/startup impact not measured (no build environment here) — reasoned qualitatively in ADR-006 instead. |
+| 2026-09-25 | COST-004 | PARTIAL | `groq_service.py`, model migration tests | Migrated off two Groq models retired 2026-08-16 (`llama-3.1-8b-instant`/`llama-3.3-70b-versatile`) to `openai/gpt-oss-120b`/`20b` with `reasoning_effort="low"`. Tests 52/52. | No live Groq account to confirm against real responses — maintainer should run one real classification/recall cycle and watch for truncated output or latency near the 30s timeout. |
+| 2026-09-25 | COST-005 | PARTIAL | `groq_service.py`, `voyage_service.py`, `recall.py` | Added 401/403 cooldowns for both providers (Voyage had none before); offline-recall fallback now names the actual failure cause instead of always guessing "offline". Tests 66/66. | "Quota exhausted" is treated as the same case as rate-limit (429) — not independently verified against provider docs. |
+| 2026-09-25 | OBS-001 | DONE | Sentry/PostHog removal (backend+app) | Deleted both telemetry services and every call site; CSP narrowed; bundle dropped 830→492 KB. Tests unaffected (66/66), `cargo test` 37/37. | Historical `docs/PHASE_*.md` still describes the old telemetry setup — `DOC-006` scope, not this task. |
+| 2026-09-25 | SITE-001 | DONE | Landing site (Supabase/waitlist removal) | Removed Supabase/Resend/the waitlist form/server actions; converted to static export, zero server. `pnpm build`/`lint` clean. | Superseded 2026-09-26 — see the pivot entry below (download buttons this task shipped are now replaced by a GitHub link). |
+| 2026-09-25 | DOC-001 | PARTIAL | `LICENSE` (new), `THIRD_PARTY_NOTICES.md` (new) | Apache-2.0 chosen after a dependency-license scan (582 Rust crates, 40 Python packages) found nothing blocking. | Maintainer should confirm the copyright-holder name in `LICENSE`, then flip `MAN-002` to `DONE` themselves. |
+| 2026-09-25 | DOC-002 | PARTIAL | `README.md` (new), workspace READMEs | Wrote the root README from scratch: status, capture inventory, BYOK cost model, build/test commands per workspace. | Screenshots/demo images not added — no GUI access in this environment. |
+| 2026-09-25 | DOC-003 | PARTIAL | Privacy policy, landing pages | Full rewrite fixing 2 internal contradictions and stale Claude/Gemini claims; researched Groq/Voyage's actual retention policies against their own docs. `pnpm build`/`lint` clean. | Can't cross-check against `DOC-005` (architecture/threat-model doc doesn't exist yet). |
+| 2026-09-25 | APPSEC-001 | PARTIAL | Tauri CSP, `capabilities/default.json` | Restrictive CSP added; capabilities trimmed to exactly what the webview calls; missing updater/dialog/process permissions added. `cargo test` 37/37. | Maintainer should build a real `.dmg` and confirm devtools/local API/folder picker all still work under the new CSP, before `DONE`. |
+| 2026-09-26 | ADR-000 (pivot) | AMENDED | ~38 files across `app/`, `backend/`, `landing/`, docs | Maintainer decision: stop active development for now, drop packaged releases/`orbit-releases`/the Cloudflare Worker/the auto-updater/the Chrome Web Store listing entirely, point the landing page at GitHub. Voyage made BYOK-direct; Claude/Gemini service files deleted; `release.yml`/`publish-extension.yml`/`worker/`/`releases/` deleted; `AGENTS.md`/`README.md`/`CONTRIBUTING.md`/`THIRD_PARTY_NOTICES.md` rewritten. Retires `REL-001`/`REL-002`/`REL-003`, rescopes `MAN-006`/`MAN-009`/`MAN-010`. Full verification clean: backend 66/66, `cargo test` 37/37, `pnpm test` 10/10, landing build/lint clean, actionlint/zizmor clean. | Live teardown performed separately, see `MAN-006`'s entry below. |
+| 2026-09-26 | MAN-006 | PARTIAL | Live Cloudflare Worker (`orbit-api-proxy`), `orbit-releases` | Maintainer explicitly authorized the agent to do this directly, via the `github-personal` (`Saadaan-Hassan`) account. Deleted the deployed Worker (`wrangler delete`, confirmed gone — "This Worker does not exist on your account"). Archived (not deleted) `orbit-releases` (`gh repo archive`, confirmed `isArchived: true`) — chose archive over delete since it's reversible. | Provider-key revocation (Groq/Voyage/Anthropic/Gemini dashboards) still needs the maintainer's own account access. |
 
 ---
 
