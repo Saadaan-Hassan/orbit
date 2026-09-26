@@ -94,7 +94,7 @@ export default function Page() {
         <div className="relative z-10 flex flex-col items-center gap-6 max-w-3xl mx-auto">
 
           {/* Status badge */}
-          <span className="inline-flex items-center gap-2 rounded-full border border-white/5 bg-white/3 backdrop-blur-md px-4 py-1.5 text-[11px] font-semibold text-zinc-400 tracking-wider uppercase animate-pulse-subtle">
+          <span className="inline-flex items-center gap-2 rounded-full border border-white/5 bg-zinc-950/80 px-4 py-1.5 text-[11px] font-semibold text-zinc-400 tracking-wider uppercase animate-pulse-subtle">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-zinc-300 opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-white" />
@@ -172,7 +172,7 @@ export default function Page() {
           {HOW_IT_WORKS.map(({ step, icon: Icon, headline, body }) => (
             <div
               key={step}
-              className="relative flex flex-col gap-5 rounded-2xl border border-white/5 bg-white/[0.02] backdrop-blur-md p-6 hover:border-white/10 hover:bg-white/[0.03] transition-all duration-300"
+              className="relative flex flex-col gap-5 rounded-2xl border border-white/5 bg-zinc-950/60 p-6 hover:border-white/10 hover:bg-white/[0.03] transition-all duration-300"
             >
               {/* Step number + icon row */}
               <div className="flex items-center justify-between">

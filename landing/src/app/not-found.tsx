@@ -12,7 +12,7 @@ export default function NotFound() {
       <div className="flex flex-col items-center gap-8 max-w-md mx-auto">
         {/* Large 404 visual */}
         <div className="relative">
-          <div className="relative w-28 h-28 rounded-full bg-white/3 border border-white/10 flex items-center justify-center backdrop-blur-md">
+          <div className="relative w-28 h-28 rounded-full bg-zinc-950/80 border border-white/10 flex items-center justify-center">
             <Image
               src="/logo.png"
               alt="Orbit Logo"
