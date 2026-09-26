@@ -229,7 +229,18 @@ document.addEventListener("click", (event: MouseEvent) => {
   if (!anchorElement) return;
 
   const href = anchorElement.href;
-  if (!href || href.startsWith("javascript:")) return;
+  // javascript:/vbscript: aren't real navigations. data: URIs can be
+  // megabytes of inline base64 (e.g. a "download as data:" link) — none of
+  // these are meaningful as a recorded link click, and the data: case would
+  // otherwise bloat stored events with noise.
+  if (
+    !href ||
+    href.startsWith("javascript:") ||
+    href.startsWith("data:") ||
+    href.startsWith("vbscript:")
+  ) {
+    return;
+  }
 
   // Skip intra-page fragment jumps (#section links). These are scroll events,
   // not navigations — capturing them produces noise with no recall value.
