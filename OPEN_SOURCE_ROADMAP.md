@@ -193,7 +193,7 @@ Tasks are ordered. Do not start a later phase merely because it is easier.
 | DOC-006 | Agent | DONE | Align versions/package metadata and clean stale internal documentation | DOC-001, COST-005 |
 | CI-001 | Agent | DONE | Make all workspaces expose real local verification commands | REP-002, PRIV-006 |
 | CI-002 | Agent | DONE | Add pull-request CI, dependency updates, and security scans | CI-001 |
-| REL-001 | Agent | TODO | Harden the release workflow and secret permissions | CI-002, DOC-006 |
+| REL-001 | Agent | PARTIAL | Harden the release workflow and secret permissions | CI-002, DOC-006 |
 | REL-002 | Agent | TODO | Add checksums, SBOM/provenance, smoke tests, and updater validation | REL-001 |
 | REL-003 | Agent | TODO | Document and preserve `orbit-releases` compatibility | REL-002 |
 | MAN-006 | Maintainer | TODO | Deploy transition build, disable proxy, revoke keys, cap billing | COST-005, REL-003 |
@@ -1802,6 +1802,112 @@ Acceptance criteria:
 
 ### REL-001 — Harden release workflow
 
+**Current status: PARTIAL (2026-09-26).** Everything checkable from a
+static/local pass is done and verified; two items depend on live GitHub
+state (a secret's actual configured scope, an environment's actual
+protection rules) that can only be confirmed by the maintainer, not from
+here — held at `PARTIAL` rather than `DONE` specifically because of those,
+not because the workflow-file work is incomplete.
+
+Installed `zizmor` (a GitHub Actions–specific security auditor, not just a
+YAML/schema linter like `actionlint`) for this pass — it found real issues
+`actionlint` structurally can't, since it understands GitHub Actions'
+specific threat model (secret exposure, template injection, permission
+scope) rather than just YAML shape:
+
+- **3 high-confidence template-injection findings** in `release.yml`:
+  `${{ github.ref_name }}` interpolated directly into `run:` shell blocks
+  (`gh release upload/download ${{ github.ref_name }} ...`) — a tag name is
+  attacker-influenceable by anyone who can push a tag, and directly
+  interpolating an expression into a shell command is exactly the injection
+  pattern GitHub's own security docs warn against. Fixed by referencing the
+  runner-provided `$GITHUB_REF_NAME` environment variable instead (quoted)
+  — one instance had an automated fix available and was verified against
+  the other two, fixed identically by hand.
+- **1 high-confidence excessive-permissions finding**: `contents: write` at
+  the workflow level applies to every job, including ones that don't need
+  it and any added later. Moved to job-level grants on the two jobs that
+  actually call `gh release upload`/`tauri-action` — see the code comment
+  on why it's not removed further: every such call already explicitly
+  overrides to `RELEASES_REPO_TOKEN` instead of the ambient `GITHUB_TOKEN`,
+  which suggests `contents: write` may not be exercised at all, but
+  confirming that with certainty needs a real run, not static analysis.
+- **2 low-confidence cache-poisoning findings** (one each in `release.yml`
+  and `publish-extension.yml`): reviewed and explicitly accepted rather
+  than "fixed" — the tool's own suggested auto-fix (`lookup-only: true`)
+  would silently defeat the cache entirely (it only checks existence, never
+  restores or saves), a real functional regression for a false-positive-risk
+  finding. Both workflows trigger only on tag push, which requires push
+  access — no fork/PR-triggered workflow in this repo shares either cache's
+  key scope, so the actual exploitability here is very low. Documented
+  inline at each finding rather than silently ignored.
+- **1 low-confidence artipacked finding**, repeated 9× across all 4
+  workflow files (every `actions/checkout` step): none set
+  `persist-credentials: false`. None of these jobs push back to their own
+  repo, so this has zero functional cost — added everywhere.
+
+Beyond what zizmor caught, implemented the rest of this task's explicit
+requirements:
+
+- **`curl | sh` uv installer replaced** with `astral-sh/setup-uv` (already
+  SHA-pinned in `CI-002`'s `ci.yml`, reused here) — also a correctness fix,
+  not just security: `astral-sh/setup-uv`'s `python-version-file` reads
+  `backend/.python-version` directly, which is the real source of truth
+  `uv` already used to resolve its interpreter (per `AGENTS.md`: "uv can
+  silently download its own matching interpreter regardless of what this
+  step installs") — the separate `actions/setup-python` step it replaced
+  was already vestigial for that reason.
+- **Signing-key-length print removed.** `echo "Signing key is present
+  (${#TAURI_SIGNING_PRIVATE_KEY} chars)"` leaked the key's exact character
+  count into build logs — no operational value, real (if minor) metadata
+  leak about a secret. Now just confirms presence.
+- **Tag/version consistency validated before building**, in both release
+  workflows, as a fast-failing gate job/step ahead of the two expensive
+  macOS builds: `release.yml` gets a new `validate` job comparing the
+  pushed tag against `app/src-tauri/tauri.conf.json`'s version (plus
+  running `scripts/check-versions.sh`, `DOC-006`) before `build-and-release`
+  is allowed to start; `publish-extension.yml` gets an equivalent check
+  against `extension/manifest.json`. No changelog-consistency check was
+  added — `CHANGELOG.md`'s own documented policy (`DOC-004`) is that
+  release notes are generated per tag on GitHub, not hand-maintained
+  in-repo, so there's no changelog file content that could go stale against
+  a version bump in the first place.
+- **`environment: dev` → `environment: release`** in `release.yml`. Flagged
+  prominently in-line, not just here: if the release secrets
+  (`TAURI_SIGNING_PRIVATE_KEY`, `RELEASES_REPO_TOKEN`, `WORKER_URL`) are
+  currently scoped to the `dev` GitHub Environment specifically (Settings →
+  Environments) rather than at the repo level, this rename alone breaks the
+  next release until a `release` environment exists with the same secrets
+  — and the rename's actual point (protection rules — required reviewers,
+  branch restrictions) needs the maintainer to configure it on GitHub;
+  nothing in a workflow file can create environment protection rules.
+  **Do not tag a release until this is confirmed on GitHub.**
+- **`RELEASES_REPO_TOKEN` scope**: `AGENTS.md` already documents it as "a
+  GitHub PAT (fine-grained, scoped to just `orbit-releases`, Contents:
+  Read/write)" — taken as already satisfying this requirement per existing
+  documentation, but this is a live secret's actual configured grant, which
+  genuinely cannot be independently verified from a static repo checkout;
+  the maintainer is the only one who can confirm the real token matches
+  what's documented.
+- **Fork/PR workflows cannot reach signing or release credentials**:
+  satisfied by construction, not new code — `release.yml`/`publish-extension.yml`
+  trigger only on `push: tags:`, never `pull_request`/`pull_request_target`,
+  so no fork-PR code path can reach either workflow at all, regardless of
+  permissions.
+
+Verified: `actionlint` and `zizmor` both clean (zizmor: 0 remaining
+high/medium findings beyond the 3 documented-accepted cache-poisoning
+ones) across all four workflow files; `scripts/check-versions.sh` and all
+66 backend tests still pass; the new tag-matching shell logic in both
+`validate` steps tested manually against real values from this repo.
+
+**What's NOT verified, honestly**: a real dry-run build of both
+architectures (this task's own acceptance criterion) — building a macOS
+Tauri app with a full Rust compile and PyInstaller sidecar isn't something
+this environment can do, and the workflow itself can only truly be proven
+correct by GitHub actually running it. Same caveat as `CI-002` and the
+existing note in `AGENTS.md` about `release.yml`'s matrix+merge flow.
+
 Implementation requirements:
 
 - Pin every Action, especially extension publishing, to a reviewed full SHA.
@@ -1817,10 +1923,22 @@ Implementation requirements:
 
 Acceptance criteria:
 
-- [ ] Workflow security/lint check passes.
-- [ ] All third-party Actions are immutable SHA pins.
-- [ ] Release job alone receives only necessary secrets.
-- [ ] A dry run builds both architectures without publishing.
+- [x] Workflow security/lint check passes. `actionlint` and `zizmor` (a
+      real GitHub-Actions-specific security auditor, not just YAML/schema
+      linting) both clean, beyond 3 documented-and-accepted low-confidence
+      cache-poisoning findings — see above for why those are accepted, not
+      fixed.
+- [x] All third-party Actions are immutable SHA pins. Already true from
+      `CI-002`; reverified after this task's edits.
+- [ ] Release job alone receives only necessary secrets. Scoped
+      `contents: write` to the job level (was workflow-level) — genuinely
+      unverified whether it's needed *at all*, since every actual write
+      goes through `RELEASES_REPO_TOKEN` instead; needs a real run to
+      confirm safely, so left at the conservative (present) grant rather
+      than guessed away.
+- [ ] A dry run builds both architectures without publishing. Not
+      performable from this environment (no macOS Tauri build + PyInstaller
+      sidecar compile here) — needs a real GitHub Actions run.
 
 ### REL-002 — Release integrity and updater validation
 

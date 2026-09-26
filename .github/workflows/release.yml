@@ -7,9 +7,11 @@ on:
     tags:
       - "v*"
 
-# Allow the workflow to create GitHub Releases and upload assets.
+# Least-privileged default (REL-001) — each job below grants itself only
+# what it actually needs, rather than every current and future job in this
+# workflow inheriting `contents: write` by default.
 permissions:
-  contents: write
+  contents: read
 
 # Queue rather than cancel (CI-002): a re-push of the same tag mid-build
 # should wait for the in-flight release to finish, not cancel it partway
@@ -19,6 +21,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # REL-001: fail fast, before spending two macOS runners' worth of build
+  # time, if the pushed tag doesn't actually match what's about to be built.
+  # A `v0.3.0` tag with tauri.conf.json still at 0.2.4 would otherwise build
+  # and publish a release whose name/tag says one version while the actual
+  # app (and its GitHub Release body, from `releaseName: "Orbit v__VERSION__"`)
+  # reports another.
+  #
+  # No changelog-consistency check: CHANGELOG.md's own documented policy
+  # (DOC-004) is that release notes are generated per tag on GitHub, not
+  # hand-maintained in-repo — there's no changelog file content to check
+  # for staleness against the version being released.
+  # ---------------------------------------------------------------------------
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Check tag matches tauri.conf.json's version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          APP_VERSION=$(grep -m1 '"version"' app/src-tauri/tauri.conf.json | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+          echo "Tag: $GITHUB_REF_NAME (version $TAG_VERSION) — tauri.conf.json: $APP_VERSION"
+          if [ "$TAG_VERSION" != "$APP_VERSION" ]; then
+            echo "ERROR: tag $GITHUB_REF_NAME does not match app/src-tauri/tauri.conf.json's version ($APP_VERSION)."
+            echo "Bump tauri.conf.json (and run scripts/check-versions.sh) before tagging."
+            exit 1
+          fi
+
+      - name: Check app/backend/extension version consistency (DOC-006)
+        run: sh scripts/check-versions.sh
+
   # ---------------------------------------------------------------------------
   # Build a signed .dmg and publish it as a GitHub Release.
   #
@@ -32,6 +71,7 @@ jobs:
   # the asset is always served from the latest release automatically.
   # ---------------------------------------------------------------------------
   build-and-release:
+    needs: validate
     # Two legs, one per Mac architecture. Sequential (max-parallel: 1) rather
     # than parallel — both legs upload a same-named `latest.json` release
     # asset via tauri-action, and running them one at a time lets each leg's
@@ -47,11 +87,32 @@ jobs:
           - runner: macos-15-intel     # Intel — macos-13 was retired Dec 2025;
             arch: x86_64                # this is the current GitHub-hosted x86_64 label
     runs-on: ${{ matrix.runner }}
-    environment: dev
+    # REL-001: was `dev` — a release build shouldn't run under an
+    # environment named for local development. RISK, not yet verified from
+    # here: if TAURI_SIGNING_PRIVATE_KEY/RELEASES_REPO_TOKEN/WORKER_URL were
+    # configured as secrets scoped to the `dev` GitHub Environment
+    # specifically (Settings → Environments), rather than at the repo
+    # level, this rename alone breaks the next release until a `release`
+    # environment is created with the same secrets (and, ideally, actual
+    # protection rules — required reviewers, deployment branch restriction
+    # — which is the actual point of naming it something other than `dev`).
+    # Confirm this on GitHub before the next tag push.
+    environment: release
     timeout-minutes: 60
+    # Every actual GitHub API write in this job (tauri-action, gh release
+    # upload/download) explicitly overrides GITHUB_TOKEN to RELEASES_REPO_TOKEN
+    # instead — this repo's own default token may not be exercised for a
+    # write at all. Kept at contents: write rather than narrowed further,
+    # since confirming that requires a real run to verify safely (REL-001);
+    # scoping it to the job (not the whole workflow) is the part that's
+    # unambiguously correct without one.
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # ── Rust ───────────────────────────────────────────────────────────────
       # dtolnay/rust-toolchain pins an explicit version and sets up caching
@@ -73,6 +134,14 @@ jobs:
             app/src-tauri/target
           key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('app/src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-${{ matrix.arch }}-cargo-
+          # zizmor flags this as a possible cache-poisoning vector (CI-002-
+          # style audit, REL-001) since this workflow publishes runtime
+          # artifacts — reviewed and accepted rather than mitigated with
+          # `lookup-only: true`, which would silently defeat the cache
+          # entirely (it only checks existence, never restores or saves).
+          # This cache's key/scope is only ever written by this exact
+          # tag-push-triggered workflow (requires push access to trigger at
+          # all) — no fork/PR-triggered workflow in this repo shares it.
 
       # ── Node + pnpm ────────────────────────────────────────────────────────
       # Pin pnpm to match the major version used locally (11.x) so the
@@ -86,6 +155,10 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
+          # zizmor flags this as a possible cache-poisoning vector too (same
+          # reasoning as the Cargo cache above) — reviewed and accepted:
+          # this cache's scope is only ever written by this exact tag-push-
+          # triggered workflow, which no fork/PR-triggered workflow shares.
           cache: "pnpm"
           cache-dependency-path: app/pnpm-lock.yaml
 
@@ -100,26 +173,26 @@ jobs:
       # Build the self-contained orbit-backend binary and rename it to include
       # the target triple so Tauri's externalBin lookup finds it at bundle time.
       # The .spec file lives in backend/ and references run.py as the entry point.
-      # Must match backend/.python-version and backend/pyproject.toml's
-      # requires-python (DOC-006) — this was previously pinned to 3.11 while
-      # both of those required >=3.14, an unnoticed mismatch since uv can
-      # silently download its own matching interpreter regardless of what
-      # this step installs.
-      - name: Set up Python 3.14
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.14"
-
+      #
+      # astral-sh/setup-uv (not a separate actions/setup-python step, and not
+      # the `curl | sh` installer this replaced, REL-001 — an unpinned,
+      # unverified script execution) both installs a pinned/verified uv AND
+      # resolves the Python version directly from backend/.python-version,
+      # which is the actual source of truth uv itself already used to pick
+      # an interpreter (DOC-006) — the previous separate setup-python step
+      # was already vestigial for that reason, not just less secure.
       - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version-file: backend/.python-version
 
       - name: Install backend dependencies (including PyInstaller)
         working-directory: backend
-        run: ~/.local/bin/uv sync --all-groups
+        run: uv sync --all-groups
 
       - name: Build orbit-backend sidecar with PyInstaller
         working-directory: backend
-        run: ~/.local/bin/uv run pyinstaller orbit-backend.spec --noconfirm
+        run: uv run pyinstaller orbit-backend.spec --noconfirm
 
       # Tauri's externalBin looks for `orbit-backend-{target-triple}` next to
       # the binary defined in tauri.conf.json. On the macos-latest runner the
@@ -147,7 +220,9 @@ jobs:
             echo "ERROR: TAURI_SIGNING_PRIVATE_KEY secret is empty"
             exit 1
           fi
-          echo "Signing key is present (${#TAURI_SIGNING_PRIVATE_KEY} chars)"
+          # No length or content printed (REL-001) — even a character count
+          # leaks metadata about a secret for no operational benefit here.
+          echo "Signing key is present."
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
@@ -229,7 +304,7 @@ jobs:
           fi
           echo "Found: $DMG_PATH"
           cp "$DMG_PATH" "Orbit-latest-${{ matrix.arch }}.dmg"
-          gh release upload ${{ github.ref_name }} "Orbit-latest-${{ matrix.arch }}.dmg" \
+          gh release upload "$GITHUB_REF_NAME" "Orbit-latest-${{ matrix.arch }}.dmg" \
             --repo Saadaan-Hassan/orbit-releases --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
@@ -242,7 +317,7 @@ jobs:
       # platform keys.
       - name: Capture this leg's latest.json before the other leg overwrites it
         run: |
-          gh release download ${{ github.ref_name }} \
+          gh release download "$GITHUB_REF_NAME" \
             --repo Saadaan-Hassan/orbit-releases \
             -p latest.json -O leg-latest-${{ matrix.arch }}.json --clobber
         env:
@@ -268,6 +343,10 @@ jobs:
     needs: build-and-release
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Same reasoning as build-and-release above — this job's only GitHub API
+    # write (gh release upload) also explicitly uses RELEASES_REPO_TOKEN.
+    permissions:
+      contents: write
     steps:
       - name: Download both platform latest.json artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -281,7 +360,7 @@ jobs:
             leg-latest-aarch64.json leg-latest-x86_64.json > latest.json
           echo "Merged latest.json:"
           cat latest.json
-          gh release upload ${{ github.ref_name }} latest.json \
+          gh release upload "$GITHUB_REF_NAME" latest.json \
             --repo Saadaan-Hassan/orbit-releases --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
